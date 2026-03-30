@@ -1,0 +1,50 @@
+[
+  {
+    "id": "log_1774878746024",
+    "actionType": "message_replied",
+    "messageId": "m_1774878746024",
+    "channelId": "c1",
+    "performedBy": "Redking",
+    "targetAuthor": "Redking",
+    "oldContent": null,
+    "newContent": "testing",
+    "replyTargetId": "m_1774878223158",
+    "timestamp": 1774878746024
+  },
+  {
+    "id": "log_1774878762679",
+    "actionType": "message_edited",
+    "messageId": "m_1774878223158",
+    "channelId": "c1",
+    "performedBy": "Redking",
+    "targetAuthor": "Redking",
+    "oldContent": "Test",
+    "newContent": "no to",
+    "replyTargetId": null,
+    "timestamp": 1774878762679
+  },
+  {
+    "id": "log_1774879454027",
+    "actionType": "message_deleted",
+    "messageId": "m_1774878223158",
+    "channelId": "c1",
+    "performedBy": "Redking",
+    "targetAuthor": "Redking",
+    "oldContent": "no to",
+    "newContent": "[deleted]",
+    "replyTargetId": null,
+    "timestamp": 1774879454027
+  },
+  {
+    "id": "log_1774895993464",
+    "actionType": "message_sent",
+    "messageId": "m_1774895993464",
+    "channelId": "c1",
+    "performedBy": "Redking",
+    "targetAuthor": "Redking",
+    "oldContent": null,
+    "newContent": "test",
+    "replyTargetId": null,
+    "timestamp": 1774895993464
+  }
+]
