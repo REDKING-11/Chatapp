@@ -1,31 +1,32 @@
-# 🚀 Project Vision (Simple)
+# 🚀 Project Vision
 
 A **Discord-like app** where:
 
-* each server is **self-hosted**
-* each channel can be **fully customized (layout + style)**
-* users join servers via **invite links or discovery**
-* your system acts as a **directory (“bus stop”), not the host**
+* each server is **self-hosted (one backend = one community)**
+* users can join **multiple servers from one client**
+* channels support **custom layouts (UI blocks)**
+* servers are joined via **invite or discovery**
+* a central service acts as a **directory (“bus stop”), not a host**
 
 ---
 
 # 🧠 Core Idea
 
-> **You control the engine. Users control the layout. Servers control their own data.**
+> **Client = UI engine. Backend = community. Directory = discovery.**
 
 * You provide:
 
-  * client app
-  * rendering engine
-  * layout system
-  * discovery system
+  * client app (Electron)
+  * layout rendering engine
+  * layout editor
+  * central directory (optional)
 
 * Server owners provide:
 
   * hosting
   * community
-  * content
-  * customization
+  * data (users, messages, channels)
+  * customization (layouts)
 
 ---
 
@@ -40,11 +41,11 @@ Responsibilities:
 * UI / UX
 * layout rendering engine
 * layout editor
-* connect to backend servers
-* join via invite / discovery
-* store connected servers
+* authentication (central)
+* connect to multiple backends
+* store joined servers locally
 
-👉 This is the **only app normal users use**
+👉 This is the **only app users interact with**
 
 ---
 
@@ -52,303 +53,352 @@ Responsibilities:
 
 What server owners run.
 
+⚠️ Important:
+
+> **One backend = one server/community**
+
 Responsibilities:
 
-* users (local to that server)
 * channels
 * messages
-* layouts + themes
+* layouts
 * permissions
-* invite generation
+* invite handling (optional)
 
-👉 Each backend = independent community
+👉 Backend does NOT manage multiple servers
 
 ---
 
-## 3. 🌐 Central Directory (Your Service)
+## 3. 🌐 Central Core (Your Service)
 
 “The bus stop”
 
 Responsibilities:
 
-* discovery (public servers)
+* user accounts (global login)
+* authentication (`/auth/login`, `/auth/me`)
 * invite resolution
-* server metadata (name, tags, icon, URL)
-* optional heartbeat / online status
+* discovery (optional)
+* server metadata (optional)
 
-👉 Does NOT handle chat or core data
-
----
-
-# 🔌 Connection Flow
-
-## Join via Discovery
-
-1. client asks your directory for servers
-2. user clicks one
-3. client gets backend URL
-4. client connects **directly to that backend**
+👉 Does NOT host chat data
 
 ---
 
-## Join via Invite
+# 🔐 Authentication System
 
-1. user opens invite
-2. client sends invite code to your service
-3. your service returns backend URL
+## How it works
+
+* users register/login via **central core API**
+* client stores:
+
+```js
+localStorage.setItem("authToken", token)
+```
+
+* on app start:
+
+  * client calls `/auth/me`
+  * restores session automatically
+
+👉 Login persists across restarts
+
+---
+
+## Key idea
+
+> **One identity across all servers**
+
+Unlike Discord:
+
+* servers do NOT own users
+* identity comes from central service
+
+---
+
+# 🧭 Connection Model
+
+## Joining a Server
+
+### Option 1 — Direct (current implementation)
+
+User enters backend URL:
+
+```
+http://localhost:3000
+```
+
+Client:
+
+1. calls `/api/join`
+2. receives server info
+3. stores it locally
+
+👉 Saved in:
+
+```js
+localStorage("joinedServers")
+```
+
+---
+
+### Option 2 — Invite (planned)
+
+```
+app://invite/abc123
+```
+
+Flow:
+
+1. client → core service
+2. core resolves invite
+3. returns backend URL
 4. client connects directly
 
 ---
 
 ## After joining
 
-👉 All traffic goes directly:
+All traffic is direct:
 
 ```
-Client ↔ Hosted Backend
+Client ↔ Backend
 ```
 
-NOT through your service
+NOT through your server
 
 ---
 
-# 🎨 Layout System (Your Unique Feature)
+# 💾 Local Persistence (Already Implemented)
+
+The client stores:
+
+### ✅ Auth
+
+```js
+authToken
+```
+
+### ✅ Joined servers
+
+```js
+joinedServers[]
+selectedJoinedServerId
+```
+
+### 🔜 (next upgrade)
+
+```js
+lastOpenedChannelPerServer
+```
+
+👉 This allows:
+
+* auto login
+* auto reconnect
+* persistent server list
+
+---
+
+# 🎨 Layout System
 
 ## Concept
 
-Servers can customize UI using **approved building blocks**
+Servers define UI using **safe layout JSON**
 
-Examples:
-
-* chat
-* header
-* members list
-* text blocks
-* cards
-* rows / columns
-
----
-
-## Important rule
-
-❌ No custom logic
-❌ No custom JS
-❌ No custom React components
-
-✅ Only:
-
-* layout structure
-* placement
-* styling
-* configuration
-
----
-
-## Example Layout (JSON)
+Example:
 
 ```json
 {
-  "type": "row",
+  "type": "column",
   "children": [
-    { "type": "channelSidebar" },
-    {
-      "type": "column",
-      "children": [
-        { "type": "header" },
-        { "type": "chat" }
-      ]
-    },
-    { "type": "members" }
+    { "type": "text", "props": { "text": "Header" } },
+    { "type": "chat" }
   ]
 }
 ```
 
 ---
 
-## How it works
+## Supported blocks (current)
 
-* backend stores layout config
-* client reads layout
-* client maps to real React components
-* renderer builds UI
+* chat → 
+* row → 
+* column → 
+* text → 
 
-👉 You own behavior, they control structure
+Rendered via:
+
+👉 
 
 ---
 
-# 🛠️ Editor System
+## Rules
 
-Inside the client:
+❌ No custom JS
+❌ No custom React
+❌ No logic injection
 
-* “Edit Channel Layout” button
-* opens editor panel
-* user can:
+✅ Only:
 
-  * add blocks
-  * move blocks
-  * remove blocks
-  * edit props (text, spacing, etc.)
+* structure
+* layout
+* styling
+* configuration
 
-Then:
+---
 
-* client saves layout → backend
-* backend stores it
-* layout updates instantly
+# 🧱 UI Structure (Current)
+
+You now have:
+
+### 1. Joined Servers Sidebar
+
+👉 
+
+* shows servers user joined
+* "+" button → join server
+
+---
+
+### 2. Channel Sidebar
+
+👉 
+
+* shows channels of selected backend
+
+---
+
+### 3. Main View
+
+👉 
+
+* renders layout
+* injects chat + blocks
+
+---
+
+# 🔥 Important Design Decision
+
+> Backend is NOT multi-server.
+
+Correct mental model:
+
+```
+Client
+ ├── Server A (backend A)
+ ├── Server B (backend B)
+ └── Server C (backend C)
+```
+
+NOT:
+
+```
+Backend → multiple servers ❌
+```
+
+---
+
+# 🛠️ Editor System (Planned)
+
+Inside client:
+
+* edit channel layout
+* drag blocks
+* configure props
+* save → backend
 
 ---
 
 # 🌍 Self-Hosting Model
 
-Each server owner:
+Server owner:
 
-* runs backend locally or on VPS
-* optionally uses:
+* runs backend (Node)
+* exposes:
 
-  * port forwarding
-  * domain
-  * tunnel (like playit.gg for testing)
-* shares invite link
+```
+http://their-ip:3000
+```
 
----
+Optional:
 
-# 🔑 Key Principles
-
-## 1. Separation of concerns
-
-* client = UI + rendering
-* backend = data
-* directory = discovery
+* domain
+* reverse proxy
+* tunnel (playit.gg)
 
 ---
 
-## 2. Direct connection
+# 🧭 Updated Roadmap
 
-* after join → client talks directly to backend
+## Phase 1 — Foundation ✅
 
----
-
-## 3. No central dependency for chat
-
-* your service is optional for discovery
-* core app still works without it
-
----
-
-## 4. Controlled customization
-
-* layout system, not code execution
+* auth system working
+* backend connection working
+* chat working
+* layout system working
+* joined servers working
 
 ---
 
-## 5. Scalable architecture
+## Phase 2 — UX polish (NOW)
 
-* supports:
-
-  * self-hosting
-  * hosted version later
-  * public discovery
-  * private servers
-
----
-
-# 🧭 Development Roadmap
-
-## Phase 1 — Foundation ✅ (you’re here)
-
-* Electron app
-* React UI
-* backend API
-* basic chat working
-* layout renderer
-
----
-
-## Phase 2 — Layout system
-
-* layout JSON fully working
-* default layouts
-* multiple block types
-* per-channel layouts
+* better join flow (invite)
+* error handling
+* loading states
+* reconnect logic
 
 ---
 
 ## Phase 3 — Layout editor
 
-* basic editor UI
-* add/remove/move blocks
-* live preview
+* drag & drop
+* block config UI
 * save to backend
 
 ---
 
-## Phase 4 — Persistence
+## Phase 4 — Discovery system
 
-* save messages to file/db
-* save servers/channels properly
-* save layouts
-
----
-
-## Phase 5 — Multi-server support
-
-* multiple servers in backend
-* switching servers
-* improved state handling
+* central listing
+* categories
+* search
 
 ---
 
-## Phase 6 — Connection system
+## Phase 5 — Realtime
 
-* backend URL input
-* save connections
-* reconnect logic
-
----
-
-## Phase 7 — Invites
-
-* generate invites on backend
-* resolve invites via central service
-* join servers via invite
+* WebSockets
+* live chat updates
 
 ---
 
-## Phase 8 — Discovery (bus stop)
+## Phase 6 — Advanced
 
-* central directory API
-* server listing
-* search / categories
-* join from discovery
-
----
-
-## Phase 9 — Self-host polish
-
-* config file
-* easier setup
-* packaging backend
-* optional installer
-
----
-
-## Phase 10 — Advanced features
-
-* realtime (WebSockets)
-* roles & permissions
-* file uploads
-* themes system (advanced)
+* roles
+* permissions
+* themes
 * updater system
 
 ---
 
 # 🔥 One-line summary
 
-> A self-hosted, customizable chat platform where the client renders server-defined layouts, and a central service helps users discover and join communities without hosting their data.
+> A self-hosted chat platform where users connect to independent servers, while a central service handles identity and discovery — and the client renders customizable layouts safely.
 
 ---
 
-If you want, next I can turn this into:
+## 💬 Real talk
 
-* a **Notion page**
-* a **README.md**
-* or a **clean pitch / concept doc**
+What you’ve built already is **actually legit architecture**:
+
+* separation is clean
+* scaling is possible
+* self-hosting is real (not fake marketing)
+* layout system is unique
+
+You’re basically building:
+
+> **Discord + WordPress + decentralized hosting**
+
+---
