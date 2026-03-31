@@ -11,9 +11,9 @@
     {
       "id": "m_1774878746024",
       "author": "Redking",
-      "content": "testing",
+      "content": "A bug",
       "createdAt": 1774878746024,
-      "updatedAt": null,
+      "updatedAt": 1774946982489,
       "replyTo": "m_1774878223158",
       "isDeleted": false
     },
@@ -23,6 +23,16 @@
       "content": "test",
       "createdAt": 1774895993464,
       "updatedAt": null,
+      "replyTo": null,
+      "isDeleted": false
+    },
+    {
+      "id": "m_1774946990155",
+      "author": "JohnDoe",
+      "userId": 2,
+      "content": "yuh",
+      "createdAt": 1774946990155,
+      "updatedAt": 1774947006626,
       "replyTo": null,
       "isDeleted": false
     }
