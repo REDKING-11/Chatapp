@@ -386,17 +386,6 @@ Optional:
 
 > A self-hosted chat platform where users connect to independent servers, while a central service handles identity and discovery — and the client renders customizable layouts safely.
 
----
-
-## 💬 Real talk
-
-What you’ve built already is **actually legit architecture**:
-
-* separation is clean
-* scaling is possible
-* self-hosting is real (not fake marketing)
-* layout system is unique
-
 You’re basically building:
 
 > **Discord + WordPress + decentralized hosting**
