@@ -27,6 +27,15 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
         }
     }
 
+    function getAuthHeaders() {
+        const token = localStorage.getItem("authToken");
+
+        return {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+        };
+    }
+
     async function sendMessage() {
         if (!input.trim()) return;
 
@@ -36,17 +45,17 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
             if (editingMessageId) {
                 const res = await fetch(`${backendUrl}/api/messages/${editingMessageId}`, {
                     method: "PATCH",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${localStorage.getItem("authToken")}`
-                    },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({
-                        content: input,
-                        replyTo: replyTo?.id || null
+                        content: input
                     })
                 });
 
                 const updatedMessage = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(updatedMessage.error || "Failed to edit message");
+                }
 
                 setMessages((prev) =>
                     prev.map((msg) =>
@@ -58,16 +67,19 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
             } else {
                 const res = await fetch(`${backendUrl}/api/channels/${channelId}/messages`, {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${localStorage.getItem("authToken")}`
-                    },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({
-                        content: input
+                        content: input,
+                        replyTo: replyTo?.id || null
                     })
                 });
 
                 const newMessage = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(newMessage.error || "Failed to send message");
+                }
+
                 setMessages((prev) => [...prev, newMessage]);
                 setReplyTo(null);
             }
@@ -84,14 +96,15 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
         try {
             const res = await fetch(`${backendUrl}/api/messages/${messageId}`, {
                 method: "DELETE",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${localStorage.getItem("authToken")}`
-                },
+                headers: getAuthHeaders(),
                 body: JSON.stringify({})
             });
 
             const result = await res.json();
+
+            if (!res.ok) {
+                throw new Error(result.error || "Failed to delete message");
+            }
 
             setMessages((prev) =>
                 prev.map((msg) =>
@@ -178,8 +191,15 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
                                 {!message.isDeleted && (
                                     <div className="message-actions">
                                         <button onClick={() => startReply(message)}>Reply</button>
-                                        <button onClick={() => startEdit(message)}>Edit</button>
-                                        <button onClick={() => deleteMessage(message.id)}>Delete</button>
+
+                                        {(message.userId != null
+                                            ? String(message.userId) === String(currentUser.id)
+                                            : message.author === currentUser.username) && (
+                                                <>
+                                                    <button onClick={() => startEdit(message)}>Edit</button>
+                                                    <button onClick={() => deleteMessage(message.id)}>Delete</button>
+                                                </>
+                                            )}
                                     </div>
                                 )}
                             </div>

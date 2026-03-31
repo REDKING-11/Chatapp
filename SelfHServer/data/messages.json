@@ -35,6 +35,26 @@
       "updatedAt": 1774947006626,
       "replyTo": null,
       "isDeleted": false
+    },
+    {
+      "id": "m_1774990284871",
+      "author": "REDKING_11",
+      "userId": 1,
+      "content": "[deleted]",
+      "createdAt": 1774990284871,
+      "updatedAt": 1774990297514,
+      "replyTo": null,
+      "isDeleted": true
+    },
+    {
+      "id": "m_1774990603080",
+      "author": "REDKING_11",
+      "userId": 1,
+      "content": "test",
+      "createdAt": 1774990603080,
+      "updatedAt": null,
+      "replyTo": null,
+      "isDeleted": false
     }
   ]
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
 
@@ -14,56 +14,34 @@ function App() {
     const [currentUser, setCurrentUser] = useState(null);
     const [authLoading, setAuthLoading] = useState(true);
 
-    const [joinedServers, setJoinedServers] = useState(() => {
-        const saved = localStorage.getItem("joinedServers");
-        if (!saved) return [];
-
-        try {
-            return JSON.parse(saved);
-        } catch {
-            return [];
-        }
-    });
-
-    const [selectedJoinedServerId, setSelectedJoinedServerId] = useState(() => {
-        return localStorage.getItem("selectedJoinedServerId") || null;
-    });
-
-    useEffect(() => {
-        if (!selectedJoinedServerId) return;
-
-        const exists = joinedServers.some((server) => server.id === selectedJoinedServerId);
-
-        if (!exists) {
-            setSelectedJoinedServerId(null);
-            localStorage.removeItem("selectedJoinedServerId");
-        }
-    }, [joinedServers, selectedJoinedServerId]);
+    const [joinedServers, setJoinedServers] = useState([]);
+    const [selectedJoinedServerId, setSelectedJoinedServerId] = useState(null);
 
     const [serverData, setServerData] = useState(null);
     const [selectedChannelId, setSelectedChannelId] = useState(null);
-
     const [showJoinModal, setShowJoinModal] = useState(false);
 
-    useEffect(() => {
-        localStorage.setItem("joinedServers", JSON.stringify(joinedServers));
-    }, [joinedServers]);
+    const joinedServersStorageKey = useMemo(() => {
+        return currentUser ? `joinedServers_${currentUser.id}` : null;
+    }, [currentUser]);
 
-    useEffect(() => {
-        if (selectedJoinedServerId) {
-            localStorage.setItem("selectedJoinedServerId", selectedJoinedServerId);
-        }
-    }, [selectedJoinedServerId]);
+    const selectedServerStorageKey = useMemo(() => {
+        return currentUser ? `selectedJoinedServerId_${currentUser.id}` : null;
+    }, [currentUser]);
 
     useEffect(() => {
         const savedUser = localStorage.getItem("authUser");
         if (savedUser) {
             try {
                 setCurrentUser(JSON.parse(savedUser));
-            } catch { }
+            } catch {
+                localStorage.removeItem("authUser");
+            }
         }
-
+        
         const token = localStorage.getItem("authToken");
+        console.log("Session check token:", token);
+        console.log("CORE_API_BASE:", CORE_API_BASE);
 
         if (!token) {
             setAuthLoading(false);
@@ -77,9 +55,11 @@ function App() {
         })
             .then(async (res) => {
                 const data = await res.json();
+
                 if (!res.ok) {
                     throw new Error(data.error || "Session check failed");
                 }
+
                 setCurrentUser(data.user);
                 localStorage.setItem("authUser", JSON.stringify(data.user));
             })
@@ -87,11 +67,100 @@ function App() {
                 localStorage.removeItem("authToken");
                 localStorage.removeItem("authUser");
                 setCurrentUser(null);
+                setJoinedServers([]);
+                setSelectedJoinedServerId(null);
+                setServerData(null);
+                setSelectedChannelId(null);
             })
             .finally(() => {
                 setAuthLoading(false);
             });
     }, []);
+
+    useEffect(() => {
+        if (!currentUser || !joinedServersStorageKey || !selectedServerStorageKey) {
+            setJoinedServers([]);
+            setSelectedJoinedServerId(null);
+            setServerData(null);
+            setSelectedChannelId(null);
+            return;
+        }
+
+        const savedJoinedServers = localStorage.getItem(joinedServersStorageKey);
+
+        if (savedJoinedServers) {
+            try {
+                setJoinedServers(JSON.parse(savedJoinedServers));
+            } catch {
+                setJoinedServers([]);
+            }
+        } else {
+            // One-time migration from old shared storage, if it exists
+            const oldShared = localStorage.getItem("joinedServers");
+            if (oldShared) {
+                try {
+                    const parsed = JSON.parse(oldShared);
+                    setJoinedServers(parsed);
+                    localStorage.setItem(joinedServersStorageKey, JSON.stringify(parsed));
+                } catch {
+                    setJoinedServers([]);
+                }
+            } else {
+                setJoinedServers([]);
+            }
+        }
+
+        const savedSelectedServer = localStorage.getItem(selectedServerStorageKey);
+
+        if (savedSelectedServer) {
+            setSelectedJoinedServerId(savedSelectedServer);
+        } else {
+            const oldSharedSelected = localStorage.getItem("selectedJoinedServerId");
+            if (oldSharedSelected) {
+                setSelectedJoinedServerId(oldSharedSelected);
+                localStorage.setItem(selectedServerStorageKey, oldSharedSelected);
+            } else {
+                setSelectedJoinedServerId(null);
+            }
+        }
+
+        setServerData(null);
+        setSelectedChannelId(null);
+    }, [currentUser, joinedServersStorageKey, selectedServerStorageKey]);
+
+    useEffect(() => {
+        if (!currentUser || !joinedServersStorageKey) return;
+        localStorage.setItem(joinedServersStorageKey, JSON.stringify(joinedServers));
+    }, [joinedServers, currentUser, joinedServersStorageKey]);
+
+    useEffect(() => {
+        if (!currentUser || !selectedServerStorageKey) return;
+
+        if (selectedJoinedServerId) {
+            localStorage.setItem(selectedServerStorageKey, selectedJoinedServerId);
+        } else {
+            localStorage.removeItem(selectedServerStorageKey);
+        }
+    }, [selectedJoinedServerId, currentUser, selectedServerStorageKey]);
+
+    useEffect(() => {
+        if (!selectedJoinedServerId) return;
+
+        const exists = joinedServers.some((server) => server.id === selectedJoinedServerId);
+
+        if (!exists) {
+            setSelectedJoinedServerId(null);
+            if (selectedServerStorageKey) {
+                localStorage.removeItem(selectedServerStorageKey);
+            }
+        }
+    }, [joinedServers, selectedJoinedServerId, selectedServerStorageKey]);
+
+    useEffect(() => {
+        if (!selectedJoinedServerId && joinedServers.length > 0) {
+            setSelectedJoinedServerId(joinedServers[0].id);
+        }
+    }, [joinedServers, selectedJoinedServerId]);
 
     useEffect(() => {
         if (!currentUser || !selectedJoinedServerId) return;
@@ -103,12 +172,21 @@ function App() {
         if (!selectedJoinedServer) return;
 
         fetch(`${selectedJoinedServer.backendUrl}/api/server`)
-            .then((res) => res.json())
+            .then(async (res) => {
+                const data = await res.json();
+                if (!res.ok) {
+                    throw new Error(data.error || "Failed to fetch server");
+                }
+                return data;
+            })
             .then((data) => {
                 setServerData(data);
 
                 if (data.channels?.length > 0) {
-                    setSelectedChannelId(data.channels[0].id);
+                    setSelectedChannelId((prev) => {
+                        const stillExists = data.channels.some((c) => c.id === prev);
+                        return stillExists ? prev : data.channels[0].id;
+                    });
                 } else {
                     setSelectedChannelId(null);
                 }
@@ -131,6 +209,18 @@ function App() {
         setShowJoinModal(false);
     }
 
+    function handleLogout() {
+        localStorage.removeItem("authToken");
+        localStorage.removeItem("authUser");
+
+        setCurrentUser(null);
+        setJoinedServers([]);
+        setSelectedJoinedServerId(null);
+        setServerData(null);
+        setSelectedChannelId(null);
+        setShowJoinModal(false);
+    }
+
     if (authLoading) {
         return (
             <div className="auth-screen">
@@ -147,6 +237,8 @@ function App() {
 
     const channels = serverData?.channels || [];
     const selectedChannel = channels.find((c) => c.id === selectedChannelId) || null;
+    const selectedJoinedServer =
+        joinedServers.find((server) => server.id === selectedJoinedServerId) || null;
 
     return (
         <>
@@ -158,17 +250,7 @@ function App() {
 
                 <div className="topbar-actions">
                     <button onClick={() => setShowJoinModal(true)}>Join Server</button>
-                    <button
-                        onClick={() => {
-                            localStorage.removeItem("authToken");
-                            localStorage.removeItem("authUser");
-                            setCurrentUser(null);
-                            setServerData(null);
-                            setSelectedChannelId(null);
-                        }}
-                    >
-                        Logout
-                    </button>
+                    <button onClick={handleLogout}>Logout</button>
                 </div>
             </div>
 
@@ -189,10 +271,7 @@ function App() {
                 <MainView
                     channel={selectedChannel}
                     currentUser={currentUser}
-                    backendUrl={
-                        joinedServers.find((server) => server.id === selectedJoinedServerId)
-                            ?.backendUrl || null
-                    }
+                    backendUrl={selectedJoinedServer?.backendUrl || null}
                 />
             </div>
 

@@ -1,7 +1,7 @@
 <?php
 
-if (file_exists(__DIR__ . '/config.local.php')) {
-    require_once __DIR__ . '/config.local.php';
+if (file_exists(__DIR__ . '/.env')) {
+    require_once __DIR__ . '/.env';
 } else {
     define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
     define('DB_PORT', getenv('DB_PORT') ?: '3306');

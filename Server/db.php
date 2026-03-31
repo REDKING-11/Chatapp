@@ -1,6 +1,18 @@
 <?php
 
-header('Access-Control-Allow-Origin: http://localhost:5173');
+$allowedOrigins = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'null'
+];
+
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+
+if (in_array($origin, $allowedOrigins, true)) {
+    header("Access-Control-Allow-Origin: $origin");
+}
+
+header('Vary: Origin');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Content-Type: application/json');
@@ -38,8 +50,4 @@ function jsonResponse($data, int $status = 200): void {
     http_response_code($status);
     echo json_encode($data);
     exit;
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    jsonResponse(['ok' => true], 200);
 }
