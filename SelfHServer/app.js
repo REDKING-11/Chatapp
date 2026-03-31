@@ -8,6 +8,30 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+async function verifyUser(req) {
+    const auth = req.headers.authorization || "";
+    const match = auth.match(/^Bearer\s+(.*)$/);
+
+    if (!match) return null;
+
+    const token = match[1];
+
+    try {
+        const res = await fetch("https://core.samlam24.treok.io/auth/me.php", {
+            headers: {
+                Authorization: `Bearer ${token}`
+            }
+        });
+
+        if (!res.ok) return null;
+
+        const data = await res.json();
+        return data.user;
+    } catch {
+        return null;
+    }
+}
+
 const serverInfo = {
     id: "srv_local_1",
     name: "Local Test Server",
@@ -115,11 +139,17 @@ app.get("/api/channels/:channelId/messages", (req, res) => {
     res.json(messages[channelId] || []);
 });
 
-app.post("/api/channels/:channelId/messages", (req, res) => {
+app.post("/api/channels/:channelId/messages", async (req, res) => {
+    const user = await verifyUser(req);
+
+    if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+
     const messages = readMessages();
     const channelId = req.params.channelId;
 
-    const { author, content, replyTo, userId } = req.body;
+    const { content, replyTo } = req.body;
 
     if (!content || !content.trim()) {
         return res.status(400).json({ error: "Message content is required" });
@@ -127,8 +157,8 @@ app.post("/api/channels/:channelId/messages", (req, res) => {
 
     const newMessage = {
         id: `m_${Date.now()}`,
-        author: author || "User",
-        userId: userId || null,
+        author: user.username,   // ✅ from token
+        userId: user.id,         // ✅ from token
         content: content.trim(),
         createdAt: Date.now(),
         updatedAt: null,
@@ -143,35 +173,29 @@ app.post("/api/channels/:channelId/messages", (req, res) => {
     messages[channelId].push(newMessage);
     writeMessages(messages);
 
-    addMessageLog({
-        id: `log_${Date.now()}`,
-        actionType: replyTo ? "message_replied" : "message_sent",
-        messageId: newMessage.id,
-        channelId,
-        performedBy: newMessage.author,
-        targetAuthor: newMessage.author,
-        oldContent: null,
-        newContent: newMessage.content,
-        replyTargetId: replyTo || null,
-        timestamp: Date.now()
-    });
-
     res.status(201).json(newMessage);
 });
 
-app.patch("/api/messages/:messageId", (req, res) => {
-    const messages = readMessages();
-    const { messageId } = req.params;
-    const { content, editedBy } = req.body;
+app.patch("/api/messages/:messageId", async (req, res) => {
+    const user = await verifyUser(req);
 
-    if (!content || !content.trim()) {
-        return res.status(400).json({ error: "New content is required" });
+    if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
     }
 
+    const { content } = req.body;
+    const { messageId } = req.params;
+
+    const messages = readMessages();
+
     for (const channelId of Object.keys(messages)) {
-        const message = messages[channelId].find((msg) => msg.id === messageId);
+        const message = messages[channelId].find((m) => m.id === messageId);
 
         if (message) {
+            if (message.userId !== user.id) {
+                return res.status(403).json({ error: "You can only edit your own messages" });
+            }
+
             const oldContent = message.content;
 
             message.content = content.trim();
@@ -184,7 +208,7 @@ app.patch("/api/messages/:messageId", (req, res) => {
                 actionType: "message_edited",
                 messageId: message.id,
                 channelId,
-                performedBy: editedBy || "Unknown",
+                performedBy: user.username,
                 targetAuthor: message.author,
                 oldContent,
                 newContent: message.content,
@@ -199,15 +223,24 @@ app.patch("/api/messages/:messageId", (req, res) => {
     res.status(404).json({ error: "Message not found" });
 });
 
-app.delete("/api/messages/:messageId", (req, res) => {
-    const messages = readMessages();
+app.delete("/api/messages/:messageId", async (req, res) => {
+    const user = await verifyUser(req);
+
+    if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+
     const { messageId } = req.params;
-    const { deletedBy } = req.body;
+    const messages = readMessages();
 
     for (const channelId of Object.keys(messages)) {
-        const message = messages[channelId].find((msg) => msg.id === messageId);
+        const message = messages[channelId].find((m) => m.id === messageId);
 
         if (message) {
+            if (message.userId !== user.id) {
+                return res.status(403).json({ error: "You can only delete your own messages" });
+            }
+
             const oldContent = message.content;
 
             message.content = "[deleted]";
@@ -221,7 +254,7 @@ app.delete("/api/messages/:messageId", (req, res) => {
                 actionType: "message_deleted",
                 messageId: message.id,
                 channelId,
-                performedBy: deletedBy || "Unknown",
+                performedBy: user.username,
                 targetAuthor: message.author,
                 oldContent,
                 newContent: "[deleted]",

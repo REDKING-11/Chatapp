@@ -37,11 +37,12 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
                 const res = await fetch(`${backendUrl}/api/messages/${editingMessageId}`, {
                     method: "PATCH",
                     headers: {
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${localStorage.getItem("authToken")}`
                     },
                     body: JSON.stringify({
                         content: input,
-                        editedBy: currentUser.username
+                        replyTo: replyTo?.id || null
                     })
                 });
 
@@ -58,13 +59,11 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
                 const res = await fetch(`${backendUrl}/api/channels/${channelId}/messages`, {
                     method: "POST",
                     headers: {
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${localStorage.getItem("authToken")}`
                     },
                     body: JSON.stringify({
-                        author: currentUser.username,
-                        userId: currentUser.id,
-                        content: input,
-                        replyTo: replyTo?.id || null
+                        content: input
                     })
                 });
 
@@ -86,11 +85,10 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
             const res = await fetch(`${backendUrl}/api/messages/${messageId}`, {
                 method: "DELETE",
                 headers: {
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${localStorage.getItem("authToken")}`
                 },
-                body: JSON.stringify({
-                    deletedBy: currentUser.username
-                })
+                body: JSON.stringify({})
             });
 
             const result = await res.json();
@@ -215,8 +213,8 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
                         editingMessageId
                             ? "Edit message..."
                             : replyTo
-                              ? "Write reply..."
-                              : "Type a message..."
+                                ? "Write reply..."
+                                : "Type a message..."
                     }
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => {
@@ -231,8 +229,8 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
                             ? "Saving..."
                             : "Sending..."
                         : editingMessageId
-                          ? "Save"
-                          : "Send"}
+                            ? "Save"
+                            : "Send"}
                 </button>
             </div>
         </div>

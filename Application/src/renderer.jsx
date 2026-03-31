@@ -29,6 +29,17 @@ function App() {
         return localStorage.getItem("selectedJoinedServerId") || null;
     });
 
+    useEffect(() => {
+        if (!selectedJoinedServerId) return;
+
+        const exists = joinedServers.some((server) => server.id === selectedJoinedServerId);
+
+        if (!exists) {
+            setSelectedJoinedServerId(null);
+            localStorage.removeItem("selectedJoinedServerId");
+        }
+    }, [joinedServers, selectedJoinedServerId]);
+
     const [serverData, setServerData] = useState(null);
     const [selectedChannelId, setSelectedChannelId] = useState(null);
 
@@ -45,6 +56,13 @@ function App() {
     }, [selectedJoinedServerId]);
 
     useEffect(() => {
+        const savedUser = localStorage.getItem("authUser");
+        if (savedUser) {
+            try {
+                setCurrentUser(JSON.parse(savedUser));
+            } catch { }
+        }
+
         const token = localStorage.getItem("authToken");
 
         if (!token) {
@@ -63,9 +81,11 @@ function App() {
                     throw new Error(data.error || "Session check failed");
                 }
                 setCurrentUser(data.user);
+                localStorage.setItem("authUser", JSON.stringify(data.user));
             })
             .catch(() => {
                 localStorage.removeItem("authToken");
+                localStorage.removeItem("authUser");
                 setCurrentUser(null);
             })
             .finally(() => {
@@ -141,7 +161,10 @@ function App() {
                     <button
                         onClick={() => {
                             localStorage.removeItem("authToken");
+                            localStorage.removeItem("authUser");
                             setCurrentUser(null);
+                            setServerData(null);
+                            setSelectedChannelId(null);
                         }}
                     >
                         Logout

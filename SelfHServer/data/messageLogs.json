@@ -46,5 +46,41 @@
     "newContent": "test",
     "replyTargetId": null,
     "timestamp": 1774895993464
+  },
+  {
+    "id": "log_1774946982489",
+    "actionType": "message_edited",
+    "messageId": "m_1774878746024",
+    "channelId": "c1",
+    "performedBy": "Unknown",
+    "targetAuthor": "Redking",
+    "oldContent": "testing",
+    "newContent": "A bug",
+    "replyTargetId": "m_1774878223158",
+    "timestamp": 1774946982489
+  },
+  {
+    "id": "log_1774946990155",
+    "actionType": "message_sent",
+    "messageId": "m_1774946990155",
+    "channelId": "c1",
+    "performedBy": "JohnDoe",
+    "targetAuthor": "JohnDoe",
+    "oldContent": null,
+    "newContent": "test",
+    "replyTargetId": null,
+    "timestamp": 1774946990155
+  },
+  {
+    "id": "log_1774947006627",
+    "actionType": "message_edited",
+    "messageId": "m_1774946990155",
+    "channelId": "c1",
+    "performedBy": "Unknown",
+    "targetAuthor": "JohnDoe",
+    "oldContent": "test",
+    "newContent": "yuh",
+    "replyTargetId": null,
+    "timestamp": 1774947006627
   }
 ]

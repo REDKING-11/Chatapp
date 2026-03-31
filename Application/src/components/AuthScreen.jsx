@@ -71,9 +71,11 @@ export default function AuthScreen({ onAuthSuccess }) {
                 }
 
                 localStorage.setItem("authToken", loginData.token);
+                localStorage.setItem("authUser", JSON.stringify(loginData.user));
                 onAuthSuccess(loginData.user, loginData.token);
             } else {
                 localStorage.setItem("authToken", data.token);
+                localStorage.setItem("authUser", JSON.stringify(data.user));
                 onAuthSuccess(data.user, data.token);
             }
         } catch (err) {
@@ -128,8 +130,8 @@ export default function AuthScreen({ onAuthSuccess }) {
                         {loading
                             ? "Please wait..."
                             : mode === "login"
-                              ? "Login"
-                              : "Register"}
+                                ? "Login"
+                                : "Register"}
                     </button>
                 </form>
 
