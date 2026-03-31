@@ -5,29 +5,55 @@ const { readMessages, writeMessages, readMessageLogs, addMessageLog } = require(
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// point this to the SAME backend your frontend uses for login
+const CORE_API_BASE =
+    process.env.CORE_API_BASE ||
+    "https://core.samlam24.treok.io";
+
+app.use(
+    cors({
+        origin: true,
+        credentials: false
+    })
+);
 app.use(express.json());
 
 async function verifyUser(req) {
     const auth = req.headers.authorization || "";
-    const match = auth.match(/^Bearer\s+(.*)$/);
+    const match = auth.match(/^Bearer\s+(.+)$/i);
 
     if (!match) return null;
 
-    const token = match[1];
+    const token = match[1].trim();
+    if (!token) return null;
 
     try {
-        const res = await fetch("https://core.samlam24.treok.io/auth/me.php", {
+        const res = await fetch(`${CORE_API_BASE}/auth/me.php`, {
+            method: "GET",
             headers: {
-                Authorization: `Bearer ${token}`
+                Authorization: `Bearer ${token}`,
+                Accept: "application/json"
             }
         });
 
-        if (!res.ok) return null;
+        const raw = await res.text();
 
-        const data = await res.json();
-        return data.user;
-    } catch {
+        let data = null;
+        try {
+            data = raw ? JSON.parse(raw) : null;
+        } catch {
+            console.error("verifyUser: invalid JSON from core auth:", raw);
+            return null;
+        }
+
+        if (!res.ok) {
+            console.error("verifyUser failed:", res.status, data);
+            return null;
+        }
+
+        return data?.user || null;
+    } catch (err) {
+        console.error("verifyUser request error:", err);
         return null;
     }
 }
@@ -95,7 +121,7 @@ const serverInfo = {
 const members = [];
 
 app.get("/api/health", (req, res) => {
-    res.json({ ok: true });
+    res.json({ ok: true, coreApiBase: CORE_API_BASE });
 });
 
 app.get("/api/server", (req, res) => {
@@ -148,7 +174,6 @@ app.post("/api/channels/:channelId/messages", async (req, res) => {
 
     const messages = readMessages();
     const channelId = req.params.channelId;
-
     const { content, replyTo } = req.body;
 
     if (!content || !content.trim()) {
@@ -157,8 +182,8 @@ app.post("/api/channels/:channelId/messages", async (req, res) => {
 
     const newMessage = {
         id: `m_${Date.now()}`,
-        author: user.username,   // ✅ from token
-        userId: user.id,         // ✅ from token
+        author: user.username,
+        userId: user.id,
         content: content.trim(),
         createdAt: Date.now(),
         updatedAt: null,
@@ -185,6 +210,10 @@ app.patch("/api/messages/:messageId", async (req, res) => {
 
     const { content } = req.body;
     const { messageId } = req.params;
+
+    if (!content || !content.trim()) {
+        return res.status(400).json({ error: "Message content is required" });
+    }
 
     const messages = readMessages();
 
@@ -279,4 +308,5 @@ app.get("/api/channels/:channelId/message-logs", (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+    console.log(`Using CORE_API_BASE: ${CORE_API_BASE}`);
 });

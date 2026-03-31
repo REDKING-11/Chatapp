@@ -82,5 +82,29 @@
     "newContent": "yuh",
     "replyTargetId": null,
     "timestamp": 1774947006627
+  },
+  {
+    "id": "log_1774990295870",
+    "actionType": "message_edited",
+    "messageId": "m_1774990284871",
+    "channelId": "c1",
+    "performedBy": "REDKING_11",
+    "targetAuthor": "REDKING_11",
+    "oldContent": "test",
+    "newContent": "mayby",
+    "replyTargetId": null,
+    "timestamp": 1774990295870
+  },
+  {
+    "id": "log_1774990297515",
+    "actionType": "message_deleted",
+    "messageId": "m_1774990284871",
+    "channelId": "c1",
+    "performedBy": "REDKING_11",
+    "targetAuthor": "REDKING_11",
+    "oldContent": "mayby",
+    "newContent": "[deleted]",
+    "replyTargetId": null,
+    "timestamp": 1774990297515
   }
 ]

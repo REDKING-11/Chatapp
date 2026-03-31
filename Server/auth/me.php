@@ -2,13 +2,52 @@
 
 require_once __DIR__ . '/../db.php';
 
-$authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+function getBearerToken(): ?string {
+    $authHeader = '';
 
-if (!preg_match('/Bearer\s+(.+)/i', $authHeader, $matches)) {
-    jsonResponse(['error' => 'Missing token'], 401);
+    // Standard PHP server var
+    if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
+        $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+    }
+    // Sometimes Apache/FastCGI puts it here
+    elseif (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+        $authHeader = $_SERVER['REDIRECT_HTTP_AUTHORIZATION'];
+    }
+    // Fallback: getallheaders()
+    elseif (function_exists('getallheaders')) {
+        $headers = getallheaders();
+
+        foreach ($headers as $key => $value) {
+            if (strtolower($key) === 'authorization') {
+                $authHeader = $value;
+                break;
+            }
+        }
+    }
+
+    if (!$authHeader) {
+        return null;
+    }
+
+    if (!preg_match('/Bearer\s+(.+)/i', $authHeader, $matches)) {
+        return null;
+    }
+
+    $token = trim($matches[1]);
+    return $token !== '' ? $token : null;
 }
 
-$token = trim($matches[1]);
+$token = getBearerToken();
+
+if (!$token) {
+    jsonResponse([
+        'error' => 'Missing token',
+        'debug' => [
+            'HTTP_AUTHORIZATION' => $_SERVER['HTTP_AUTHORIZATION'] ?? null,
+            'REDIRECT_HTTP_AUTHORIZATION' => $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null,
+        ]
+    ], 401);
+}
 
 $db = getDb();
 
