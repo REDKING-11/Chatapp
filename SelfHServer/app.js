@@ -168,9 +168,7 @@ app.get("/api/channels/:channelId/messages", (req, res) => {
 app.post("/api/channels/:channelId/messages", async (req, res) => {
     const user = await verifyUser(req);
 
-    if (!user) {
-        return res.status(401).json({ error: "Unauthorized" });
-    }
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
 
     const messages = readMessages();
     const channelId = req.params.channelId;
