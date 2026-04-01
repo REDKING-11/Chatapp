@@ -1,7 +1,13 @@
 import LayoutRenderer from "./LayoutRenderer";
 import { defaultLayouts } from "../layouts/defaultLayouts";
 
-export default function MainView({ channel, currentUser, backendUrl }) {
+export default function MainView({
+    channel,
+    currentUser,
+    backendUrl,
+    customization,
+    serverStatus
+}) {
     if (!channel) {
         return (
             <main className="main">
@@ -10,8 +16,18 @@ export default function MainView({ channel, currentUser, backendUrl }) {
         );
     }
 
-    const layout = channel.layout || defaultLayouts[channel.type] || null;
-
+    const overrideLayout = customization?.pages?.[channel.id]?.layout || null;
+    const layout = overrideLayout || channel.layout || defaultLayouts[channel.type] || null;
+    if (serverStatus === "offline") {
+        return (
+            <main className="main">
+                <div className="offline-server-state">
+                    <h1>Server offline</h1>
+                    <p>This server is offline, deleted, or unreachable right now.</p>
+                </div>
+            </main>
+        );
+    }
     return (
         <main className="main">
             <h1>#{channel.name}</h1>

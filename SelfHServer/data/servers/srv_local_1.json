@@ -1,0 +1,64 @@
+{
+  "id": "srv_local_1",
+  "name": "Local Test Server",
+  "description": "Your local self-hosted server",
+  "icon": null,
+  "channels": [
+    {
+      "id": "c1",
+      "name": "general",
+      "type": "chat",
+      "layout": {
+        "type": "column",
+        "children": [
+          {
+            "type": "text",
+            "props": {
+              "text": "Welcome to general chat"
+            }
+          },
+          {
+            "type": "chat"
+          }
+        ]
+      }
+    },
+    {
+      "id": "c2",
+      "name": "custom-page",
+      "type": "page",
+      "layout": {
+        "type": "row",
+        "children": [
+          {
+            "type": "column",
+            "children": [
+              {
+                "type": "text",
+                "props": {
+                  "text": "Left side content"
+                }
+              }
+            ]
+          },
+          {
+            "type": "column",
+            "children": [
+              {
+                "type": "text",
+                "props": {
+                  "text": "Right side content"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c_settings",
+      "name": "customize",
+      "type": "customization"
+    }
+  ]
+}
