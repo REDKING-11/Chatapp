@@ -1,46 +1,18 @@
 import { useState } from "react";
+import { joinServer } from "../features/servers/actions";
 
-export default function JoinServerModal({ currentUser, onJoinSuccess, onClose }) {
+export default function JoinServerModal({ onJoinSuccess, onClose }) {
     const [backendUrl, setBackendUrl] = useState("http://localhost:3000");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
 
     async function handleJoin() {
-        const trimmedUrl = backendUrl.trim();
-
-        if (!trimmedUrl) {
-            setError("Backend URL is required");
-            return;
-        }
-
         setLoading(true);
         setError("");
 
         try {
-            const res = await fetch(`${trimmedUrl}/api/join`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    userId: currentUser.id,
-                    username: currentUser.username
-                })
-            });
-
-            const data = await res.json();
-
-            if (!res.ok) {
-                throw new Error(data.error || "Failed to join server");
-            }
-
-            onJoinSuccess({
-                id: data.server.id,
-                name: data.server.name,
-                description: data.server.description,
-                icon: data.server.icon,
-                backendUrl: trimmedUrl
-            });
+            const joinedServer = await joinServer({ backendUrl });
+            onJoinSuccess(joinedServer);
         } catch (err) {
             setError(err.message);
         } finally {

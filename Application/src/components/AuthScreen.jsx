@@ -1,6 +1,5 @@
 import { useState } from "react";
-
-const CORE_API_BASE = import.meta.env.VITE_CORE_API_BASE;
+import { submitAuth } from "../features/auth/actions";
 
 export default function AuthScreen({ onAuthSuccess }) {
     const [mode, setMode] = useState("login");
@@ -17,67 +16,15 @@ export default function AuthScreen({ onAuthSuccess }) {
         setError("");
 
         try {
-            const endpoint =
-                mode === "login"
-                    ? `${CORE_API_BASE}/auth/login.php`
-                    : `${CORE_API_BASE}/auth/register.php`;
-
-            const body =
-                mode === "login"
-                    ? { username, password }
-                    : { username, password, email, phone };
-
-            const res = await fetch(endpoint, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify(body)
+            const data = await submitAuth({
+                mode,
+                username,
+                password,
+                email,
+                phone
             });
 
-            const raw = await res.text();
-
-            let data;
-            try {
-                data = JSON.parse(raw);
-            } catch {
-                throw new Error(`Server returned invalid JSON: ${raw || "[empty response]"}`);
-            }
-
-            if (!res.ok) {
-                throw new Error(data.error || "Request failed");
-            }
-
-            if (mode === "register") {
-                const loginRes = await fetch(`${CORE_API_BASE}/auth/login.php`, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({ username, password })
-                });
-
-                const loginRaw = await loginRes.text();
-
-                let loginData;
-                try {
-                    loginData = JSON.parse(loginRaw);
-                } catch {
-                    throw new Error(`Auto-login returned invalid JSON: ${loginRaw || "[empty response]"}`);
-                }
-
-                if (!loginRes.ok) {
-                    throw new Error(loginData.error || "Auto-login failed");
-                }
-
-                localStorage.setItem("authToken", loginData.token);
-                localStorage.setItem("authUser", JSON.stringify(loginData.user));
-                onAuthSuccess(loginData.user, loginData.token);
-            } else {
-                localStorage.setItem("authToken", data.token);
-                localStorage.setItem("authUser", JSON.stringify(data.user));
-                onAuthSuccess(data.user, data.token);
-            }
+            onAuthSuccess(data.user, data.token);
         } catch (err) {
             setError(err.message);
         } finally {

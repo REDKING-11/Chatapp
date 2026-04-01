@@ -1,0 +1,68 @@
+{
+  "theme": {
+    "accent": "#c81414",
+    "background": "#1e1f22",
+    "surface": "#2b2d31",
+    "surfaceAlt": "#313338",
+    "text": "#f2f3f5",
+    "textMuted": "#b5bac1",
+    "danger": "#da373c",
+    "success": "#3ba55d",
+    "radius": 12
+  },
+  "layout": {
+    "showServerSidebar": true,
+    "showChannelSidebar": true,
+    "showMembersPanel": false,
+    "channelSidebarWidth": 260,
+    "membersPanelWidth": 280,
+    "compactMessages": false
+  },
+  "pages": {
+    "c1": {
+      "layout": {
+        "type": "column",
+        "children": [
+          {
+            "type": "text",
+            "props": {
+              "text": "Welcome to general chat"
+            }
+          },
+          {
+            "type": "chat"
+          }
+        ]
+      }
+    },
+    "c2": {
+      "layout": {
+        "type": "row",
+        "children": [
+          {
+            "type": "column",
+            "children": [
+              {
+                "type": "text",
+                "props": {
+                  "text": "Left side content"
+                }
+              }
+            ]
+          },
+          {
+            "type": "column",
+            "children": [
+              {
+                "type": "text",
+                "props": {
+                  "text": "Right side content"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

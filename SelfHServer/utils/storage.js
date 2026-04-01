@@ -1,8 +1,8 @@
 const fs = require("fs");
 const path = require("path");
 
-const messagesPath = path.join(__dirname, "data", "messages.json");
-const messageLogsPath = path.join(__dirname, "data", "messageLogs.json");
+const messagesPath = path.join(__dirname, "..", "data", "messages.json");
+const messageLogsPath = path.join(__dirname, "..", "data", "messageLogs.json");
 
 function readJsonFile(filePath, fallback) {
     try {
