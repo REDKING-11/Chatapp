@@ -13,24 +13,178 @@
   "layout": {
     "showServerSidebar": true,
     "showChannelSidebar": true,
-    "showMembersPanel": false,
+    "showMembersPanel": true,
+    "compactMessages": false,
     "channelSidebarWidth": 260,
-    "membersPanelWidth": 280,
-    "compactMessages": false
+    "membersPanelWidth": 280
   },
+  "customCss": ".main h1 {\n  color: #ff5a5a;\n}\n\n.channel-button {\n  border-radius: 999px;\n}\n\n.hero-box {\n  background: #111827;\n  border: 1px solid #374151;\n  padding: 24px;\n}\n.test {\n  background-color: red;\n}",
   "pages": {
     "c1": {
       "layout": {
-        "type": "column",
+        "id": "row_1775121115700_bmkp3r",
+        "type": "row",
+        "props": {
+          "gap": 16,
+          "padding": 0,
+          "style": ""
+        },
         "children": [
           {
-            "type": "text",
+            "id": "column_1775123889067_xp4a5n",
+            "type": "column",
             "props": {
-              "text": "Welcome to general chat"
-            }
-          },
-          {
-            "type": "chat"
+              "gap": 16,
+              "padding": 0,
+              "style": ""
+            },
+            "children": [
+              {
+                "id": "row_1775120970140_loe88w",
+                "type": "row",
+                "props": {
+                  "gap": 16,
+                  "padding": 0,
+                  "style": ""
+                },
+                "children": [
+                  {
+                    "id": "column_1775123899603_xxr8nr",
+                    "type": "column",
+                    "props": {
+                      "gap": 16,
+                      "padding": 0,
+                      "style": ""
+                    },
+                    "children": [
+                      {
+                        "id": "column_1775121101949_fe2n1k",
+                        "type": "column",
+                        "props": {
+                          "gap": 16,
+                          "padding": 0,
+                          "style": ""
+                        },
+                        "children": [
+                          {
+                            "id": "image_1775120970140_rf47eh",
+                            "type": "image",
+                            "props": {
+                              "src": "",
+                              "alt": "Image",
+                              "style": ""
+                            }
+                          },
+                          {
+                            "id": "chat_1775121101949_7g682p",
+                            "type": "chat",
+                            "props": {
+                              "style": ""
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "id": "chat_1775121115700_z9gr2c",
+                        "type": "chat",
+                        "props": {
+                          "style": "",
+                          "channelId": "c2"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "id": "column_1775120957187_ed5snc",
+                    "type": "column",
+                    "props": {
+                      "gap": 16,
+                      "padding": 0,
+                      "style": ""
+                    },
+                    "children": [
+                      {
+                        "id": "row_1775120965028_jn5fwe",
+                        "type": "row",
+                        "props": {
+                          "gap": 16,
+                          "padding": 0,
+                          "style": ""
+                        },
+                        "children": [
+                          {
+                            "id": "textarea_1775120965028_99bhw9",
+                            "type": "textarea",
+                            "props": {
+                              "name": "message",
+                              "placeholder": "Write something",
+                              "style": ""
+                            }
+                          },
+                          {
+                            "id": "row_1775120957187_r8vqxg",
+                            "type": "row",
+                            "props": {
+                              "gap": 16,
+                              "padding": 0,
+                              "style": ""
+                            },
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "id": "column_1775120919868_6t8de7",
+                        "type": "column",
+                        "props": {
+                          "gap": 16,
+                          "padding": 0,
+                          "style": ""
+                        },
+                        "children": [
+                          {
+                            "id": "row_1775120947339_upsy2e",
+                            "type": "row",
+                            "props": {
+                              "gap": 16,
+                              "padding": 0,
+                              "style": ""
+                            },
+                            "children": [
+                              {
+                                "id": "text_1775120934788_1lpi4j",
+                                "type": "text",
+                                "props": {
+                                  "text": "New text",
+                                  "style": ""
+                                }
+                              },
+                              {
+                                "id": "image_1775120947339_txvwwx",
+                                "type": "image",
+                                "props": {
+                                  "src": "",
+                                  "alt": "Image",
+                                  "style": ""
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "id": "button_1775120942260_6smaxm",
+                            "type": "button",
+                            "props": {
+                              "text": "Button",
+                              "style": ""
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
           }
         ]
       }
