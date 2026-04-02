@@ -3,10 +3,55 @@ import {
     fetchCustomization,
     saveCustomization,
     resetCustomization
-} from "../features/customization/actions";
-import PageBuilder from "./PageBuilder";
+} from "../api/actions";
+import usePageBuilderState from "../hooks/usePageBuilderState";
+import EmbeddedPageBuilder from "../builders/EmbeddedPageBuilder";
 
-function CustomizationPage({ backendUrl, serverData }) {
+const DEFAULT_CUSTOMIZATION = {
+    theme: {
+        accent: "#5865F2",
+        background: "#1e1f22",
+        surface: "#2b2d31",
+        surfaceAlt: "#313338",
+        text: "#f2f3f5",
+        textMuted: "#b5bac1",
+        danger: "#da373c",
+        success: "#3ba55d",
+        radius: 12
+    },
+    layout: {
+        showServerSidebar: true,
+        showChannelSidebar: true,
+        showMembersPanel: false,
+        compactMessages: false,
+        channelSidebarWidth: 260
+    },
+    customCss: "",
+    pages: {}
+};
+
+function mergeCustomization(data) {
+    return {
+        ...DEFAULT_CUSTOMIZATION,
+        ...data,
+        theme: {
+            ...DEFAULT_CUSTOMIZATION.theme,
+            ...(data?.theme || {})
+        },
+        layout: {
+            ...DEFAULT_CUSTOMIZATION.layout,
+            ...(data?.layout || {})
+        },
+        pages: data?.pages || {},
+        customCss: data?.customCss || ""
+    };
+}
+
+export default function CustomizationPage({
+    backendUrl,
+    serverData,
+    onOpenAdvancedBuilder
+}) {
     const [customization, setCustomization] = useState(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -20,7 +65,7 @@ function CustomizationPage({ backendUrl, serverData }) {
                 setLoading(true);
                 setError("");
                 const data = await fetchCustomization(backendUrl);
-                setCustomization(data);
+                setCustomization(mergeCustomization(data));
             } catch (err) {
                 console.error(err);
                 setError("Failed to load customization");
@@ -31,6 +76,12 @@ function CustomizationPage({ backendUrl, serverData }) {
 
         load();
     }, [backendUrl]);
+
+    const builderState = usePageBuilderState({
+        customization,
+        setCustomization,
+        channels: serverData?.channels || []
+    });
 
     function updateThemeField(field, value) {
         setCustomization((prev) => ({
@@ -52,12 +103,22 @@ function CustomizationPage({ backendUrl, serverData }) {
         }));
     }
 
+    function updateCustomCss(value) {
+        setCustomization((prev) => ({
+            ...prev,
+            customCss: value
+        }));
+    }
+
     async function handleSave() {
         try {
             setSaving(true);
             setError("");
-            const saved = await saveCustomization(backendUrl, customization);
-            setCustomization(saved);
+
+            const payload = mergeCustomization(customization);
+            const saved = await saveCustomization(backendUrl, payload);
+
+            setCustomization(mergeCustomization(saved));
             window.dispatchEvent(new Event("customizationUpdated"));
         } catch (err) {
             console.error(err);
@@ -71,8 +132,9 @@ function CustomizationPage({ backendUrl, serverData }) {
         try {
             setSaving(true);
             setError("");
+
             const reset = await resetCustomization(backendUrl);
-            setCustomization(reset);
+            setCustomization(mergeCustomization(reset));
             window.dispatchEvent(new Event("customizationUpdated"));
         } catch (err) {
             console.error(err);
@@ -93,7 +155,9 @@ function CustomizationPage({ backendUrl, serverData }) {
     return (
         <div className="settings-panel-body">
             <div className="settings-section">
-                <h3>Server Theme</h3>
+                <div className="settings-section-title-row">
+                    <h3>Server Theme</h3>
+                </div>
 
                 {error ? <p className="settings-error">{error}</p> : null}
 
@@ -153,6 +217,24 @@ function CustomizationPage({ backendUrl, serverData }) {
                     </label>
 
                     <label className="settings-field">
+                        <span>Danger</span>
+                        <input
+                            type="color"
+                            value={customization.theme.danger}
+                            onChange={(e) => updateThemeField("danger", e.target.value)}
+                        />
+                    </label>
+
+                    <label className="settings-field">
+                        <span>Success</span>
+                        <input
+                            type="color"
+                            value={customization.theme.success}
+                            onChange={(e) => updateThemeField("success", e.target.value)}
+                        />
+                    </label>
+
+                    <label className="settings-field">
                         <span>Corner Radius</span>
                         <input
                             type="number"
@@ -166,7 +248,9 @@ function CustomizationPage({ backendUrl, serverData }) {
             </div>
 
             <div className="settings-section">
-                <h3>Server Layout</h3>
+                <div className="settings-section-title-row">
+                    <h3>Server Layout</h3>
+                </div>
 
                 <div className="settings-grid">
                     <label className="settings-checkbox">
@@ -218,13 +302,41 @@ function CustomizationPage({ backendUrl, serverData }) {
             </div>
 
             <div className="settings-section">
-                <h3>Page Builder</h3>
+                <div className="settings-section-title-row">
+                    <h3>Custom CSS</h3>
+                </div>
 
-                <PageBuilder
-                    customization={customization}
-                    setCustomization={setCustomization}
-                    channels={serverData?.channels || []}
-                />
+                <label className="settings-field">
+                    <span>Server CSS override</span>
+                    <textarea
+                        rows="16"
+                        value={customization.customCss || ""}
+                        onChange={(e) => updateCustomCss(e.target.value)}
+                    />
+                </label>
+            </div>
+
+            <div className="settings-section">
+                <div className="settings-section-title-row">
+                    <div>
+                        <h3>Page Builder</h3>
+                        <p className="settings-section-subtitle">
+                            Quick content and property editing here. Use Advanced Builder for drag and drop layout work.
+                        </p>
+                    </div>
+
+                    {onOpenAdvancedBuilder && (
+                        <button
+                            type="button"
+                            className="settings-mode-button"
+                            onClick={onOpenAdvancedBuilder}
+                        >
+                            Open Advanced Builder
+                        </button>
+                    )}
+                </div>
+
+                <EmbeddedPageBuilder state={builderState} />
             </div>
 
             <div className="settings-actions">
@@ -232,12 +344,14 @@ function CustomizationPage({ backendUrl, serverData }) {
                     {saving ? "Saving..." : "Save"}
                 </button>
 
-                <button className="secondary" onClick={handleReset} disabled={saving}>
+                <button
+                    className="secondary"
+                    onClick={handleReset}
+                    disabled={saving}
+                >
                     Reset to default
                 </button>
             </div>
         </div>
     );
 }
-
-export default CustomizationPage;

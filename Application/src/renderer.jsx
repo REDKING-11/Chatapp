@@ -44,6 +44,7 @@ function App() {
     const [customization, setCustomization] = useState(null);
 
     const serverThemeRef = useRef(null);
+    const serverCustomCssRef = useRef(null);
 
     useEffect(() => {
         async function restoreSession() {
@@ -245,6 +246,13 @@ function App() {
         }
     }, [customization]);
 
+    useEffect(() => {
+        const styleEl = serverCustomCssRef.current;
+        if (!styleEl) return;
+
+        styleEl.textContent = customization?.customCss || "";
+    }, [customization]);
+
     function resetAppState() {
         setCurrentUser(null);
         setJoinedServers([]);
@@ -355,6 +363,8 @@ function App() {
                 />
 
                 <div className="server-theme-scope" ref={serverThemeRef}>
+                    <style ref={serverCustomCssRef} />
+
                     <ChannelSidebar
                         channels={channels}
                         selectedChannelId={selectedChannelId}
