@@ -1,6 +1,17 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
+import {
+  adoptConversationId,
+  createConversation,
+  createEncryptedMessage,
+  getDeviceBundle,
+  importConversation,
+  initializeDevice,
+  listConversations,
+  listMessages,
+  receiveEncryptedMessage
+} from './main/dm/service';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
@@ -14,6 +25,9 @@ const createWindow = () => {
     height: 600,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
     },
   });
 
@@ -24,14 +38,25 @@ const createWindow = () => {
     mainWindow.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
   }
 
-  // Open the DevTools.
-  mainWindow.webContents.openDevTools();
+};
+
+const registerSecureDmIpc = () => {
+  ipcMain.handle('secure-dm:init-device', (_event, payload) => initializeDevice(payload));
+  ipcMain.handle('secure-dm:get-device-bundle', (_event, payload) => getDeviceBundle(payload));
+  ipcMain.handle('secure-dm:create-conversation', (_event, payload) => createConversation(payload));
+  ipcMain.handle('secure-dm:adopt-conversation-id', (_event, payload) => adoptConversationId(payload));
+  ipcMain.handle('secure-dm:import-conversation', (_event, payload) => importConversation(payload));
+  ipcMain.handle('secure-dm:create-message', (_event, payload) => createEncryptedMessage(payload));
+  ipcMain.handle('secure-dm:receive-message', (_event, payload) => receiveEncryptedMessage(payload));
+  ipcMain.handle('secure-dm:list-conversations', (_event, payload) => listConversations(payload));
+  ipcMain.handle('secure-dm:list-messages', (_event, payload) => listMessages(payload));
 };
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  registerSecureDmIpc();
   createWindow();
 
   // On OS X it's common to re-create a window in the app when the

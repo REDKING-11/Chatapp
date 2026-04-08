@@ -8,6 +8,11 @@ import AuthScreen from "./components/AuthScreen";
 import JoinedServersSidebar from "./components/JoinedServerSidebar";
 import JoinServerModal from "./components/JoinServerModal";
 import ServerSettingsPanel from "./components/ServerSettingsPanel";
+import {
+    initializeSecureDm,
+    pullRelayMessages,
+    registerSecureDmDevice
+} from "./features/dm/actions";
 
 import {
     getStoredAuthToken,
@@ -29,12 +34,14 @@ import {
     leaveServer
 } from "./features/servers/actions";
 
+const FRIENDS_TAB_ID = "__friends__";
+
 function App() {
     const [currentUser, setCurrentUser] = useState(null);
     const [authLoading, setAuthLoading] = useState(true);
 
     const [joinedServers, setJoinedServers] = useState([]);
-    const [selectedJoinedServerId, setSelectedJoinedServerId] = useState(null);
+    const [selectedJoinedServerId, setSelectedJoinedServerId] = useState(FRIENDS_TAB_ID);
     const [serverStatuses, setServerStatuses] = useState({});
 
     const [serverData, setServerData] = useState(null);
@@ -42,6 +49,7 @@ function App() {
     const [showJoinModal, setShowJoinModal] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [customization, setCustomization] = useState(null);
+    const [settingsServer, setSettingsServer] = useState(null);
 
     const serverThemeRef = useRef(null);
 
@@ -77,7 +85,7 @@ function App() {
         async function loadUserServers() {
             if (!currentUser) {
                 setJoinedServers([]);
-                setSelectedJoinedServerId(null);
+                setSelectedJoinedServerId(FRIENDS_TAB_ID);
                 setServerData(null);
                 setSelectedChannelId(null);
                 return;
@@ -86,11 +94,11 @@ function App() {
             try {
                 const servers = await fetchUserServers();
                 setJoinedServers(servers);
-                setSelectedJoinedServerId(loadSelectedServerId(currentUser.id));
+                setSelectedJoinedServerId(loadSelectedServerId(currentUser.id) || FRIENDS_TAB_ID);
             } catch (err) {
                 console.error("Failed to load joined servers:", err);
                 setJoinedServers([]);
-                setSelectedJoinedServerId(null);
+                setSelectedJoinedServerId(FRIENDS_TAB_ID);
             }
 
             setServerData(null);
@@ -106,25 +114,27 @@ function App() {
     }, [currentUser, selectedJoinedServerId]);
 
     useEffect(() => {
-        if (!selectedJoinedServerId) return;
+        if (!selectedJoinedServerId || selectedJoinedServerId === FRIENDS_TAB_ID) return;
 
         const exists = joinedServers.some((server) => server.id === selectedJoinedServerId);
 
         if (!exists) {
-            setSelectedJoinedServerId(null);
+            setSelectedJoinedServerId(FRIENDS_TAB_ID);
             if (currentUser) clearSelectedServerId(currentUser.id);
         }
     }, [joinedServers, selectedJoinedServerId, currentUser]);
 
     useEffect(() => {
-        if (!selectedJoinedServerId && joinedServers.length > 0) {
-            setSelectedJoinedServerId(joinedServers[0].id);
+        if (!selectedJoinedServerId) {
+            setSelectedJoinedServerId(FRIENDS_TAB_ID);
         }
-    }, [joinedServers, selectedJoinedServerId]);
+    }, [selectedJoinedServerId]);
 
     useEffect(() => {
         async function loadServer() {
-            if (!currentUser || !selectedJoinedServerId) return;
+            if (!currentUser || !selectedJoinedServerId || selectedJoinedServerId === FRIENDS_TAB_ID) {
+                return;
+            }
 
             const selectedJoinedServer = joinedServers.find(
                 (server) => server.id === selectedJoinedServerId
@@ -140,7 +150,7 @@ function App() {
 
                 if (data.channels?.length > 0) {
                     setSelectedChannelId((prev) => {
-                        const stillExists = data.channels.some((c) => c.id === prev);
+                        const stillExists = data.channels.some((channel) => channel.id === prev);
                         return stillExists ? prev : data.channels[0].id;
                     });
                 } else {
@@ -160,6 +170,11 @@ function App() {
 
     useEffect(() => {
         async function loadCustomization() {
+            if (selectedJoinedServerId === FRIENDS_TAB_ID) {
+                setCustomization(null);
+                return;
+            }
+
             const selectedJoinedServer = joinedServers.find(
                 (server) => server.id === selectedJoinedServerId
             );
@@ -188,6 +203,8 @@ function App() {
 
     useEffect(() => {
         function reloadCustomization() {
+            if (selectedJoinedServerId === FRIENDS_TAB_ID) return;
+
             const selectedJoinedServer = joinedServers.find(
                 (server) => server.id === selectedJoinedServerId
             );
@@ -245,15 +262,71 @@ function App() {
         }
     }, [customization]);
 
+    useEffect(() => {
+        async function setupSecureDm() {
+            if (!currentUser || !window.secureDm) return;
+
+            try {
+                await initializeSecureDm(currentUser);
+                const token = getStoredAuthToken();
+
+                if (token) {
+                    await registerSecureDmDevice({
+                        token,
+                        currentUser
+                    });
+                }
+            } catch (err) {
+                console.error("Failed to initialize secure DM:", err);
+            }
+        }
+
+        setupSecureDm();
+    }, [currentUser]);
+
+    useEffect(() => {
+        if (!currentUser || !window.secureDm) return;
+
+        let disposed = false;
+
+        async function syncRelayMessages() {
+            const token = getStoredAuthToken();
+
+            if (!token) return;
+
+            try {
+                await pullRelayMessages({
+                    token,
+                    currentUser
+                });
+            } catch (err) {
+                if (!disposed) {
+                    console.error("Failed to sync relay messages:", err);
+                }
+            }
+        }
+
+        syncRelayMessages();
+        const intervalId = window.setInterval(syncRelayMessages, 15000);
+        window.addEventListener("focus", syncRelayMessages);
+
+        return () => {
+            disposed = true;
+            window.clearInterval(intervalId);
+            window.removeEventListener("focus", syncRelayMessages);
+        };
+    }, [currentUser]);
+
     function resetAppState() {
         setCurrentUser(null);
         setJoinedServers([]);
-        setSelectedJoinedServerId(null);
+        setSelectedJoinedServerId(FRIENDS_TAB_ID);
         setServerData(null);
         setSelectedChannelId(null);
         setShowJoinModal(false);
         setShowSettings(false);
         setCustomization(null);
+        setSettingsServer(null);
     }
 
     function setServerStatus(serverId, status) {
@@ -264,12 +337,12 @@ function App() {
     }
 
     function markSelectedServerOffline() {
-        if (!selectedJoinedServerId) return;
+        if (!selectedJoinedServerId || selectedJoinedServerId === FRIENDS_TAB_ID) return;
         setServerStatus(selectedJoinedServerId, "offline");
     }
 
     function markSelectedServerOnline() {
-        if (!selectedJoinedServerId) return;
+        if (!selectedJoinedServerId || selectedJoinedServerId === FRIENDS_TAB_ID) return;
         setServerStatus(selectedJoinedServerId, "online");
     }
 
@@ -292,7 +365,7 @@ function App() {
             );
 
             if (String(selectedJoinedServerId) === String(serverId)) {
-                setSelectedJoinedServerId(null);
+                setSelectedJoinedServerId(FRIENDS_TAB_ID);
                 setServerData(null);
                 setSelectedChannelId(null);
                 setCustomization(null);
@@ -325,16 +398,17 @@ function App() {
     }
 
     const channels = serverData?.channels || [];
-    const selectedChannel = channels.find((c) => c.id === selectedChannelId) || null;
+    const selectedChannel = channels.find((channel) => channel.id === selectedChannelId) || null;
     const selectedJoinedServer =
         joinedServers.find((server) => server.id === selectedJoinedServerId) || null;
+    const isFriendsView = selectedJoinedServerId === FRIENDS_TAB_ID;
 
     return (
         <>
             <div className="topbar">
                 <div>
                     <strong>{currentUser.username}</strong>
-                    {serverData?.name ? ` — ${serverData.name}` : ""}
+                    {isFriendsView ? " - Friends" : serverData?.name ? ` â€” ${serverData.name}` : ""}
                 </div>
 
                 <div className="topbar-actions">
@@ -347,19 +421,25 @@ function App() {
                 <JoinedServersSidebar
                     joinedServers={joinedServers}
                     selectedJoinedServerId={selectedJoinedServerId}
+                    friendsTabId={FRIENDS_TAB_ID}
                     onSelectJoinedServer={setSelectedJoinedServerId}
                     onOpenJoinModal={() => setShowJoinModal(true)}
                     onLeaveServer={handleLeaveServer}
-                    onOpenSettings={() => setShowSettings(true)}
+                    onOpenSettings={(server) => {
+                        setSettingsServer(server);
+                        setShowSettings(true);
+                    }}
                     serverStatuses={serverStatuses}
                 />
 
                 <div className="server-theme-scope" ref={serverThemeRef}>
-                    <ChannelSidebar
-                        channels={channels}
-                        selectedChannelId={selectedChannelId}
-                        onSelectChannel={setSelectedChannelId}
-                    />
+                    {!isFriendsView && (
+                        <ChannelSidebar
+                            channels={channels}
+                            selectedChannelId={selectedChannelId}
+                            onSelectChannel={setSelectedChannelId}
+                        />
+                    )}
 
                     <MainView
                         channel={selectedChannel}
@@ -367,6 +447,7 @@ function App() {
                         backendUrl={selectedJoinedServer?.backendUrl || null}
                         customization={customization}
                         serverStatus={selectedJoinedServer ? serverStatuses[selectedJoinedServer.id] : null}
+                        isFriendsView={isFriendsView}
                     />
                 </div>
             </div>
@@ -379,11 +460,14 @@ function App() {
                 />
             )}
 
-            {showSettings && selectedJoinedServer && (
+            {showSettings && settingsServer && (
                 <ServerSettingsPanel
-                    backendUrl={selectedJoinedServer.backendUrl}
+                    backendUrl={settingsServer.backendUrl}
                     serverData={serverData}
-                    onClose={() => setShowSettings(false)}
+                    onClose={() => {
+                        setShowSettings(false);
+                        setSettingsServer(null);
+                    }}
                 />
             )}
         </>

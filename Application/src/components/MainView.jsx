@@ -1,13 +1,19 @@
 import LayoutRenderer from "./LayoutRenderer";
 import { defaultLayouts } from "../layouts/defaultLayouts";
+import FriendsHome from "./FriendsHome";
 
 export default function MainView({
     channel,
     currentUser,
     backendUrl,
     customization,
-    serverStatus
+    serverStatus,
+    isFriendsView
 }) {
+    if (isFriendsView) {
+        return <FriendsHome currentUser={currentUser} />;
+    }
+
     if (!channel) {
         return (
             <main className="main">

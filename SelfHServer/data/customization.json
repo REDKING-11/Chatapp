@@ -1,6 +1,6 @@
 {
   "theme": {
-    "accent": "#c81414",
+    "accent": "#ff0000",
     "background": "#1e1f22",
     "surface": "#2b2d31",
     "surfaceAlt": "#313338",
@@ -12,7 +12,7 @@
   },
   "layout": {
     "showServerSidebar": true,
-    "showChannelSidebar": true,
+    "showChannelSidebar": false,
     "showMembersPanel": false,
     "channelSidebarWidth": 260,
     "membersPanelWidth": 280,
