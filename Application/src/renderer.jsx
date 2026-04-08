@@ -52,6 +52,7 @@ function App() {
     const [settingsServer, setSettingsServer] = useState(null);
 
     const serverThemeRef = useRef(null);
+    const serverCustomCssRef = useRef(null);
 
     useEffect(() => {
         async function restoreSession() {
@@ -263,6 +264,13 @@ function App() {
     }, [customization]);
 
     useEffect(() => {
+        const styleEl = serverCustomCssRef.current;
+        if (!styleEl) return;
+
+        styleEl.textContent = customization?.customCss || "";
+    }, [customization]);
+
+    useEffect(() => {
         async function setupSecureDm() {
             if (!currentUser || !window.secureDm) return;
 
@@ -433,13 +441,11 @@ function App() {
                 />
 
                 <div className="server-theme-scope" ref={serverThemeRef}>
-                    {!isFriendsView && (
-                        <ChannelSidebar
-                            channels={channels}
-                            selectedChannelId={selectedChannelId}
-                            onSelectChannel={setSelectedChannelId}
-                        />
-                    )}
+                    <ChannelSidebar
+                        channels={channels}
+                        selectedChannelId={selectedChannelId}
+                        onSelectChannel={setSelectedChannelId}
+                    />
 
                     <MainView
                         channel={selectedChannel}
