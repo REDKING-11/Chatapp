@@ -22,10 +22,25 @@ if (!$target) {
 
 $currentUserId = (int)$user['id'];
 $targetUserId = (int)$target['id'];
+$userLowId = min($currentUserId, $targetUserId);
+$userHighId = max($currentUserId, $targetUserId);
 
 if ($targetUserId === $currentUserId) {
     jsonResponse(['error' => 'You cannot add yourself'], 400);
 }
+
+$archiveStmt = $db->prepare('
+    SELECT conversation_id
+    FROM friendship_archives
+    WHERE user_low_id = ?
+      AND user_high_id = ?
+    LIMIT 1
+');
+$archiveStmt->execute([$userLowId, $userHighId]);
+$archived = $archiveStmt->fetch();
+$archivedConversationId = $archived && $archived['conversation_id'] !== null
+    ? (int)$archived['conversation_id']
+    : null;
 
 $existingStmt = $db->prepare('
     SELECT id, requester_user_id, addressee_user_id, status, conversation_id
@@ -45,15 +60,18 @@ if ($existing) {
     if ((int)$existing['requester_user_id'] === $targetUserId) {
         $acceptStmt = $db->prepare('
             UPDATE friendships
-            SET status = "accepted", responded_at = UTC_TIMESTAMP()
+            SET status = "accepted",
+                responded_at = UTC_TIMESTAMP(),
+                conversation_id = COALESCE(conversation_id, ?)
             WHERE id = ?
         ');
-        $acceptStmt->execute([(int)$existing['id']]);
+        $acceptStmt->execute([$archivedConversationId, (int)$existing['id']]);
 
         jsonResponse([
             'ok' => true,
             'friendshipId' => (int)$existing['id'],
-            'autoAccepted' => true
+            'autoAccepted' => true,
+            'restoredConversationId' => $archivedConversationId
         ]);
     }
 
@@ -61,12 +79,13 @@ if ($existing) {
 }
 
 $insertStmt = $db->prepare('
-    INSERT INTO friendships (requester_user_id, addressee_user_id, status)
-    VALUES (?, ?, "pending")
+    INSERT INTO friendships (requester_user_id, addressee_user_id, status, conversation_id)
+    VALUES (?, ?, "pending", ?)
 ');
-$insertStmt->execute([$currentUserId, $targetUserId]);
+$insertStmt->execute([$currentUserId, $targetUserId, $archivedConversationId]);
 
 jsonResponse([
     'ok' => true,
-    'friendshipId' => (int)$db->lastInsertId()
+    'friendshipId' => (int)$db->lastInsertId(),
+    'restoredConversationId' => $archivedConversationId
 ], 201);

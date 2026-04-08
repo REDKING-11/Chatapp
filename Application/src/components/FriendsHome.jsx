@@ -438,7 +438,9 @@ export default function FriendsHome({ currentUser }) {
     async function handleRemoveFriend(friend) {
         setFriendContextMenu(null);
 
-        const confirmed = window.confirm(`Remove ${friend.friendUsername} from your friends list?`);
+        const confirmed = window.confirm(
+            `Remove ${friend.friendUsername} from your friends list? Re-adding the same friend later will restore this hidden conversation.`
+        );
         if (!confirmed) {
             return;
         }
@@ -459,6 +461,50 @@ export default function FriendsHome({ currentUser }) {
                 setMessages([]);
                 setConversationMeta(null);
                 setHistoryAccessRequest(null);
+            }
+
+            await loadFriends();
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
+    async function handleHardDeleteFriend(friend) {
+        setFriendContextMenu(null);
+
+        const confirmed = window.confirm(
+            `Hard delete ${friend.friendUsername} and remove your local conversation history on this device? This cannot delete copies on other devices.`
+        );
+        if (!confirmed) {
+            return;
+        }
+
+        setSubmitting(true);
+        setError("");
+
+        try {
+            if (friend.conversationId) {
+                await window.secureDm.deleteConversation({
+                    userId: currentUser.id,
+                    conversationId: friend.conversationId
+                });
+            }
+
+            await removeFriend(friend.friendshipId, { hardDelete: true });
+            setFriendTags((prev) => {
+                const next = { ...prev };
+                delete next[String(friend.friendUserId)];
+                return next;
+            });
+
+            if (String(selectedFriendId) === String(friend.friendUserId)) {
+                setSelectedFriendId(null);
+                setMessages([]);
+                setConversationMeta(null);
+                setHistoryAccessRequest(null);
+                setShowConversationSettings(false);
             }
 
             await loadFriends();
@@ -863,6 +909,13 @@ export default function FriendsHome({ currentUser }) {
                         onClick={() => handleRemoveFriend(friendContextMenu.friend)}
                     >
                         Remove friend
+                    </button>
+
+                    <button
+                        className="server-context-item danger"
+                        onClick={() => handleHardDeleteFriend(friendContextMenu.friend)}
+                    >
+                        Hard delete
                     </button>
                 </div>
             ) : null}

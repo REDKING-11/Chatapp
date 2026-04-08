@@ -396,3 +396,16 @@ export function importConversationPackage({ userId, username, conversation, wrap
   writeSecureDmStore(store);
   return listMessages({ userId, conversationId: conversation.conversationId });
 }
+
+export function deleteConversation({ userId, conversationId }) {
+  const store = readSecureDmStore();
+  const userState = getUserState(store, userId);
+
+  delete userState.conversations[String(conversationId)];
+  writeSecureDmStore(store);
+
+  return {
+    ok: true,
+    conversationId
+  };
+}

@@ -1,5 +1,13 @@
 import { parseJsonResponse } from "../../lib/api";
 
+function normalizeChatFetchError(error, fallbackMessage) {
+    if (error instanceof TypeError) {
+        return new Error(fallbackMessage);
+    }
+
+    return error;
+}
+
 export function getAuthHeaders() {
     const token = localStorage.getItem("authToken");
 
@@ -10,39 +18,55 @@ export function getAuthHeaders() {
 }
 
 export async function fetchChannelMessages({ backendUrl, channelId }) {
-    const res = await fetch(`${backendUrl}/api/channels/${channelId}/messages`);
-    return parseJsonResponse(res, "Failed to load messages");
+    try {
+        const res = await fetch(`${backendUrl}/api/channels/${channelId}/messages`);
+        return parseJsonResponse(res, "Failed to load messages");
+    } catch (error) {
+        throw normalizeChatFetchError(error, "This server is offline, so messages cannot be loaded right now");
+    }
 }
 
 export async function createMessage({ backendUrl, channelId, content, replyTo }) {
-    const res = await fetch(`${backendUrl}/api/channels/${channelId}/messages`, {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: JSON.stringify({
-            content,
-            replyTo: replyTo || null
-        })
-    });
+    try {
+        const res = await fetch(`${backendUrl}/api/channels/${channelId}/messages`, {
+            method: "POST",
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+                content,
+                replyTo: replyTo || null
+            })
+        });
 
-    return parseJsonResponse(res, "Failed to send message");
+        return parseJsonResponse(res, "Failed to send message");
+    } catch (error) {
+        throw normalizeChatFetchError(error, "This server is offline, so messages cannot be sent right now");
+    }
 }
 
 export async function updateMessage({ backendUrl, messageId, content }) {
-    const res = await fetch(`${backendUrl}/api/messages/${messageId}`, {
-        method: "PATCH",
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ content })
-    });
+    try {
+        const res = await fetch(`${backendUrl}/api/messages/${messageId}`, {
+            method: "PATCH",
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ content })
+        });
 
-    return parseJsonResponse(res, "Failed to edit message");
+        return parseJsonResponse(res, "Failed to edit message");
+    } catch (error) {
+        throw normalizeChatFetchError(error, "This server is offline, so messages cannot be edited right now");
+    }
 }
 
 export async function removeMessage({ backendUrl, messageId }) {
-    const res = await fetch(`${backendUrl}/api/messages/${messageId}`, {
-        method: "DELETE",
-        headers: getAuthHeaders(),
-        body: JSON.stringify({})
-    });
+    try {
+        const res = await fetch(`${backendUrl}/api/messages/${messageId}`, {
+            method: "DELETE",
+            headers: getAuthHeaders(),
+            body: JSON.stringify({})
+        });
 
-    return parseJsonResponse(res, "Failed to delete message");
+        return parseJsonResponse(res, "Failed to delete message");
+    } catch (error) {
+        throw normalizeChatFetchError(error, "This server is offline, so messages cannot be deleted right now");
+    }
 }
