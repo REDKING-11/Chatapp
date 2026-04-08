@@ -2,6 +2,14 @@ import { parseJsonResponse } from "../../lib/api";
 
 const CORE_API_BASE = import.meta.env.VITE_CORE_API_BASE;
 
+function normalizeServerFetchError(error, fallbackMessage) {
+    if (error instanceof TypeError) {
+        return new Error(fallbackMessage);
+    }
+
+    return error;
+}
+
 function getAuthHeaders() {
     const token = localStorage.getItem("authToken");
 
@@ -12,8 +20,12 @@ function getAuthHeaders() {
 }
 
 export async function fetchServerData(backendUrl) {
-    const res = await fetch(`${backendUrl}/api/server`);
-    return parseJsonResponse(res, "Failed to fetch server");
+    try {
+        const res = await fetch(`${backendUrl}/api/server`);
+        return parseJsonResponse(res, "Failed to fetch server");
+    } catch (error) {
+        throw normalizeServerFetchError(error, "Server is offline or unreachable");
+    }
 }
 
 export async function fetchUserServers() {

@@ -4,12 +4,32 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
   packagerConfig: {
     asar: true,
+    executableName: 'Chatapp',
+    name: 'Chatapp',
+    appCopyright: 'Copyright (c) 2026 REDKING-11',
+    win32metadata: {
+      CompanyName: 'REDKING-11',
+      FileDescription: 'Privacy-first desktop chat',
+      OriginalFilename: 'Chatapp.exe',
+      ProductName: 'Chatapp',
+      InternalName: 'Chatapp'
+    }
   },
   rebuildConfig: {},
   makers: [
     {
-      name: '@electron-forge/maker-squirrel',
-      config: {},
+      name: '@electron-forge/maker-wix',
+      config: {
+        language: 1033,
+        manufacturer: 'REDKING-11',
+        name: 'Chatapp',
+        shortName: 'Chatapp',
+        description: 'Privacy-first desktop chat with local-first encrypted messaging.',
+        exe: 'Chatapp.exe',
+        ui: {
+          chooseDirectory: true
+        }
+      },
     },
     {
       name: '@electron-forge/maker-zip',

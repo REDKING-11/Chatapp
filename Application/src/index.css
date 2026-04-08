@@ -878,6 +878,13 @@ body {
     max-width: 520px;
 }
 
+.offline-server-state small {
+    display: inline-block;
+    margin-top: 10px;
+    color: var(--server-text-muted);
+    word-break: break-all;
+}
+
 .friends-main {
     display: flex;
     flex-direction: column;

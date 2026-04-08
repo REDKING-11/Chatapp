@@ -87,11 +87,14 @@ export async function acceptFriendRequest(friendshipId) {
     return parseJsonResponse(res, "Failed to accept friend request");
 }
 
-export async function removeFriend(friendshipId) {
+export async function removeFriend(friendshipId, options = {}) {
     const res = await fetch(`${CORE_API_BASE}/friends/remove.php`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ friendshipId })
+        body: JSON.stringify({
+            friendshipId,
+            hardDelete: Boolean(options.hardDelete)
+        })
     });
 
     return parseJsonResponse(res, "Failed to remove friend");

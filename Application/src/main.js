@@ -1,6 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
-import started from 'electron-squirrel-startup';
 import {
   adoptConversationId,
   createConversation,
@@ -13,13 +12,9 @@ import {
   listMessages,
   receiveEncryptedMessage,
   exportConversationPackage,
+  deleteConversation,
   createWrappedKeyForConversation
 } from './main/dm/service';
-
-// Handle creating/removing shortcuts on Windows when installing/uninstalling.
-if (started) {
-  app.quit();
-}
 
 const createWindow = () => {
   // Create the browser window.
@@ -56,6 +51,7 @@ const registerSecureDmIpc = () => {
   ipcMain.handle('secure-dm:export-conversation-package', (_event, payload) => exportConversationPackage(payload));
   ipcMain.handle('secure-dm:create-wrapped-key', (_event, payload) => createWrappedKeyForConversation(payload));
   ipcMain.handle('secure-dm:import-conversation-package', (_event, payload) => importConversationPackage(payload));
+  ipcMain.handle('secure-dm:delete-conversation', (_event, payload) => deleteConversation(payload));
 };
 
 // This method will be called when Electron has finished

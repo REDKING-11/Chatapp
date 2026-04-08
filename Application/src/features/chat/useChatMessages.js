@@ -6,6 +6,10 @@ import {
     removeMessage
 } from "./actions";
 
+function isExpectedOfflineMessageError(error) {
+    return /server is offline|cannot be loaded right now|unreachable/i.test(String(error?.message || ""));
+}
+
 export default function useChatMessages({ channelId, currentUser, backendUrl }) {
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -21,7 +25,11 @@ export default function useChatMessages({ channelId, currentUser, backendUrl }) 
                 const data = await fetchChannelMessages({ backendUrl, channelId });
                 setMessages(data);
             } catch (err) {
-                console.error("Failed to load messages:", err);
+                setMessages([]);
+
+                if (!isExpectedOfflineMessageError(err)) {
+                    console.error("Failed to load messages:", err);
+                }
             } finally {
                 setLoading(false);
             }

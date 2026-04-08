@@ -38,6 +38,16 @@ import {
 
 const FRIENDS_TAB_ID = "__friends__";
 
+function isExpectedOfflineFetchError(error) {
+    if (!error) return false;
+
+    if (error instanceof TypeError) {
+        return true;
+    }
+
+    return /failed to fetch|networkerror|err_connection_refused/i.test(String(error.message || error));
+}
+
 function App() {
     const [currentUser, setCurrentUser] = useState(null);
     const [authLoading, setAuthLoading] = useState(true);
@@ -134,6 +144,59 @@ function App() {
     }, [selectedJoinedServerId]);
 
     useEffect(() => {
+        if (!currentUser || joinedServers.length === 0) {
+            return;
+        }
+
+        let disposed = false;
+
+        setServerStatuses((prev) => {
+            const next = { ...prev };
+
+            joinedServers.forEach((server) => {
+                if (!next[server.id]) {
+                    next[server.id] = "checking";
+                }
+            });
+
+            return next;
+        });
+
+        async function checkJoinedServerStatuses() {
+            const statusEntries = await Promise.all(
+                joinedServers.map(async (server) => {
+                    try {
+                        await fetchServerData(server.backendUrl);
+                        return [server.id, "online"];
+                    } catch {
+                        return [server.id, "offline"];
+                    }
+                })
+            );
+
+            if (disposed) {
+                return;
+            }
+
+            setServerStatuses((prev) => {
+                const next = { ...prev };
+
+                statusEntries.forEach(([serverId, status]) => {
+                    next[serverId] = status;
+                });
+
+                return next;
+            });
+        }
+
+        checkJoinedServerStatuses();
+
+        return () => {
+            disposed = true;
+        };
+    }, [currentUser, joinedServers]);
+
+    useEffect(() => {
         async function loadServer() {
             if (!currentUser || !selectedJoinedServerId || selectedJoinedServerId === FRIENDS_TAB_ID) {
                 return;
@@ -144,6 +207,17 @@ function App() {
             );
 
             if (!selectedJoinedServer) return;
+
+            if (serverStatuses[selectedJoinedServer.id] === "offline") {
+                setServerData(null);
+                setCustomization(null);
+                setSelectedChannelId(null);
+                return;
+            }
+
+            setServerData(null);
+            setCustomization(null);
+            setSelectedChannelId(null);
 
             try {
                 const data = await fetchServerData(selectedJoinedServer.backendUrl);
@@ -160,16 +234,19 @@ function App() {
                     setSelectedChannelId(null);
                 }
             } catch (err) {
-                console.error("Failed to fetch server:", err);
+                if (!isExpectedOfflineFetchError(err)) {
+                    console.error("Failed to fetch server:", err);
+                }
 
                 markSelectedServerOffline();
                 setServerData(null);
+                setCustomization(null);
                 setSelectedChannelId(null);
             }
         }
 
         loadServer();
-    }, [currentUser, selectedJoinedServerId, joinedServers]);
+    }, [currentUser, selectedJoinedServerId, joinedServers, serverStatuses]);
 
     useEffect(() => {
         async function loadCustomization() {
@@ -187,6 +264,11 @@ function App() {
                 return;
             }
 
+            if (serverStatuses[selectedJoinedServer.id] === "offline") {
+                setCustomization(null);
+                return;
+            }
+
             try {
                 const res = await fetch(`${selectedJoinedServer.backendUrl}/api/customization`);
                 if (!res.ok) throw new Error("Failed to load customization");
@@ -195,14 +277,16 @@ function App() {
                 setCustomization(data);
                 setServerStatus(selectedJoinedServer.id, "online");
             } catch (err) {
-                console.error("Failed to load customization:", err);
+                if (!isExpectedOfflineFetchError(err)) {
+                    console.error("Failed to load customization:", err);
+                }
                 setCustomization(null);
                 setServerStatus(selectedJoinedServer.id, "offline");
             }
         }
 
         loadCustomization();
-    }, [joinedServers, selectedJoinedServerId]);
+    }, [joinedServers, selectedJoinedServerId, serverStatuses]);
 
     useEffect(() => {
         function reloadCustomization() {
@@ -214,18 +298,26 @@ function App() {
 
             if (!selectedJoinedServer) return;
 
+            if (serverStatuses[selectedJoinedServer.id] === "offline") {
+                return;
+            }
+
             fetch(`${selectedJoinedServer.backendUrl}/api/customization`)
                 .then((res) => {
                     if (!res.ok) throw new Error("Failed to reload customization");
                     return res.json();
                 })
                 .then(setCustomization)
-                .catch((err) => console.error(err));
+                .catch((err) => {
+                    if (!isExpectedOfflineFetchError(err)) {
+                        console.error(err);
+                    }
+                });
         }
 
         window.addEventListener("customizationUpdated", reloadCustomization);
         return () => window.removeEventListener("customizationUpdated", reloadCustomization);
-    }, [joinedServers, selectedJoinedServerId]);
+    }, [joinedServers, selectedJoinedServerId, serverStatuses]);
 
     useEffect(() => {
         const el = serverThemeRef.current;
