@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 export default function JoinedServersSidebar({
     joinedServers,
     selectedJoinedServerId,
+    friendsTabId,
     onSelectJoinedServer,
     onOpenJoinModal,
     onLeaveServer,
@@ -38,6 +39,20 @@ export default function JoinedServersSidebar({
     return (
         <aside className="joined-servers-sidebar">
             <div className="joined-servers-list">
+                <button
+                    className={
+                        selectedJoinedServerId === friendsTabId
+                            ? "joined-server-button active-joined-server friends-home-button"
+                            : "joined-server-button friends-home-button"
+                    }
+                    onClick={() => onSelectJoinedServer(friendsTabId)}
+                    title="Friends"
+                >
+                    F
+                </button>
+
+                <div className="joined-servers-divider" />
+
                 {joinedServers.map((server) => {
                     const status = serverStatuses?.[server.id] || "unknown";
 
@@ -91,7 +106,7 @@ export default function JoinedServersSidebar({
                         className="server-context-item"
                         onClick={() => {
                             setContextMenu(null);
-                            onOpenSettings?.();
+                            onOpenSettings?.(contextMenu.server);
                         }}
                     >
                         Server Settings

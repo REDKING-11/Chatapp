@@ -95,6 +95,22 @@ body {
     align-items: center;
 }
 
+.joined-servers-divider {
+    width: 36px;
+    height: 1px;
+    background: var(--shell-border);
+    margin: 2px 0 4px;
+}
+
+.friends-home-button {
+    background: linear-gradient(135deg, #0f766e, #155e75);
+    border-color: rgba(255, 255, 255, 0.14);
+}
+
+.friends-home-button:hover {
+    background: linear-gradient(135deg, #0d9488, #0e7490);
+}
+
 .joined-server-button,
 .join-server-button {
     width: 44px;
@@ -800,4 +816,175 @@ body {
     background: var(--server-surface);
     border-radius: var(--server-radius);
     max-width: 520px;
+}
+
+@media (max-width: 900px) {
+    .friends-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.friends-main {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.friends-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+}
+
+.friends-header h1 {
+    margin: 0 0 8px;
+}
+
+.friends-header p,
+.friends-error,
+.friends-empty-state p,
+.friends-conversation-header p,
+.friends-empty-messages {
+    margin: 0;
+    color: var(--server-text-muted);
+}
+
+.friends-refresh-button {
+    border: none;
+    border-radius: 12px;
+    padding: 10px 14px;
+    background: var(--server-surface);
+    color: var(--server-text);
+    cursor: pointer;
+}
+
+.friends-layout {
+    display: grid;
+    grid-template-columns: 320px minmax(0, 1fr);
+    gap: 18px;
+    flex: 1;
+}
+
+.friends-rail,
+.friends-conversation {
+    margin-top: 0;
+}
+
+.friend-request-form,
+.friends-section,
+.friend-composer {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.friend-request-row {
+    display: flex;
+    gap: 10px;
+}
+
+.friend-request-row input,
+.friend-composer textarea {
+    flex: 1;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid var(--server-surface-alt);
+    background: var(--server-background);
+    color: var(--server-text);
+}
+
+.friend-request-row button,
+.friend-request-card button,
+.friend-composer button {
+    border: none;
+    border-radius: 12px;
+    padding: 10px 14px;
+    background: var(--server-accent);
+    color: white;
+    cursor: pointer;
+}
+
+.friends-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.friend-card,
+.friend-request-card {
+    border: 1px solid var(--server-surface-alt);
+    border-radius: 14px;
+    padding: 12px;
+    background: var(--server-surface);
+    color: var(--server-text);
+}
+
+.friend-card {
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.friend-card span,
+.friend-request-card small {
+    color: var(--server-text-muted);
+}
+
+.selected-friend-card {
+    border-color: var(--server-accent);
+    box-shadow: 0 0 0 1px var(--server-accent) inset;
+}
+
+.friend-request-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.friends-conversation {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.friends-conversation-header h2,
+.friends-empty-state h2 {
+    margin: 0 0 6px;
+}
+
+.friends-message-list {
+    flex: 1;
+    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 8px 0;
+}
+
+.friend-message-bubble {
+    max-width: min(75%, 560px);
+    padding: 12px 14px;
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.incoming-friend-message {
+    background: var(--server-surface);
+    border: 1px solid var(--server-surface-alt);
+}
+
+.outgoing-friend-message {
+    margin-left: auto;
+    background: var(--server-accent);
+    color: white;
+}
+
+.friend-message-bubble small {
+    opacity: 0.8;
 }
