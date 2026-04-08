@@ -18,6 +18,7 @@
     "membersPanelWidth": 280,
     "compactMessages": false
   },
+  "customCss": "",
   "pages": {
     "c1": {
       "layout": {

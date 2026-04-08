@@ -1,11 +1,30 @@
 import LayoutRenderer from "../LayoutRenderer";
 
+function buildInlineStyle(node) {
+    const style = {};
+
+    if (node?.props?.gap != null) {
+        style.gap = `${node.props.gap}px`;
+    }
+
+    if (node?.props?.padding != null) {
+        style.padding = `${node.props.padding}px`;
+    }
+
+    return style;
+}
+
 export default function ColumnBlock({ node, channelId, currentUser, backendUrl }) {
     return (
-        <div className="layout-column">
+        <div
+            className={`layout-column builder-node builder-node-column ${node.className || ""}`.trim()}
+            data-node-id={node.id}
+            data-node-type={node.type}
+            style={buildInlineStyle(node)}
+        >
             {node.children?.map((child, index) => (
                 <LayoutRenderer
-                    key={index}
+                    key={child.id || index}
                     layout={child}
                     channelId={channelId}
                     currentUser={currentUser}
