@@ -9,6 +9,8 @@ import JoinedServersSidebar from "./components/JoinedServerSidebar";
 import JoinServerModal from "./components/JoinServerModal";
 import ServerSettingsPanel from "./components/ServerSettingsPanel";
 import {
+    closeRealtimeConnection,
+    ensureRealtimeConnection,
     initializeSecureDm,
     pullRelayMessages,
     registerSecureDmDevice
@@ -283,6 +285,10 @@ function App() {
                         token,
                         currentUser
                     });
+                    await ensureRealtimeConnection({
+                        token,
+                        currentUser
+                    });
                 }
             } catch (err) {
                 console.error("Failed to initialize secure DM:", err);
@@ -315,13 +321,9 @@ function App() {
         }
 
         syncRelayMessages();
-        const intervalId = window.setInterval(syncRelayMessages, 15000);
-        window.addEventListener("focus", syncRelayMessages);
 
         return () => {
             disposed = true;
-            window.clearInterval(intervalId);
-            window.removeEventListener("focus", syncRelayMessages);
         };
     }, [currentUser]);
 
@@ -386,6 +388,7 @@ function App() {
     }
 
     function handleLogout() {
+        closeRealtimeConnection();
         localStorage.removeItem("authToken");
         localStorage.removeItem("authUser");
         resetAppState();
@@ -416,7 +419,7 @@ function App() {
             <div className="topbar">
                 <div>
                     <strong>{currentUser.username}</strong>
-                    {isFriendsView ? " - Friends" : serverData?.name ? ` â€” ${serverData.name}` : ""}
+                    {isFriendsView ? " - Friends" : serverData?.name ? ` - ${serverData.name}` : ""}
                 </div>
 
                 <div className="topbar-actions">
@@ -441,11 +444,14 @@ function App() {
                 />
 
                 <div className="server-theme-scope" ref={serverThemeRef}>
-                    <ChannelSidebar
-                        channels={channels}
-                        selectedChannelId={selectedChannelId}
-                        onSelectChannel={setSelectedChannelId}
-                    />
+                    <style ref={serverCustomCssRef} />
+                    {!isFriendsView && (
+                        <ChannelSidebar
+                            channels={channels}
+                            selectedChannelId={selectedChannelId}
+                            onSelectChannel={setSelectedChannelId}
+                        />
+                    )}
 
                     <MainView
                         channel={selectedChannel}

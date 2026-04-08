@@ -18,42 +18,45 @@ if ($conversationId <= 0) {
 
 dmLoadConversationOrFail($db, $conversationId, (int)$user['id']);
 dmCleanupExpiredRelayQueue($db);
+$relayTtlSeconds = dmGetConversationRelayTtlSeconds($db, $conversationId);
 
 $db->beginTransaction();
 
 try {
-    $relayStmt = $db->prepare('
-        INSERT INTO dm_relay_queue (
-            message_id,
-            conversation_id,
-            recipient_device_id,
-            sender_device_id,
-            ciphertext,
-            nonce,
-            aad,
-            tag,
-            expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
-    ');
+    if ($relayTtlSeconds > 0) {
+        $relayStmt = $db->prepare('
+            INSERT INTO dm_relay_queue (
+                message_id,
+                conversation_id,
+                recipient_device_id,
+                sender_device_id,
+                ciphertext,
+                nonce,
+                aad,
+                tag,
+                expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
+        ');
 
-    foreach ($recipientDeviceIds as $recipientDeviceIdRaw) {
-        $recipientDeviceId = dmTrimmedString($recipientDeviceIdRaw);
+        foreach ($recipientDeviceIds as $recipientDeviceIdRaw) {
+            $recipientDeviceId = dmTrimmedString($recipientDeviceIdRaw);
 
-        if ($recipientDeviceId === null) {
-            continue;
+            if ($recipientDeviceId === null) {
+                continue;
+            }
+
+            $relayStmt->execute([
+                $messageId,
+                $conversationId,
+                $recipientDeviceId,
+                $senderDeviceId,
+                $envelope['ciphertext'],
+                $envelope['nonce'],
+                $envelope['aad'],
+                $envelope['tag'],
+                $relayTtlSeconds
+            ]);
         }
-
-        $relayStmt->execute([
-            $messageId,
-            $conversationId,
-            $recipientDeviceId,
-            $senderDeviceId,
-            $envelope['ciphertext'],
-            $envelope['nonce'],
-            $envelope['aad'],
-            $envelope['tag'],
-            DM_RELAY_TTL_SECONDS
-        ]);
     }
 
     $updateStmt = $db->prepare('UPDATE dm_conversations SET updated_at = UTC_TIMESTAMP() WHERE id = ?');

@@ -9,6 +9,7 @@ $data = readJsonInput();
 $participantUserIds = dmRequireArray($data, 'participantUserIds', 'participantUserIds is required');
 $wrappedKeys = dmRequireArray($data, 'wrappedKeys', 'wrappedKeys is required');
 $initialMessage = is_array($data['initialMessage'] ?? null) ? $data['initialMessage'] : null;
+$relayTtlSeconds = dmNormalizeRelayTtlSeconds($data['relayTtlSeconds'] ?? DM_RELAY_TTL_SECONDS);
 
 $participantIds = array_values(array_unique(array_map('intval', array_merge([(int)$user['id']], $participantUserIds))));
 
@@ -19,8 +20,11 @@ if (count($participantIds) < 2) {
 $db->beginTransaction();
 
 try {
-    $conversationStmt = $db->prepare('INSERT INTO dm_conversations (created_by_user_id, updated_at) VALUES (?, UTC_TIMESTAMP())');
-    $conversationStmt->execute([(int)$user['id']]);
+    $conversationStmt = $db->prepare('
+        INSERT INTO dm_conversations (created_by_user_id, updated_at, relay_ttl_seconds)
+        VALUES (?, UTC_TIMESTAMP(), ?)
+    ');
+    $conversationStmt->execute([(int)$user['id'], $relayTtlSeconds]);
     $conversationId = (int)$db->lastInsertId();
 
     $participantStmt = $db->prepare('INSERT INTO dm_conversation_participants (conversation_id, user_id) VALUES (?, ?)');
@@ -58,7 +62,7 @@ try {
         ]);
     }
 
-    if ($initialMessage !== null) {
+    if ($initialMessage !== null && $relayTtlSeconds > 0) {
         $envelope = dmEnsureValidEnvelope($initialMessage);
         $messageId = dmRequireString($initialMessage, 'messageId', 'messageId is required');
         $senderDeviceId = dmRequireString($initialMessage, 'senderDeviceId', 'senderDeviceId is required');
@@ -93,7 +97,7 @@ try {
                 $envelope['nonce'],
                 $envelope['aad'],
                 $envelope['tag'],
-                DM_RELAY_TTL_SECONDS
+                $relayTtlSeconds
             ]);
         }
     }

@@ -4,6 +4,7 @@ require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../auth_required.php';
 
 const DM_RELAY_TTL_SECONDS = 86400;
+const DM_ALLOWED_RELAY_TTLS = [0, 43200, 86400, 172800, 259200, 345600];
 
 function dmTrimmedString($value): ?string {
     if (!is_string($value)) {
@@ -39,6 +40,73 @@ function dmCleanupExpiredRelayQueue(PDO $db): void {
     $stmt->execute();
 }
 
+function dmNormalizeRelayTtlSeconds($value): int {
+    $ttl = (int)$value;
+    return in_array($ttl, DM_ALLOWED_RELAY_TTLS, true) ? $ttl : DM_RELAY_TTL_SECONDS;
+}
+
+function dmRelayTtlOptions(): array {
+    return array_map(function ($seconds) {
+        return [
+            'seconds' => $seconds,
+            'hours' => $seconds > 0 ? (int)($seconds / 3600) : 0
+        ];
+    }, DM_ALLOWED_RELAY_TTLS);
+}
+
+function dmBuildRelayPolicyRow(array $conversation): array {
+    $currentSeconds = dmNormalizeRelayTtlSeconds($conversation['relay_ttl_seconds'] ?? DM_RELAY_TTL_SECONDS);
+    $pendingSeconds = $conversation['relay_ttl_requested_seconds'] !== null
+        ? dmNormalizeRelayTtlSeconds($conversation['relay_ttl_requested_seconds'])
+        : null;
+
+    return [
+        'currentSeconds' => $currentSeconds,
+        'currentHours' => $currentSeconds > 0 ? (int)($currentSeconds / 3600) : 0,
+        'pendingSeconds' => $pendingSeconds,
+        'pendingHours' => $pendingSeconds !== null && $pendingSeconds > 0 ? (int)($pendingSeconds / 3600) : 0,
+        'pendingRequestedByUserId' => $conversation['relay_ttl_requested_by_user_id'] !== null
+            ? (int)$conversation['relay_ttl_requested_by_user_id']
+            : null,
+        'pendingRequestedAt' => $conversation['relay_ttl_requested_at'] ?? null,
+        'options' => dmRelayTtlOptions()
+    ];
+}
+
+function dmLoadConversationDetailOrFail(PDO $db, int $conversationId): array {
+    $conversationStmt = $db->prepare('
+        SELECT
+            id,
+            created_by_user_id,
+            created_at,
+            updated_at,
+            relay_ttl_seconds,
+            relay_ttl_requested_seconds,
+            relay_ttl_requested_by_user_id,
+            relay_ttl_requested_at
+        FROM dm_conversations
+        WHERE id = ?
+        LIMIT 1
+    ');
+    $conversationStmt->execute([$conversationId]);
+    $conversation = $conversationStmt->fetch();
+
+    if (!$conversation) {
+        jsonResponse(['error' => 'Conversation not found'], 404);
+    }
+
+    return $conversation;
+}
+
+function dmLoadRelayPolicyForConversation(PDO $db, int $conversationId): array {
+    return dmBuildRelayPolicyRow(dmLoadConversationDetailOrFail($db, $conversationId));
+}
+
+function dmGetConversationRelayTtlSeconds(PDO $db, int $conversationId): int {
+    $conversation = dmLoadConversationDetailOrFail($db, $conversationId);
+    return dmNormalizeRelayTtlSeconds($conversation['relay_ttl_seconds'] ?? DM_RELAY_TTL_SECONDS);
+}
+
 function dmLoadConversationOrFail(PDO $db, int $conversationId, int $userId): array {
     $stmt = $db->prepare('
         SELECT c.id
@@ -60,18 +128,7 @@ function dmLoadConversationOrFail(PDO $db, int $conversationId, int $userId): ar
 }
 
 function dmFetchConversationPayload(PDO $db, int $conversationId): array {
-    $conversationStmt = $db->prepare('
-        SELECT id, created_by_user_id, created_at, updated_at
-        FROM dm_conversations
-        WHERE id = ?
-        LIMIT 1
-    ');
-    $conversationStmt->execute([$conversationId]);
-    $conversation = $conversationStmt->fetch();
-
-    if (!$conversation) {
-        jsonResponse(['error' => 'Conversation not found'], 404);
-    }
+    $conversation = dmLoadConversationDetailOrFail($db, $conversationId);
 
     $participantsStmt = $db->prepare('
         SELECT p.user_id, u.username, p.joined_at
@@ -98,6 +155,7 @@ function dmFetchConversationPayload(PDO $db, int $conversationId): array {
             'createdByUserId' => (int)$conversation['created_by_user_id'],
             'createdAt' => $conversation['created_at'],
             'updatedAt' => $conversation['updated_at'],
+            'relayPolicy' => dmBuildRelayPolicyRow($conversation),
             'participants' => array_map(function ($row) {
                 return [
                     'userId' => (int)$row['user_id'],

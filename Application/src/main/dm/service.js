@@ -300,3 +300,99 @@ export function listMessages({ userId, conversationId }) {
     };
   });
 }
+
+export function exportConversationPackage({ userId, username, conversationId }) {
+  const { userState } = ensureDevice(userId, username);
+  const conversation = getConversationOrThrow(userState, conversationId);
+
+  return {
+    conversationId: conversation.conversationId,
+    title: conversation.title,
+    participantUserIds: conversation.participantUserIds,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt ?? conversation.createdAt,
+    messages: conversation.messages.map((message) => ({
+      id: message.messageId,
+      senderUserId: message.senderUserId,
+      senderDeviceId: message.senderDeviceId,
+      ciphertext: message.ciphertext,
+      nonce: message.nonce,
+      aad: message.aad,
+      tag: message.tag,
+      createdAt: message.createdAt
+    }))
+  };
+}
+
+export function createWrappedKeyForConversation({
+  userId,
+  username,
+  conversationId,
+  recipientUserId,
+  recipientDeviceId,
+  recipientPublicKey
+}) {
+  const { store, userState } = ensureDevice(userId, username);
+  const conversation = getConversationOrThrow(userState, conversationId);
+
+  const wrappedKey = {
+    recipientUserId: Number(recipientUserId),
+    deviceId: recipientDeviceId,
+    algorithm: "x25519-aes-256-gcm",
+    keyVersion: 1,
+    wrappedConversationKey: JSON.stringify(
+      wrapConversationKeyForRecipient({
+        conversationKey: conversation.conversationKey,
+        recipientPublicKey
+      })
+    )
+  };
+
+  const withoutExisting = conversation.wrappedKeys.filter(
+    (entry) => entry.deviceId !== recipientDeviceId
+  );
+  conversation.wrappedKeys = [...withoutExisting, wrappedKey];
+  writeSecureDmStore(store);
+
+  return wrappedKey;
+}
+
+export function importConversationPackage({ userId, username, conversation, wrappedKey }) {
+  const { store, userState } = ensureDevice(userId, username);
+  const existingConversation = userState.conversations[String(conversation.conversationId)] || null;
+  const conversationKey = unwrapConversationKeyForDevice({
+    wrappedKey: JSON.parse(wrappedKey.wrappedConversationKey),
+    recipientPrivateKey: userState.device.encryptionPrivateKey
+  });
+
+  userState.conversations[String(conversation.conversationId)] = {
+    conversationId: conversation.conversationId,
+    title: conversation.title ?? existingConversation?.title ?? "Direct Message",
+    participantUserIds: Array.isArray(conversation.participantUserIds)
+      ? conversation.participantUserIds.map(Number)
+      : existingConversation?.participantUserIds || [],
+    conversationKey,
+    wrappedKeys: [
+      ...(existingConversation?.wrappedKeys || []).filter((entry) => entry.deviceId !== wrappedKey.deviceId),
+      wrappedKey
+    ],
+    messages: Array.isArray(conversation.messages)
+      ? conversation.messages.map((message) => ({
+          messageId: message.id,
+          senderUserId: message.senderUserId,
+          senderDeviceId: message.senderDeviceId,
+          ciphertext: message.ciphertext,
+          nonce: message.nonce,
+          aad: message.aad,
+          tag: message.tag,
+          createdAt: message.createdAt,
+          direction: Number(message.senderUserId) === Number(userId) ? "outgoing" : "incoming"
+        }))
+      : existingConversation?.messages || [],
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt ?? conversation.createdAt
+  };
+
+  writeSecureDmStore(store);
+  return listMessages({ userId, conversationId: conversation.conversationId });
+}

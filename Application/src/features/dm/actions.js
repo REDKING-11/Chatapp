@@ -1,12 +1,198 @@
 import { parseJsonResponse } from "../../lib/api";
 
 const CORE_API_BASE = import.meta.env.VITE_CORE_API_BASE;
+const REALTIME_WS_BASE =
+  import.meta.env.VITE_REALTIME_WS_BASE ||
+  CORE_API_BASE.replace(/^http/i, "ws").replace(/\/$/, "") + "/ws/";
+export const RELAY_RETENTION_OPTIONS = [
+  { seconds: 0, label: "No relay" },
+  { seconds: 43200, label: "12 hours" },
+  { seconds: 86400, label: "24 hours" },
+  { seconds: 172800, label: "48 hours" },
+  { seconds: 259200, label: "72 hours" },
+  { seconds: 345600, label: "96 hours" }
+];
+
+let realtimeSocket = null;
+let realtimeSocketKey = null;
+let realtimeConnectedPromise = null;
+
+function dispatchRealtimeEvent(type, detail) {
+  window.dispatchEvent(new CustomEvent(type, { detail }));
+}
 
 function authHeaders(token) {
   return {
     "Content-Type": "application/json",
     Authorization: `Bearer ${token}`
   };
+}
+
+async function handleRealtimeDelivery({ currentUser, relayItem, token }) {
+  try {
+    await window.secureDm.receiveMessage({
+      userId: currentUser.id,
+      username: currentUser.username,
+      conversationId: relayItem.conversationId,
+      relayItem
+    });
+  } catch {
+    await importRemoteConversation({
+      token,
+      currentUser,
+      conversationId: relayItem.conversationId
+    });
+
+    await window.secureDm.receiveMessage({
+      userId: currentUser.id,
+      username: currentUser.username,
+      conversationId: relayItem.conversationId,
+      relayItem
+    });
+  }
+
+  if (relayItem.relayId) {
+    const device = await window.secureDm.getDeviceBundle({
+      userId: currentUser.id,
+      username: currentUser.username
+    });
+
+    await fetch(`${CORE_API_BASE}/dm/relay/ack.php`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({
+        relayId: relayItem.relayId,
+        deviceId: device.deviceId
+      })
+    });
+  }
+
+  dispatchRealtimeEvent("secureDmMessage", {
+    conversationId: relayItem.conversationId
+  });
+}
+
+export function closeRealtimeConnection() {
+  if (realtimeSocket) {
+    realtimeSocket.close();
+  }
+
+  realtimeSocket = null;
+  realtimeSocketKey = null;
+  realtimeConnectedPromise = null;
+}
+
+export async function ensureRealtimeConnection({ token, currentUser }) {
+  if (!window.secureDm) {
+    return null;
+  }
+
+  const device = await window.secureDm.getDeviceBundle({
+    userId: currentUser.id,
+    username: currentUser.username
+  });
+  const connectionKey = `${currentUser.id}:${device.deviceId}`;
+
+  if (
+    realtimeSocket &&
+    realtimeSocket.readyState === WebSocket.OPEN &&
+    realtimeSocketKey === connectionKey
+  ) {
+    return realtimeSocket;
+  }
+
+  if (realtimeConnectedPromise && realtimeSocketKey === connectionKey) {
+    return realtimeConnectedPromise;
+  }
+
+  if (realtimeSocket && realtimeSocketKey !== connectionKey) {
+    closeRealtimeConnection();
+  }
+
+  realtimeSocketKey = connectionKey;
+  realtimeConnectedPromise = new Promise((resolve, reject) => {
+    const socket = new WebSocket(REALTIME_WS_BASE);
+    realtimeSocket = socket;
+
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({
+        type: "auth",
+        userId: currentUser.id,
+        deviceId: device.deviceId
+      }));
+    });
+
+    socket.addEventListener("message", async (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+
+        if (payload.type === "auth:ok") {
+          socket.send(JSON.stringify({ type: "dm:fetchRelay" }));
+          resolve(socket);
+          return;
+        }
+
+        if (payload.type === "auth:error") {
+          reject(new Error(payload.error || "Realtime authentication failed"));
+          return;
+        }
+
+        if (payload.type === "dm:deliver") {
+          await handleRealtimeDelivery({
+            currentUser,
+            token,
+            relayItem: payload
+          });
+          return;
+        }
+
+        if (payload.type === "dm:relayItems") {
+          dispatchRealtimeEvent("secureDmSyncState", {
+            status: "syncing",
+            source: "realtime",
+            pendingCount: (payload.items || []).length
+          });
+
+          for (const item of payload.items || []) {
+            await handleRealtimeDelivery({
+              currentUser,
+              token,
+              relayItem: item
+            });
+          }
+
+          dispatchRealtimeEvent("secureDmSyncState", {
+            status: "complete",
+            source: "realtime",
+            importedCount: (payload.items || []).length
+          });
+          return;
+        }
+
+        if (payload.type === "dm:queued") {
+          dispatchRealtimeEvent("secureDmRelayQueueState", payload);
+        }
+      } catch (error) {
+        console.error("Realtime message handling failed:", error);
+      }
+    });
+
+    socket.addEventListener("close", () => {
+      if (realtimeSocket === socket) {
+        realtimeSocket = null;
+        realtimeConnectedPromise = null;
+        realtimeSocketKey = null;
+      }
+    });
+
+    socket.addEventListener("error", () => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        reject(new Error("Realtime connection failed"));
+      }
+    });
+  });
+
+  return realtimeConnectedPromise;
 }
 
 export async function initializeSecureDm(currentUser) {
@@ -51,7 +237,8 @@ export async function fetchUserDmDevices({ token, userId }) {
 export async function createDirectConversation({
   token,
   currentUser,
-  recipientUser
+  recipientUser,
+  relayTtlSeconds
 }) {
   const recipientDevicesResponse = await fetchUserDmDevices({
     token,
@@ -75,7 +262,8 @@ export async function createDirectConversation({
     headers: authHeaders(token),
     body: JSON.stringify({
       participantUserIds: [recipientUser.id],
-      wrappedKeys: localConversation.wrappedKeys
+      wrappedKeys: localConversation.wrappedKeys,
+      relayTtlSeconds
     })
   });
 
@@ -108,11 +296,16 @@ export async function importRemoteConversation({ token, currentUser, conversatio
   );
   const data = await parseJsonResponse(res, "Failed to load DM conversation");
 
-  return window.secureDm.importConversation({
+  const messages = await window.secureDm.importConversation({
     userId: currentUser.id,
     username: currentUser.username,
     conversation: data.conversation
   });
+
+  return {
+    conversation: data.conversation,
+    messages
+  };
 }
 
 export async function sendDirectMessage({
@@ -128,6 +321,30 @@ export async function sendDirectMessage({
     senderUserId: currentUser.id,
     plaintext: body
   });
+
+  try {
+    const socket = await ensureRealtimeConnection({
+      token,
+      currentUser
+    });
+
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: "dm:send",
+        ...encryptedMessage
+      }));
+
+      return {
+        ok: true,
+        message: {
+          id: encryptedMessage.messageId,
+          conversationId
+        }
+      };
+    }
+  } catch (error) {
+    console.warn("Realtime send unavailable, falling back to HTTP relay:", error);
+  }
 
   const res = await fetch(`${CORE_API_BASE}/dm/messages/send.php`, {
     method: "POST",
@@ -154,6 +371,14 @@ export async function pullRelayMessages({ token, currentUser }) {
   );
   const relayData = await parseJsonResponse(relayRes, "Failed to load relay messages");
   const imported = [];
+
+  if ((relayData.items || []).length > 0) {
+    dispatchRealtimeEvent("secureDmSyncState", {
+      status: "syncing",
+      source: "poll",
+      pendingCount: relayData.items.length
+    });
+  }
 
   for (const item of relayData.items) {
     let message;
@@ -192,5 +417,32 @@ export async function pullRelayMessages({ token, currentUser }) {
     });
   }
 
+  if (imported.length > 0) {
+    dispatchRealtimeEvent("secureDmSyncState", {
+      status: "complete",
+      source: "poll",
+      importedCount: imported.length
+    });
+  }
+
   return imported;
+}
+
+export async function updateRelayRetention({
+  token,
+  conversationId,
+  relayTtlSeconds,
+  mode = "request"
+}) {
+  const res = await fetch(`${CORE_API_BASE}/dm/conversations/retention.php`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      conversationId,
+      relayTtlSeconds,
+      mode
+    })
+  });
+
+  return parseJsonResponse(res, "Failed to update relay retention");
 }
