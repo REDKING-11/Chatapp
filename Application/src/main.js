@@ -7,10 +7,13 @@ import {
   createEncryptedMessage,
   getDeviceBundle,
   importConversation,
+  importConversationPackage,
   initializeDevice,
   listConversations,
   listMessages,
-  receiveEncryptedMessage
+  receiveEncryptedMessage,
+  exportConversationPackage,
+  createWrappedKeyForConversation
 } from './main/dm/service';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -50,6 +53,9 @@ const registerSecureDmIpc = () => {
   ipcMain.handle('secure-dm:receive-message', (_event, payload) => receiveEncryptedMessage(payload));
   ipcMain.handle('secure-dm:list-conversations', (_event, payload) => listConversations(payload));
   ipcMain.handle('secure-dm:list-messages', (_event, payload) => listMessages(payload));
+  ipcMain.handle('secure-dm:export-conversation-package', (_event, payload) => exportConversationPackage(payload));
+  ipcMain.handle('secure-dm:create-wrapped-key', (_event, payload) => createWrappedKeyForConversation(payload));
+  ipcMain.handle('secure-dm:import-conversation-package', (_event, payload) => importConversationPackage(payload));
 };
 
 // This method will be called when Electron has finished

@@ -9,5 +9,8 @@ contextBridge.exposeInMainWorld("secureDm", {
   createMessage: (payload) => ipcRenderer.invoke("secure-dm:create-message", payload),
   receiveMessage: (payload) => ipcRenderer.invoke("secure-dm:receive-message", payload),
   listConversations: (payload) => ipcRenderer.invoke("secure-dm:list-conversations", payload),
-  listMessages: (payload) => ipcRenderer.invoke("secure-dm:list-messages", payload)
+  listMessages: (payload) => ipcRenderer.invoke("secure-dm:list-messages", payload),
+  exportConversationPackage: (payload) => ipcRenderer.invoke("secure-dm:export-conversation-package", payload),
+  createWrappedKey: (payload) => ipcRenderer.invoke("secure-dm:create-wrapped-key", payload),
+  importConversationPackage: (payload) => ipcRenderer.invoke("secure-dm:import-conversation-package", payload)
 });
