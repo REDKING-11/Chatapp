@@ -10,6 +10,8 @@ $participantUserIds = dmRequireArray($data, 'participantUserIds', 'participantUs
 $wrappedKeys = dmRequireArray($data, 'wrappedKeys', 'wrappedKeys is required');
 $initialMessage = is_array($data['initialMessage'] ?? null) ? $data['initialMessage'] : null;
 $relayTtlSeconds = dmNormalizeRelayTtlSeconds($data['relayTtlSeconds'] ?? DM_RELAY_TTL_SECONDS);
+$kind = dmTrimmedString($data['kind'] ?? null) ?? 'direct';
+$title = dmTrimmedString($data['title'] ?? null);
 
 $participantIds = array_values(array_unique(array_map('intval', array_merge([(int)$user['id']], $participantUserIds))));
 
@@ -17,14 +19,42 @@ if (count($participantIds) < 2) {
     jsonResponse(['error' => 'At least two participants are required'], 400);
 }
 
+if (!in_array($kind, ['direct', 'group'], true)) {
+    jsonResponse(['error' => 'Conversation kind must be direct or group'], 400);
+}
+
+if ($kind === 'group' && count($participantIds) < 3) {
+    jsonResponse(['error' => 'A group conversation needs at least three participants'], 400);
+}
+
+if ($kind === 'group' && $title === null) {
+    jsonResponse(['error' => 'A group conversation title is required'], 400);
+}
+
 $db->beginTransaction();
 
 try {
-    $conversationStmt = $db->prepare('
-        INSERT INTO dm_conversations (created_by_user_id, updated_at, relay_ttl_seconds)
-        VALUES (?, UTC_TIMESTAMP(), ?)
-    ');
-    $conversationStmt->execute([(int)$user['id'], $relayTtlSeconds]);
+    $conversationFields = ['created_by_user_id', 'updated_at', 'relay_ttl_seconds'];
+    $conversationValues = ['?', 'UTC_TIMESTAMP()', '?'];
+    $conversationParams = [(int)$user['id'], $relayTtlSeconds];
+
+    if (dmColumnExists($db, 'dm_conversations', 'kind')) {
+        $conversationFields[] = 'kind';
+        $conversationValues[] = '?';
+        $conversationParams[] = $kind;
+    }
+
+    if (dmColumnExists($db, 'dm_conversations', 'title')) {
+        $conversationFields[] = 'title';
+        $conversationValues[] = '?';
+        $conversationParams[] = $title;
+    }
+
+    $conversationStmt = $db->prepare(
+        'INSERT INTO dm_conversations (' . implode(', ', $conversationFields) . ')
+        VALUES (' . implode(', ', $conversationValues) . ')'
+    );
+    $conversationStmt->execute($conversationParams);
     $conversationId = (int)$db->lastInsertId();
 
     $participantStmt = $db->prepare('INSERT INTO dm_conversation_participants (conversation_id, user_id) VALUES (?, ?)');

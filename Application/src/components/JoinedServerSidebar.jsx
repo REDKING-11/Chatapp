@@ -4,6 +4,7 @@ export default function JoinedServersSidebar({
     joinedServers,
     selectedJoinedServerId,
     friendsTabId,
+    hasFriendsActivity,
     onSelectJoinedServer,
     onOpenJoinModal,
     onLeaveServer,
@@ -42,13 +43,14 @@ export default function JoinedServersSidebar({
                 <button
                     className={
                         selectedJoinedServerId === friendsTabId
-                            ? "joined-server-button active-joined-server friends-home-button"
-                            : "joined-server-button friends-home-button"
+                            ? `joined-server-button active-joined-server friends-home-button ${hasFriendsActivity ? "has-friends-activity" : ""}`
+                            : `joined-server-button friends-home-button ${hasFriendsActivity ? "has-friends-activity" : ""}`
                     }
                     onClick={() => onSelectJoinedServer(friendsTabId)}
                     title="Friends"
                 >
                     F
+                    {hasFriendsActivity ? <span className="friends-activity-dot" /> : null}
                 </button>
 
                 <div className="joined-servers-divider" />
@@ -79,13 +81,15 @@ export default function JoinedServersSidebar({
                 })}
             </div>
 
-            <button
-                className="join-server-button"
-                onClick={onOpenJoinModal}
-                title="Join server"
-            >
-                +
-            </button>
+            <div className="joined-servers-bottom">
+                <button
+                    className="join-server-button"
+                    onClick={onOpenJoinModal}
+                    title="Join server"
+                >
+                    +
+                </button>
+            </div>
 
             {contextMenu && (
                 <div

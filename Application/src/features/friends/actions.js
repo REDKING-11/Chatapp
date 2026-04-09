@@ -20,6 +20,32 @@ function authHeaders() {
     };
 }
 
+function isMissingLocalConversationError(error) {
+    return /unknown dm conversation|no wrapped conversation key exists for this device/i.test(
+        String(error?.message || error || "")
+    );
+}
+
+async function hasLocalConversationAccess({ currentUser, conversationId }) {
+    if (!conversationId || !window.secureDm) {
+        return false;
+    }
+
+    try {
+        await window.secureDm.listMessages({
+            userId: currentUser.id,
+            conversationId
+        });
+        return true;
+    } catch (error) {
+        if (isMissingLocalConversationError(error)) {
+            return false;
+        }
+
+        throw error;
+    }
+}
+
 export async function fetchFriends() {
     const res = await fetch(`${CORE_API_BASE}/friends/list.php`, {
         headers: {
@@ -176,26 +202,62 @@ export async function linkFriendConversation(friendUserId, conversationId) {
 }
 
 export async function openFriendConversation({ currentUser, friend }) {
-    const token = getStoredAuthToken();
-
     if (friend.conversationId) {
-        const imported = await importRemoteConversation({
-            token,
+        const hasAccess = await hasLocalConversationAccess({
             currentUser,
             conversationId: friend.conversationId
         });
 
+        if (!hasAccess) {
+            try {
+                const imported = await importRemoteConversation({
+                    token: getStoredAuthToken(),
+                    currentUser,
+                    conversationId: friend.conversationId
+                });
+
+                return {
+                    conversationId: friend.conversationId,
+                    messages: imported.messages || [],
+                    conversation: imported.conversation || {
+                        id: friend.conversationId
+                    },
+                    hasLocalAccess: true
+                };
+            } catch (error) {
+                if (!isMissingLocalConversationError(error)) {
+                    throw error;
+                }
+            }
+
+            return {
+                conversationId: friend.conversationId,
+                messages: [],
+                conversation: {
+                    id: friend.conversationId
+                },
+                hasLocalAccess: false
+            };
+        }
+
         return {
             conversationId: friend.conversationId,
-            messages: imported.messages,
-            conversation: imported.conversation
+            messages: await window.secureDm.listMessages({
+                userId: currentUser.id,
+                conversationId: friend.conversationId
+            }),
+            conversation: {
+                id: friend.conversationId
+            },
+            hasLocalAccess: true
         };
     }
 
     return {
         conversationId: null,
         messages: [],
-        conversation: null
+        conversation: null,
+        hasLocalAccess: false
     };
 }
 
@@ -241,29 +303,63 @@ export async function importPendingHistoryTransfers({ currentUser }) {
     return imported;
 }
 
-export async function sendFriendDirectMessage({ currentUser, friend, body, relayTtlSeconds }) {
+export async function initializeFriendDirectConversation({ currentUser, friend, relayTtlSeconds }) {
     const token = getStoredAuthToken();
     let conversationId = friend.conversationId;
     let conversation = null;
 
-    if (!conversationId) {
-        const created = await createDirectConversation({
-            token,
+    if (conversationId) {
+        const opened = await openFriendConversation({
             currentUser,
-            recipientUser: {
-                id: friend.friendUserId,
-                username: friend.friendUsername
-            },
-            relayTtlSeconds
+            friend
         });
 
-        conversationId = created.remoteConversation.id;
-        conversation = created.remoteConversation;
-        await linkFriendConversation(friend.friendUserId, conversationId);
+        return {
+            conversationId,
+            messages: opened.messages,
+            conversation: opened.conversation
+        };
     }
 
-    await sendDirectMessage({
+    const created = await createDirectConversation({
         token,
+        currentUser,
+        recipientUser: {
+            id: friend.friendUserId,
+            username: friend.friendUsername
+        },
+        relayTtlSeconds
+    });
+
+    conversationId = created.remoteConversation.id;
+    conversation = created.remoteConversation;
+    await linkFriendConversation(friend.friendUserId, conversationId);
+
+    const opened = await openFriendConversation({
+        currentUser,
+        friend: {
+            ...friend,
+            conversationId
+        }
+    });
+
+    return {
+        conversationId,
+        messages: opened.messages,
+        conversation: conversation || opened.conversation
+    };
+}
+
+export async function sendFriendDirectMessage({ currentUser, friend, body, relayTtlSeconds }) {
+    const initialized = await initializeFriendDirectConversation({
+        currentUser,
+        friend,
+        relayTtlSeconds
+    });
+    const conversationId = initialized.conversationId;
+
+    await sendDirectMessage({
+        token: getStoredAuthToken(),
         currentUser,
         conversationId,
         body
@@ -280,7 +376,7 @@ export async function sendFriendDirectMessage({ currentUser, friend, body, relay
     return {
         conversationId,
         messages: opened.messages,
-        conversation: conversation || opened.conversation
+        conversation: initialized.conversation || opened.conversation
     };
 }
 
@@ -298,7 +394,7 @@ export async function requestFriendRelayRetention({ conversationId, relayTtlSeco
 
 export async function acceptFriendRelayRetention({ conversationId }) {
     const token = getStoredAuthToken();
-    const fallbackSeconds = RELAY_RETENTION_OPTIONS.find((option) => option.seconds === 86400)?.seconds ?? 86400;
+    const fallbackSeconds = RELAY_RETENTION_OPTIONS.find((option) => option.seconds === 0)?.seconds ?? 0;
     const data = await updateRelayRetention({
         token,
         conversationId,

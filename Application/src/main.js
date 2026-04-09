@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Notification } from 'electron';
 import path from 'node:path';
 import {
   adoptConversationId,
@@ -54,11 +54,32 @@ const registerSecureDmIpc = () => {
   ipcMain.handle('secure-dm:delete-conversation', (_event, payload) => deleteConversation(payload));
 };
 
+const registerNotificationIpc = () => {
+  ipcMain.handle('desktop-notifications:show', (_event, payload) => {
+    const title = String(payload?.title || 'Chatapp');
+    const body = String(payload?.body || '');
+
+    if (!Notification.isSupported()) {
+      return { ok: false, supported: false };
+    }
+
+    const notification = new Notification({
+      title,
+      body,
+      silent: false
+    });
+    notification.show();
+
+    return { ok: true, supported: true };
+  });
+};
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   registerSecureDmIpc();
+  registerNotificationIpc();
   createWindow();
 
   // On OS X it's common to re-create a window in the app when the

@@ -21,6 +21,12 @@ function dispatchRealtimeEvent(type, detail) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
 }
 
+function isMissingLocalConversationError(error) {
+  return /unknown dm conversation|no wrapped conversation key exists for this device/i.test(
+    String(error?.message || error || "")
+  );
+}
+
 function authHeaders(token) {
   return {
     "Content-Type": "application/json",
@@ -29,26 +35,24 @@ function authHeaders(token) {
 }
 
 async function handleRealtimeDelivery({ currentUser, relayItem, token }) {
-  try {
-    await window.secureDm.receiveMessage({
-      userId: currentUser.id,
-      username: currentUser.username,
-      conversationId: relayItem.conversationId,
-      relayItem
-    });
-  } catch {
-    await importRemoteConversation({
-      token,
-      currentUser,
-      conversationId: relayItem.conversationId
-    });
+  let message = null;
 
-    await window.secureDm.receiveMessage({
+  try {
+    message = await window.secureDm.receiveMessage({
       userId: currentUser.id,
       username: currentUser.username,
       conversationId: relayItem.conversationId,
       relayItem
     });
+  } catch (error) {
+    if (isMissingLocalConversationError(error)) {
+      dispatchRealtimeEvent("secureDmConversationAccessRequired", {
+        conversationId: relayItem.conversationId
+      });
+      return;
+    }
+
+    throw error;
   }
 
   if (relayItem.relayId) {
@@ -68,7 +72,8 @@ async function handleRealtimeDelivery({ currentUser, relayItem, token }) {
   }
 
   dispatchRealtimeEvent("secureDmMessage", {
-    conversationId: relayItem.conversationId
+    conversationId: relayItem.conversationId,
+    message
   });
 }
 
@@ -240,6 +245,14 @@ export async function createDirectConversation({
   recipientUser,
   relayTtlSeconds
 }) {
+  const currentDevice = await window.secureDm.getDeviceBundle({
+    userId: currentUser.id,
+    username: currentUser.username
+  });
+  const ownDevicesResponse = await fetchUserDmDevices({
+    token,
+    userId: currentUser.id
+  });
   const recipientDevicesResponse = await fetchUserDmDevices({
     token,
     userId: recipientUser.id
@@ -249,12 +262,20 @@ export async function createDirectConversation({
     throw new Error("That user has not set up secure DMs on any device yet");
   }
 
+  const additionalOwnDevices = (ownDevicesResponse.devices || []).filter(
+    (device) => device.deviceId !== currentDevice.deviceId
+  );
+  const recipientDevices = [
+    ...additionalOwnDevices,
+    ...(recipientDevicesResponse.devices || [])
+  ];
+
   const localConversation = await window.secureDm.createConversation({
     userId: currentUser.id,
     username: currentUser.username,
     title: `DM with ${recipientUser.username}`,
     participants: [recipientUser.id],
-    recipientDevices: recipientDevicesResponse.devices
+    recipientDevices
   });
 
   const res = await fetch(`${CORE_API_BASE}/dm/conversations/create.php`, {
@@ -391,18 +412,14 @@ export async function pullRelayMessages({ token, currentUser }) {
         relayItem: item
       });
     } catch (error) {
-      await importRemoteConversation({
-        token,
-        currentUser,
-        conversationId: item.conversationId
-      });
+      if (isMissingLocalConversationError(error)) {
+        dispatchRealtimeEvent("secureDmConversationAccessRequired", {
+          conversationId: item.conversationId
+        });
+        continue;
+      }
 
-      message = await window.secureDm.receiveMessage({
-        userId: currentUser.id,
-        username: currentUser.username,
-        conversationId: item.conversationId,
-        relayItem: item
-      });
+      throw error;
     }
 
     imported.push(message);

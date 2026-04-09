@@ -15,3 +15,7 @@ contextBridge.exposeInMainWorld("secureDm", {
   importConversationPackage: (payload) => ipcRenderer.invoke("secure-dm:import-conversation-package", payload),
   deleteConversation: (payload) => ipcRenderer.invoke("secure-dm:delete-conversation", payload)
 });
+
+contextBridge.exposeInMainWorld("desktopNotifications", {
+  show: (payload) => ipcRenderer.invoke("desktop-notifications:show", payload)
+});

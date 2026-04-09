@@ -5,9 +5,21 @@ import "./index.css";
 import ChannelSidebar from "./components/ChannelSidebar";
 import MainView from "./components/MainView";
 import AuthScreen from "./components/AuthScreen";
+import ClientSettingsModal from "./components/ClientSettingsModal";
+import InitialSetupWizard from "./components/InitialSetupWizard";
 import JoinedServersSidebar from "./components/JoinedServerSidebar";
 import JoinServerModal from "./components/JoinServerModal";
 import ServerSettingsPanel from "./components/ServerSettingsPanel";
+import {
+    applyClientSettings,
+    CLIENT_SETTINGS_DEFAULTS,
+    loadClientSettings,
+    saveClientSettings
+} from "./features/clientSettings";
+import {
+    loadOnboardingState,
+    saveOnboardingState
+} from "./features/onboarding";
 import {
     closeRealtimeConnection,
     ensureRealtimeConnection,
@@ -27,7 +39,9 @@ import {
 import {
     loadSelectedServerId,
     saveSelectedServerId,
-    clearSelectedServerId
+    clearSelectedServerId,
+    hasSeenServerTrustWarning,
+    markServerTrustWarningSeen
 } from "./features/servers/storage";
 
 import {
@@ -55,16 +69,25 @@ function App() {
     const [joinedServers, setJoinedServers] = useState([]);
     const [selectedJoinedServerId, setSelectedJoinedServerId] = useState(FRIENDS_TAB_ID);
     const [serverStatuses, setServerStatuses] = useState({});
+    const [hasFriendsActivity, setHasFriendsActivity] = useState(false);
 
     const [serverData, setServerData] = useState(null);
     const [selectedChannelId, setSelectedChannelId] = useState(null);
     const [showJoinModal, setShowJoinModal] = useState(false);
+    const [showServerTrustWarning, setShowServerTrustWarning] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
+    const [showClientSettings, setShowClientSettings] = useState(false);
     const [customization, setCustomization] = useState(null);
     const [settingsServer, setSettingsServer] = useState(null);
+    const [clientSettings, setClientSettings] = useState(() => loadClientSettings());
+    const [onboardingState, setOnboardingState] = useState(() => loadOnboardingState());
 
     const serverThemeRef = useRef(null);
     const serverCustomCssRef = useRef(null);
+
+    useEffect(() => {
+        applyClientSettings(clientSettings);
+    }, [clientSettings]);
 
     useEffect(() => {
         async function restoreSession() {
@@ -142,6 +165,26 @@ function App() {
             setSelectedJoinedServerId(FRIENDS_TAB_ID);
         }
     }, [selectedJoinedServerId]);
+
+    useEffect(() => {
+        if (!currentUser || !selectedJoinedServerId || selectedJoinedServerId === FRIENDS_TAB_ID) {
+            setShowServerTrustWarning(false);
+            return;
+        }
+
+        const selectedJoinedServer = joinedServers.find(
+            (server) => server.id === selectedJoinedServerId
+        );
+
+        if (!selectedJoinedServer) {
+            setShowServerTrustWarning(false);
+            return;
+        }
+
+        setShowServerTrustWarning(
+            !hasSeenServerTrustWarning(currentUser.id, selectedJoinedServerId)
+        );
+    }, [currentUser, joinedServers, selectedJoinedServerId]);
 
     useEffect(() => {
         if (!currentUser || joinedServers.length === 0) {
@@ -458,6 +501,16 @@ function App() {
         setShowJoinModal(false);
     }
 
+    function handleAcknowledgeServerTrustWarning() {
+        if (!currentUser || !selectedJoinedServerId || selectedJoinedServerId === FRIENDS_TAB_ID) {
+            setShowServerTrustWarning(false);
+            return;
+        }
+
+        markServerTrustWarningSeen(currentUser.id, selectedJoinedServerId);
+        setShowServerTrustWarning(false);
+    }
+
     async function handleLeaveServer(serverId) {
         try {
             await leaveServer(serverId);
@@ -486,6 +539,30 @@ function App() {
         resetAppState();
     }
 
+    function handleClientSettingChange(key, value) {
+        setClientSettings((prev) => saveClientSettings({
+            ...prev,
+            [key]: value
+        }));
+    }
+
+    function handleClientSettingsReset() {
+        setClientSettings(saveClientSettings(CLIENT_SETTINGS_DEFAULTS));
+    }
+
+    function handleClientSettingsImport(importedSettings) {
+        setClientSettings(importedSettings);
+    }
+
+    function handleOnboardingComplete(acceptance) {
+        setOnboardingState(saveOnboardingState({
+            completed: true,
+            acceptedPrivacy: Boolean(acceptance.acceptedPrivacy),
+            acceptedTos: Boolean(acceptance.acceptedTos),
+            completedAt: new Date().toISOString()
+        }));
+    }
+
     if (authLoading) {
         return (
             <div className="auth-screen">
@@ -497,6 +574,16 @@ function App() {
     }
 
     if (!currentUser) {
+        if (!onboardingState.completed) {
+            return (
+                <InitialSetupWizard
+                    currentSettings={clientSettings}
+                    onImportSettings={handleClientSettingsImport}
+                    onComplete={handleOnboardingComplete}
+                />
+            );
+        }
+
         return <AuthScreen onAuthSuccess={(user) => setCurrentUser(user)} />;
     }
 
@@ -505,6 +592,7 @@ function App() {
     const selectedJoinedServer =
         joinedServers.find((server) => server.id === selectedJoinedServerId) || null;
     const isFriendsView = selectedJoinedServerId === FRIENDS_TAB_ID;
+    const profileMediaHostUrl = selectedJoinedServer?.backendUrl || joinedServers[0]?.backendUrl || null;
 
     return (
         <>
@@ -515,6 +603,7 @@ function App() {
                 </div>
 
                 <div className="topbar-actions">
+                    <button onClick={() => setShowClientSettings(true)}>Client Settings</button>
                     <button onClick={() => setShowJoinModal(true)}>Join Server</button>
                     <button onClick={handleLogout}>Logout</button>
                 </div>
@@ -525,6 +614,7 @@ function App() {
                     joinedServers={joinedServers}
                     selectedJoinedServerId={selectedJoinedServerId}
                     friendsTabId={FRIENDS_TAB_ID}
+                    hasFriendsActivity={hasFriendsActivity}
                     onSelectJoinedServer={setSelectedJoinedServerId}
                     onOpenJoinModal={() => setShowJoinModal(true)}
                     onLeaveServer={handleLeaveServer}
@@ -542,6 +632,11 @@ function App() {
                             channels={channels}
                             selectedChannelId={selectedChannelId}
                             onSelectChannel={setSelectedChannelId}
+                            currentUser={currentUser}
+                            profileMediaHostUrl={profileMediaHostUrl}
+                            clientSettings={clientSettings}
+                            onOpenClientSettings={() => setShowClientSettings(true)}
+                            onLogout={handleLogout}
                         />
                     )}
 
@@ -549,7 +644,13 @@ function App() {
                         channel={selectedChannel}
                         currentUser={currentUser}
                         backendUrl={selectedJoinedServer?.backendUrl || null}
+                        profileMediaHostUrl={profileMediaHostUrl}
+                        clientSettings={clientSettings}
                         customization={customization}
+                        onFriendsActivityChange={setHasFriendsActivity}
+                        onOpenClientSettings={() => setShowClientSettings(true)}
+                        onLogout={handleLogout}
+                        serverName={selectedJoinedServer?.name || serverData?.name || null}
                         serverStatus={selectedJoinedServer ? serverStatuses[selectedJoinedServer.id] : null}
                         isFriendsView={isFriendsView}
                     />
@@ -574,6 +675,40 @@ function App() {
                     }}
                 />
             )}
+
+            {showClientSettings ? (
+                <ClientSettingsModal
+                    settings={clientSettings}
+                    onChange={handleClientSettingChange}
+                    onImport={handleClientSettingsImport}
+                    onReset={handleClientSettingsReset}
+                    onClose={() => setShowClientSettings(false)}
+                />
+            ) : null}
+
+            {showServerTrustWarning && selectedJoinedServer ? (
+                <div
+                    className="server-trust-warning-overlay"
+                    onClick={handleAcknowledgeServerTrustWarning}
+                >
+                    <div
+                        className="server-trust-warning-modal panel-card"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="server-trust-warning-badge">Server trust warning</div>
+                        <h2>{selectedJoinedServer.name}</h2>
+                        <p>
+                            Messages in this server are stored by the host and are not end-to-end encrypted.
+                        </p>
+                        <p>
+                            The server owner, or anyone with backend access, can read messages sent here.
+                        </p>
+                        <button type="button" onClick={handleAcknowledgeServerTrustWarning}>
+                            I understand
+                        </button>
+                    </div>
+                </div>
+            ) : null}
         </>
     );
 }

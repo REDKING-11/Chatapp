@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { submitAuth } from "../features/auth/actions";
+import { formatAppError } from "../lib/debug";
 
 export default function AuthScreen({ onAuthSuccess }) {
     const [mode, setMode] = useState("login");
@@ -26,7 +27,10 @@ export default function AuthScreen({ onAuthSuccess }) {
 
             onAuthSuccess(data.user, data.token);
         } catch (err) {
-            setError(err.message);
+            setError(formatAppError(err, {
+                fallbackMessage: "Could not sign you in right now.",
+                context: "Auth"
+            }).message);
         } finally {
             setLoading(false);
         }
