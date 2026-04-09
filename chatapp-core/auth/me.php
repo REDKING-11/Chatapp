@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../user_profile.php';
 
 function getBearerToken(): ?string {
     $authHeader = '';
@@ -52,7 +53,14 @@ if (!$token) {
 $db = getDb();
 
 $stmt = $db->prepare('
-    SELECT users.id, users.username, users.email, users.phone, sessions.expires_at
+    SELECT
+        users.id,
+        users.username,
+        users.email,
+        users.phone,
+        sessions.expires_at,
+        ' . userProfileDisplayNameSelect($db, 'users') . ',
+        ' . userProfileUsernameTagSelect($db, 'users') . '
     FROM sessions
     JOIN users ON users.id = sessions.user_id
     WHERE sessions.token = ?
@@ -72,10 +80,12 @@ if (strtotime($session['expires_at']) < time()) {
 
 jsonResponse([
     'ok' => true,
-    'user' => [
-        'id' => (int)$session['id'],
-        'username' => $session['username'],
-        'email' => $session['email'],
-        'phone' => $session['phone']
-    ]
+    'user' => array_merge(
+        [
+            'id' => (int)$session['id'],
+            'email' => $session['email'],
+            'phone' => $session['phone']
+        ],
+        userProfileFromRow($session)
+    )
 ]);

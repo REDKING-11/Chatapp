@@ -65,7 +65,7 @@ export default function FriendsHome({
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState("");
     const [errorDebugDetails, setErrorDebugDetails] = useState("");
-    const [selectedRelayTtlSeconds, setSelectedRelayTtlSeconds] = useState(0);
+    const [selectedRelayTtlSeconds, setSelectedRelayTtlSeconds] = useState(86400);
     const [conversationMeta, setConversationMeta] = useState(null);
     const [hasLocalConversationAccess, setHasLocalConversationAccess] = useState(true);
     const [showConversationSettings, setShowConversationSettings] = useState(false);
@@ -87,7 +87,6 @@ export default function FriendsHome({
         source: null
     });
     const [conversationSeenTimestamps, setConversationSeenTimestamps] = useState({});
-    const [windowFocused, setWindowFocused] = useState(() => document.hasFocus());
     const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== "hidden");
     const [previewRefreshNonce, setPreviewRefreshNonce] = useState(0);
     const messageListRef = useRef(null);
@@ -97,6 +96,8 @@ export default function FriendsHome({
     const viewAcknowledgeTimeoutRef = useRef(null);
     const groupConversationsRef = useRef([]);
     const selectedGroupConversationIdRef = useRef(null);
+    const hasInitializedSeenBaselineRef = useRef(false);
+    const sessionStartedAtRef = useRef(Date.now());
 
     const legacyFriendTagsStorageKey = `friendTags:${currentUser.id}`;
     const collapsedFriendFoldersStorageKey = `collapsedFriendFolders:${currentUser.id}`;
@@ -154,6 +155,19 @@ export default function FriendsHome({
 
     async function maybeShowDesktopNotification({ conversationId, message }) {
         if (!window.desktopNotifications || !message || message.direction !== "incoming") {
+            return;
+        }
+
+        if (message.imported !== true) {
+            return;
+        }
+
+        const messageTimestamp = message?.createdAt ? new Date(message.createdAt).getTime() : null;
+        if (
+            messageTimestamp != null
+            && !Number.isNaN(messageTimestamp)
+            && messageTimestamp < sessionStartedAtRef.current - 5000
+        ) {
             return;
         }
 
@@ -259,6 +273,11 @@ export default function FriendsHome({
     useEffect(() => {
         selectedGroupConversationIdRef.current = selectedGroupConversationId;
     }, [selectedGroupConversationId]);
+
+    useEffect(() => {
+        hasInitializedSeenBaselineRef.current = false;
+        sessionStartedAtRef.current = Date.now();
+    }, [currentUser?.id]);
 
     useEffect(() => {
         loadFriends();
@@ -562,8 +581,7 @@ export default function FriendsHome({
     }, [currentUser, selectedGroupConversationId]);
 
     useEffect(() => {
-        async function handleSecureDmMessage() {
-            const event = arguments[0];
+        async function handleSecureDmMessage(event) {
             const incomingConversationId = event?.detail?.conversationId;
             const incomingMessage = event?.detail?.message || null;
 
@@ -651,9 +669,15 @@ export default function FriendsHome({
     useEffect(() => {
         function handleSyncState(event) {
             const detail = event.detail || {};
+            const importedCount = Number(detail.importedCount ?? 0);
+            const safeImportedCount = Number.isNaN(importedCount) ? 0 : importedCount;
+            const status = detail.status === "complete" && safeImportedCount <= 0
+                ? "idle"
+                : detail.status || "idle";
+
             setSyncState({
-                status: detail.status || "idle",
-                importedCount: detail.importedCount ?? 0,
+                status,
+                importedCount: safeImportedCount,
                 source: detail.source || null
             });
         }
@@ -661,6 +685,30 @@ export default function FriendsHome({
         window.addEventListener("secureDmSyncState", handleSyncState);
         return () => window.removeEventListener("secureDmSyncState", handleSyncState);
     }, []);
+
+    useEffect(() => {
+        if (syncState.status !== "complete" || syncState.importedCount <= 0) {
+            return undefined;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+            setSyncState({
+                status: "idle",
+                importedCount: 0,
+                source: null
+            });
+        }, 5000);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [syncState]);
+
+    useEffect(() => {
+        setSyncState({
+            status: "idle",
+            importedCount: 0,
+            source: null
+        });
+    }, [currentUser?.id]);
 
     useEffect(() => {
         function handleRelayQueueState(event) {
@@ -741,6 +789,23 @@ export default function FriendsHome({
 
             if (!cancelled) {
                 setConversationPreviews(nextPreviews);
+
+                if (!hasInitializedSeenBaselineRef.current) {
+                    const baselineSeenTimestamps = {};
+
+                    Object.entries(nextPreviews).forEach(([conversationId, preview]) => {
+                        const latestTimestamp = getPreviewTimestamp(preview);
+                        if (latestTimestamp != null) {
+                            baselineSeenTimestamps[String(conversationId)] = latestTimestamp;
+                        }
+                    });
+
+                    setConversationSeenTimestamps((prev) => ({
+                        ...prev,
+                        ...baselineSeenTimestamps
+                    }));
+                    hasInitializedSeenBaselineRef.current = true;
+                }
             }
         }
 
@@ -752,25 +817,13 @@ export default function FriendsHome({
     }, [currentUser, friendsState.friends, groupConversations, messages, groupMessages, previewRefreshNonce]);
 
     useEffect(() => {
-        function handleFocus() {
-            setWindowFocused(true);
-        }
-
-        function handleBlur() {
-            setWindowFocused(false);
-        }
-
         function handleVisibilityChange() {
             setPageVisible(document.visibilityState !== "hidden");
         }
 
-        window.addEventListener("focus", handleFocus);
-        window.addEventListener("blur", handleBlur);
         document.addEventListener("visibilitychange", handleVisibilityChange);
 
         return () => {
-            window.removeEventListener("focus", handleFocus);
-            window.removeEventListener("blur", handleBlur);
             document.removeEventListener("visibilitychange", handleVisibilityChange);
         };
     }, []);
@@ -1407,6 +1460,7 @@ export default function FriendsHome({
     const hasExistingConversation = Boolean(effectiveSelectedFriend?.conversationId);
     const canRequestOldConversation = Boolean(
         hasExistingConversation &&
+        !hasLocalConversationAccess &&
         !isForgettingOldConversation &&
         (!historyAccessRequest || historyAccessRequest.status === "declined") &&
         messages.length === 0
@@ -1482,7 +1536,7 @@ export default function FriendsHome({
             viewAcknowledgeTimeoutRef.current = null;
         }
 
-        if (!activeConversationId || !windowFocused || !pageVisible) {
+        if (!activeConversationId || !pageVisible) {
             return undefined;
         }
 
@@ -1511,7 +1565,7 @@ export default function FriendsHome({
                 viewAcknowledgeTimeoutRef.current = null;
             }
         };
-    }, [activeConversationId, conversationPreviews, pageVisible, windowFocused]);
+    }, [activeConversationId, conversationPreviews, pageVisible]);
 
     return (
         <main className="main friends-main">
@@ -1581,6 +1635,8 @@ export default function FriendsHome({
 
                 <FriendsConversationPanel
                     currentUser={currentUser}
+                    profileMediaHostUrl={profileMediaHostUrl}
+                    clientSettings={clientSettingsSnapshot}
                     activeView={activeView}
                     selectedGroupConversation={selectedGroupConversation}
                     activeGroupParticipantNames={activeGroupParticipantNames}

@@ -1,6 +1,6 @@
 const CORE_API_BASE =
     process.env.CORE_API_BASE ||
-    "https://core.samlam24.treok.io";
+    "http://56.228.2.7";
 
 async function verifyUser(req) {
     const auth = req.headers.authorization || "";

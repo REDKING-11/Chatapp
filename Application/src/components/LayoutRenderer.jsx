@@ -22,7 +22,7 @@ const componentMap = {
     spacer: SpacerBlock,
 };
 
-export default function LayoutRenderer({ layout, channelId, currentUser, backendUrl }) {
+export default function LayoutRenderer({ layout, channelId, currentUser, backendUrl, onServerOffline }) {
     if (!layout || typeof layout !== "object") {
         return <div>Invalid layout</div>;
     }
@@ -43,6 +43,7 @@ export default function LayoutRenderer({ layout, channelId, currentUser, backend
             channelId={layout.props?.channelId || channelId}
             currentUser={currentUser}
             backendUrl={backendUrl}
+            onServerOffline={onServerOffline}
         />
     );
 }

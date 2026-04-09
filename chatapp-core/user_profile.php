@@ -29,6 +29,14 @@ function userProfileDisplayNameSelect(PDO $db, string $tableAlias, string $resul
     return $tableAlias . '.display_name AS ' . $resultAlias;
 }
 
+function userProfileUsernameTagSelect(PDO $db, string $tableAlias, string $resultAlias = 'username_tag'): string {
+    if (!userProfileColumnExists($db, 'users', 'username_tag')) {
+        return 'NULL AS ' . $resultAlias;
+    }
+
+    return $tableAlias . '.username_tag AS ' . $resultAlias;
+}
+
 function userProfileTrimmedString($value): ?string {
     if (!is_string($value)) {
         return null;
@@ -56,16 +64,39 @@ function userProfileParseHandle(string $username): array {
     ];
 }
 
+function userProfileFallbackTagFromId($id): string {
+    $numericId = max(1, (int)$id);
+    $tag = $numericId % 10000;
+
+    if ($tag === 0) {
+        $tag = 10000;
+    }
+
+    return str_pad((string)$tag, 4, '0', STR_PAD_LEFT);
+}
+
 function userProfileFromRow(array $row, string $usernameKey = 'username', string $displayNameKey = 'display_name'): array {
     $username = (string)($row[$usernameKey] ?? '');
     $parsed = userProfileParseHandle($username);
     $displayName = userProfileTrimmedString($row[$displayNameKey] ?? null);
+    $storedTag = userProfileNormalizeTag(
+        array_key_exists('username_tag', $row) ? (string)$row['username_tag'] : null
+    );
+    $usernameTag = $storedTag !== null && $storedTag !== ''
+        ? $storedTag
+        : ($parsed['usernameTag'] ?? null);
+
+    if ($usernameTag === null && array_key_exists('id', $row)) {
+        $usernameTag = userProfileFallbackTagFromId($row['id']);
+    }
+
+    $handle = userProfileBuildHandle($parsed['usernameBase'], $usernameTag);
 
     return [
-        'username' => $parsed['handle'],
-        'handle' => $parsed['handle'],
+        'username' => $handle,
+        'handle' => $handle,
         'usernameBase' => $parsed['usernameBase'],
-        'usernameTag' => $parsed['usernameTag'],
+        'usernameTag' => $usernameTag,
         'displayName' => $displayName,
         'displayLabel' => $displayName ?? $parsed['usernameBase']
     ];

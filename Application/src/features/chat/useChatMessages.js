@@ -10,7 +10,7 @@ function isExpectedOfflineMessageError(error) {
     return /server is offline|cannot be loaded right now|unreachable/i.test(String(error?.message || ""));
 }
 
-export default function useChatMessages({ channelId, currentUser, backendUrl }) {
+export default function useChatMessages({ channelId, currentUser, backendUrl, onServerOffline }) {
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(true);
     const [sending, setSending] = useState(false);
@@ -29,6 +29,8 @@ export default function useChatMessages({ channelId, currentUser, backendUrl }) 
 
                 if (!isExpectedOfflineMessageError(err)) {
                     console.error("Failed to load messages:", err);
+                } else {
+                    onServerOffline?.();
                 }
             } finally {
                 setLoading(false);
@@ -50,6 +52,9 @@ export default function useChatMessages({ channelId, currentUser, backendUrl }) 
             setMessages((prev) => [...prev, newMessage]);
             return newMessage;
         } catch (err) {
+            if (isExpectedOfflineMessageError(err)) {
+                onServerOffline?.();
+            }
             console.error("Send failed:", err);
             throw err; // IMPORTANT
         } finally {
@@ -74,6 +79,12 @@ export default function useChatMessages({ channelId, currentUser, backendUrl }) 
             );
 
             return updatedMessage;
+        } catch (err) {
+            if (isExpectedOfflineMessageError(err)) {
+                onServerOffline?.();
+            }
+            console.error("Failed to edit message:", err);
+            throw err;
         } finally {
             setSending(false);
         }
@@ -89,6 +100,9 @@ export default function useChatMessages({ channelId, currentUser, backendUrl }) 
                 )
             );
         } catch (err) {
+            if (isExpectedOfflineMessageError(err)) {
+                onServerOffline?.();
+            }
             console.error("Failed to delete message:", err);
         }
     }

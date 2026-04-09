@@ -27,6 +27,20 @@ function isMissingLocalConversationError(error) {
     );
 }
 
+async function fetchRemoteConversationMetadata(conversationId) {
+    const res = await fetch(
+        `${CORE_API_BASE}/dm/conversations/get.php?conversationId=${encodeURIComponent(conversationId)}`,
+        {
+            headers: {
+                Authorization: `Bearer ${getStoredAuthToken()}`
+            }
+        }
+    );
+    const data = await parseJsonResponse(res, "Failed to load conversation details");
+
+    return data.conversation || { id: conversationId };
+}
+
 async function hasLocalConversationAccess({ currentUser, conversationId }) {
     if (!conversationId || !window.secureDm) {
         return false;
@@ -204,6 +218,7 @@ export async function linkFriendConversation(friendUserId, conversationId) {
 
 export async function openFriendConversation({ currentUser, friend }) {
     if (friend.conversationId) {
+        const remoteConversation = await fetchRemoteConversationMetadata(friend.conversationId);
         const hasAccess = await hasLocalConversationAccess({
             currentUser,
             conversationId: friend.conversationId
@@ -220,9 +235,7 @@ export async function openFriendConversation({ currentUser, friend }) {
                 return {
                     conversationId: friend.conversationId,
                     messages: imported.messages || [],
-                    conversation: imported.conversation || {
-                        id: friend.conversationId
-                    },
+                    conversation: imported.conversation || remoteConversation,
                     hasLocalAccess: true
                 };
             } catch (error) {
@@ -234,9 +247,7 @@ export async function openFriendConversation({ currentUser, friend }) {
             return {
                 conversationId: friend.conversationId,
                 messages: [],
-                conversation: {
-                    id: friend.conversationId
-                },
+                conversation: remoteConversation,
                 hasLocalAccess: false
             };
         }
@@ -247,9 +258,7 @@ export async function openFriendConversation({ currentUser, friend }) {
                 userId: currentUser.id,
                 conversationId: friend.conversationId
             }),
-            conversation: {
-                id: friend.conversationId
-            },
+            conversation: remoteConversation,
             hasLocalAccess: true
         };
     }
@@ -395,7 +404,7 @@ export async function requestFriendRelayRetention({ conversationId, relayTtlSeco
 
 export async function acceptFriendRelayRetention({ conversationId }) {
     const token = getStoredAuthToken();
-    const fallbackSeconds = RELAY_RETENTION_OPTIONS.find((option) => option.seconds === 0)?.seconds ?? 0;
+    const fallbackSeconds = RELAY_RETENTION_OPTIONS.find((option) => option.seconds === 86400)?.seconds ?? 86400;
     const data = await updateRelayRetention({
         token,
         conversationId,

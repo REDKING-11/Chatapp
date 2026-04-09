@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../user_profile.php';
 
 $data = readJsonInput();
 
@@ -13,7 +14,18 @@ if ($username === '' || $password === '') {
 
 $db = getDb();
 
-$stmt = $db->prepare('SELECT id, username, email, phone, password_hash FROM users WHERE username = ?');
+$stmt = $db->prepare('
+    SELECT
+        id,
+        username,
+        email,
+        phone,
+        password_hash,
+        ' . userProfileDisplayNameSelect($db, 'users') . ',
+        ' . userProfileUsernameTagSelect($db, 'users') . '
+    FROM users
+    WHERE username = ?
+');
 $stmt->execute([$username]);
 
 $user = $stmt->fetch();
@@ -31,10 +43,12 @@ $stmt->execute([$user['id'], $token, $expiresAt]);
 jsonResponse([
     'ok' => true,
     'token' => $token,
-    'user' => [
-        'id' => (int)$user['id'],
-        'username' => $user['username'],
-        'email' => $user['email'],
-        'phone' => $user['phone']
-    ]
+    'user' => array_merge(
+        [
+            'id' => (int)$user['id'],
+            'email' => $user['email'],
+            'phone' => $user['phone']
+        ],
+        userProfileFromRow($user)
+    )
 ]);

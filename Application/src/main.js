@@ -74,12 +74,37 @@ const registerNotificationIpc = () => {
   });
 };
 
+const registerServerHealthIpc = () => {
+  ipcMain.handle('server-health:check', async (_event, backendUrl) => {
+    const baseUrl = String(backendUrl || '').replace(/\/$/, '');
+
+    if (!baseUrl) {
+      return { online: false };
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(`${baseUrl}/api/server`, {
+        method: 'GET',
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      return { online: res.ok, status: res.status };
+    } catch {
+      return { online: false };
+    }
+  });
+};
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   registerSecureDmIpc();
   registerNotificationIpc();
+  registerServerHealthIpc();
   createWindow();
 
   // On OS X it's common to re-create a window in the app when the

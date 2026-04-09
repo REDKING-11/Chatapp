@@ -14,7 +14,7 @@ function buildInlineStyle(node) {
     return style;
 }
 
-export default function RowBlock({ node, channelId, currentUser, backendUrl }) {
+export default function RowBlock({ node, channelId, currentUser, backendUrl, onServerOffline }) {
     return (
         <div
             className={`layout-row builder-node builder-node-row ${node.className || ""}`.trim()}
@@ -29,6 +29,7 @@ export default function RowBlock({ node, channelId, currentUser, backendUrl }) {
                     channelId={channelId}
                     currentUser={currentUser}
                     backendUrl={backendUrl}
+                    onServerOffline={onServerOffline}
                 />
             ))}
         </div>

@@ -26,6 +26,13 @@ module.exports = {
         shortName: 'Chatapp',
         description: 'Privacy-first desktop chat with local-first encrypted messaging.',
         exe: 'Chatapp.exe',
+        upgradeCode: 'fef5f711-cbd1-4a96-80d8-9b08c5ec0fb8',
+        nestedFolderName: 'RedFolder',
+        programFilesFolderName: 'LibreChat',
+        shortcutFolderName: 'Chatapp',
+        shortcutName: 'Chatapp',
+        defaultInstallMode: 'perUser',
+        features: false,
         ui: {
           chooseDirectory: true
         }

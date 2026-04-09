@@ -19,3 +19,7 @@ contextBridge.exposeInMainWorld("secureDm", {
 contextBridge.exposeInMainWorld("desktopNotifications", {
   show: (payload) => ipcRenderer.invoke("desktop-notifications:show", payload)
 });
+
+contextBridge.exposeInMainWorld("serverHealth", {
+  check: (backendUrl) => ipcRenderer.invoke("server-health:check", backendUrl)
+});

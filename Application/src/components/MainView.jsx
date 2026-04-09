@@ -12,6 +12,7 @@ export default function MainView({
     onFriendsActivityChange,
     onOpenClientSettings,
     onLogout,
+    onServerOffline,
     serverName,
     serverStatus,
     isFriendsView
@@ -35,6 +36,18 @@ export default function MainView({
                 <div className="offline-server-state">
                     <h1>Server offline</h1>
                     <p>This server is offline, deleted, or unreachable right now.</p>
+                    {backendUrl ? <small>{backendUrl}</small> : null}
+                </div>
+            </main>
+        );
+    }
+
+    if (serverStatus !== "online") {
+        return (
+            <main className="main">
+                <div className="offline-server-state">
+                    <h1>Checking server</h1>
+                    <p>Waiting for this server to respond before loading channels.</p>
                     {backendUrl ? <small>{backendUrl}</small> : null}
                 </div>
             </main>
@@ -68,6 +81,7 @@ export default function MainView({
                     channelId={channel.id}
                     currentUser={currentUser}
                     backendUrl={backendUrl}
+                    onServerOffline={onServerOffline}
                 />
             ) : (
                 <p>No layout found.</p>

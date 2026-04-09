@@ -51,6 +51,7 @@ import {
 } from "./features/servers/actions";
 
 const FRIENDS_TAB_ID = "__friends__";
+const SERVER_STATUS_RECHECK_MS = 30000;
 
 function isExpectedOfflineFetchError(error) {
     if (!error) return false;
@@ -59,7 +60,7 @@ function isExpectedOfflineFetchError(error) {
         return true;
     }
 
-    return /failed to fetch|networkerror|err_connection_refused/i.test(String(error.message || error));
+    return /failed to fetch|networkerror|err_connection_refused|server is offline|unreachable/i.test(String(error.message || error));
 }
 
 function App() {
@@ -192,6 +193,8 @@ function App() {
         }
 
         let disposed = false;
+        let checkInFlight = false;
+        let intervalId = null;
 
         setServerStatuses((prev) => {
             const next = { ...prev };
@@ -206,8 +209,29 @@ function App() {
         });
 
         async function checkJoinedServerStatuses() {
+            if (checkInFlight) {
+                return;
+            }
+
+            checkInFlight = true;
+
             const statusEntries = await Promise.all(
                 joinedServers.map(async (server) => {
+                    if (window.serverHealth?.check) {
+                        try {
+                            const result = await window.serverHealth.check(server.backendUrl);
+                            return [server.id, result?.online ? "online" : "offline"];
+                        } catch (error) {
+                            const missingMainHandler = /No handler registered for 'server-health:check'/i.test(
+                                String(error?.message || error)
+                            );
+
+                            if (!missingMainHandler) {
+                                return [server.id, "offline"];
+                            }
+                        }
+                    }
+
                     try {
                         await fetchServerData(server.backendUrl);
                         return [server.id, "online"];
@@ -218,24 +242,35 @@ function App() {
             );
 
             if (disposed) {
+                checkInFlight = false;
                 return;
             }
 
             setServerStatuses((prev) => {
                 const next = { ...prev };
+                let changed = false;
 
                 statusEntries.forEach(([serverId, status]) => {
-                    next[serverId] = status;
+                    if (next[serverId] !== status) {
+                        next[serverId] = status;
+                        changed = true;
+                    }
                 });
 
-                return next;
+                return changed ? next : prev;
             });
+
+            checkInFlight = false;
         }
 
         checkJoinedServerStatuses();
+        intervalId = window.setInterval(checkJoinedServerStatuses, SERVER_STATUS_RECHECK_MS);
 
         return () => {
             disposed = true;
+            if (intervalId) {
+                window.clearInterval(intervalId);
+            }
         };
     }, [currentUser, joinedServers]);
 
@@ -251,7 +286,9 @@ function App() {
 
             if (!selectedJoinedServer) return;
 
-            if (serverStatuses[selectedJoinedServer.id] === "offline") {
+            const selectedServerStatus = serverStatuses[selectedJoinedServer.id] || "checking";
+
+            if (selectedServerStatus !== "online") {
                 setServerData(null);
                 setCustomization(null);
                 setSelectedChannelId(null);
@@ -307,7 +344,7 @@ function App() {
                 return;
             }
 
-            if (serverStatuses[selectedJoinedServer.id] === "offline") {
+            if (serverStatuses[selectedJoinedServer.id] !== "online") {
                 setCustomization(null);
                 return;
             }
@@ -475,10 +512,16 @@ function App() {
     }
 
     function setServerStatus(serverId, status) {
-        setServerStatuses((prev) => ({
-            ...prev,
-            [serverId]: status
-        }));
+        setServerStatuses((prev) => {
+            if (prev[serverId] === status) {
+                return prev;
+            }
+
+            return {
+                ...prev,
+                [serverId]: status
+            };
+        });
     }
 
     function markSelectedServerOffline() {
@@ -658,6 +701,7 @@ function App() {
                         onFriendsActivityChange={setHasFriendsActivity}
                         onOpenClientSettings={() => setShowClientSettings(true)}
                         onLogout={handleLogout}
+                        onServerOffline={markSelectedServerOffline}
                         serverName={selectedJoinedServer?.name || serverData?.name || null}
                         serverStatus={selectedJoinedServer ? serverStatuses[selectedJoinedServer.id] : null}
                         isFriendsView={isFriendsView}
@@ -687,8 +731,14 @@ function App() {
             {showClientSettings ? (
                 <ClientSettingsModal
                     settings={clientSettings}
+                    currentUser={currentUser}
+                    profileMediaHostUrl={profileMediaHostUrl}
                     onChange={handleClientSettingChange}
                     onImport={handleClientSettingsImport}
+                    onUserUpdated={(user) => {
+                        setCurrentUser(user);
+                        saveAuthUser(user);
+                    }}
                     onReset={handleClientSettingsReset}
                     onClose={() => setShowClientSettings(false)}
                 />
