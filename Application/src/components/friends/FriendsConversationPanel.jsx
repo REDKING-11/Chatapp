@@ -1,3 +1,9 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+    fetchProfileAssetBlobUrl,
+    fetchProfileAssetManifest
+} from "../../features/profile/actions";
+
 function EmptyState({ title, description }) {
     return (
         <div className="friends-empty-state">
@@ -7,26 +13,243 @@ function EmptyState({ title, description }) {
     );
 }
 
-function MessageList({ messages, emptyText, messageListRef, currentUser }) {
+function isCurrentUserMessage(message, currentUser) {
+    return message.direction === "outgoing"
+        || (
+            message.senderUserId != null
+            && String(message.senderUserId) === String(currentUser?.id)
+        );
+}
+
+function getCurrentUserChatLabel(currentUser, nameMode) {
+    if (nameMode === "username") {
+        return currentUser?.handle || currentUser?.username || "You";
+    }
+
+    return currentUser?.displayName
+        || currentUser?.displayLabel
+        || currentUser?.usernameBase
+        || currentUser?.username
+        || "You";
+}
+
+function getParticipantChatLabel(participant, nameMode) {
+    if (nameMode === "username") {
+        return participant?.handle || participant?.username || "Friend";
+    }
+
+    return participant?.displayName
+        || participant?.displayLabel
+        || participant?.usernameBase
+        || participant?.username
+        || "Friend";
+}
+
+function getDirectFriendChatLabel(directFriend, nameMode) {
+    if (nameMode === "username") {
+        return directFriend?.friendHandle || directFriend?.friendUsername || "Friend";
+    }
+
+    return directFriend?.friendDisplayName
+        || directFriend?.friendUsernameBase
+        || directFriend?.friendUsername
+        || "Friend";
+}
+
+function getMessageDisplayName({ message, currentUser, participantsById, directFriend, nameMode }) {
+    if (isCurrentUserMessage(message, currentUser)) {
+        return getCurrentUserChatLabel(currentUser, nameMode);
+    }
+
+    const participant = participantsById?.[String(message.senderUserId)];
+    return participant
+        ? getParticipantChatLabel(participant, nameMode)
+        : getDirectFriendChatLabel(directFriend, nameMode);
+}
+
+function getInitials(label) {
+    const normalized = String(label || "").trim();
+    return normalized ? normalized.slice(0, 1).toUpperCase() : "?";
+}
+
+function getCompactLabelPrefix(label, length) {
+    const letters = String(label || "")
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]/gi, "");
+
+    if (!letters) {
+        return "?";
+    }
+
+    return letters.slice(0, Math.max(1, length)).toUpperCase();
+}
+
+function buildUniqueGroupInitials(participants, nameMode) {
+    const labelsByUserId = Object.fromEntries((participants || []).map((participant) => [
+        String(participant.userId),
+        getParticipantChatLabel(participant, nameMode)
+    ]));
+    const userIds = Object.keys(labelsByUserId);
+    const result = {};
+
+    userIds.forEach((userId) => {
+        const label = labelsByUserId[userId];
+        const maxLength = Math.max(1, String(label || "").replace(/[^a-z0-9]/gi, "").length);
+        let length = 1;
+
+        while (length < maxLength) {
+            const currentPrefix = getCompactLabelPrefix(label, length);
+            const hasCollision = userIds.some((otherUserId) => (
+                otherUserId !== userId
+                && getCompactLabelPrefix(labelsByUserId[otherUserId], length) === currentPrefix
+            ));
+
+            if (!hasCollision) {
+                break;
+            }
+
+            length += 1;
+        }
+
+        result[userId] = getCompactLabelPrefix(label, length);
+    });
+
+    return result;
+}
+
+function getMessageSenderUserId({ message, currentUser, directFriend }) {
+    if (message.senderUserId != null) {
+        return String(message.senderUserId);
+    }
+
+    if (message.direction === "outgoing" && currentUser?.id != null) {
+        return String(currentUser.id);
+    }
+
+    if (message.direction === "incoming" && directFriend?.friendUserId != null) {
+        return String(directFriend.friendUserId);
+    }
+
+    return "";
+}
+
+function useFriendMessageAvatarUrls({ userIds, profileMediaHostUrl, enabled }) {
+    const [avatarUrls, setAvatarUrls] = useState({});
+    const userIdKey = useMemo(
+        () => Array.from(new Set((userIds || []).filter(Boolean).map(String))).sort().join("|"),
+        [userIds]
+    );
+
+    useEffect(() => {
+        let cancelled = false;
+        const ownedUrls = [];
+        const normalizedUserIds = userIdKey ? userIdKey.split("|") : [];
+
+        setAvatarUrls({});
+
+        if (!enabled || !profileMediaHostUrl || normalizedUserIds.length === 0) {
+            return () => {};
+        }
+
+        async function loadAvatarUrls() {
+            const entries = await Promise.all(normalizedUserIds.map(async (userId) => {
+                const manifest = await fetchProfileAssetManifest({
+                    backendUrl: profileMediaHostUrl,
+                    userId
+                });
+
+                if (!manifest?.avatar?.hasAsset) {
+                    return null;
+                }
+
+                const avatarUrl = await fetchProfileAssetBlobUrl({
+                    backendUrl: profileMediaHostUrl,
+                    userId,
+                    assetType: "avatar"
+                });
+
+                if (!avatarUrl) {
+                    return null;
+                }
+
+                ownedUrls.push(avatarUrl);
+                return [userId, avatarUrl];
+            }));
+
+            if (cancelled) {
+                ownedUrls.forEach((url) => URL.revokeObjectURL(url));
+                return;
+            }
+
+            setAvatarUrls(Object.fromEntries(entries.filter(Boolean)));
+        }
+
+        loadAvatarUrls();
+
+        return () => {
+            cancelled = true;
+            ownedUrls.forEach((url) => URL.revokeObjectURL(url));
+        };
+    }, [enabled, profileMediaHostUrl, userIdKey]);
+
+    return avatarUrls;
+}
+
+function MessageList({
+    messages,
+    emptyText,
+    messageListRef,
+    currentUser,
+    participantsById = {},
+    directFriend = null,
+    avatarUrls = {},
+    groupInitialsByUserId = {},
+    identityStyle = "profileMedia",
+    nameMode = "displayName",
+    messageAlignment = "split"
+}) {
     return (
-        <div className="friends-message-list" ref={messageListRef}>
+        <div className={`friends-message-list align-${messageAlignment}`} ref={messageListRef}>
             {messages.length === 0 ? (
                 <p className="friends-empty-messages">{emptyText}</p>
             ) : (
                 messages.map((message) => {
-                    const isOutgoing = message.direction === "outgoing"
-                        || (
-                            message.senderUserId != null
-                            && String(message.senderUserId) === String(currentUser?.id)
-                        );
+                    const isOutgoing = isCurrentUserMessage(message, currentUser);
+                    const displayName = getMessageDisplayName({
+                        message,
+                        currentUser,
+                        participantsById,
+                        directFriend,
+                        nameMode
+                    });
+                    const senderUserId = getMessageSenderUserId({
+                        message,
+                        currentUser,
+                        directFriend
+                    });
+                    const avatarUrl = identityStyle === "profileMedia" ? avatarUrls[senderUserId] : null;
+                    const compactLabel = groupInitialsByUserId[senderUserId] || getInitials(displayName);
 
                     return (
                         <div
                             key={message.messageId}
-                            className={`friend-message-bubble ${isOutgoing ? "outgoing-friend-message" : "incoming-friend-message"}`}
+                            className={`friend-message-row ${identityStyle === "minimal" ? "is-minimal" : ""} ${isOutgoing ? "outgoing-friend-row" : "incoming-friend-row"}`}
                         >
-                            <small>{new Date(message.createdAt).toLocaleString()}</small>
-                            <span>{message.body}</span>
+                            <div className="friend-message-avatar">
+                                {avatarUrl ? (
+                                    <img src={avatarUrl} alt="" />
+                                ) : (
+                                    compactLabel
+                                )}
+                            </div>
+                            <div className={`friend-message-bubble ${isOutgoing ? "outgoing-friend-message" : "incoming-friend-message"}`}>
+                                <div className="friend-message-meta">
+                                    <strong>{displayName}</strong>
+                                    <time>{new Date(message.createdAt).toLocaleString()}</time>
+                                </div>
+                                <span>{message.body}</span>
+                            </div>
                         </div>
                     );
                 })
@@ -73,6 +296,8 @@ function DirectEncryptionStage({ lockPhase, submitting }) {
 
 function GroupConversationView({
     currentUser,
+    profileMediaHostUrl,
+    clientSettings,
     selectedGroupConversation,
     activeGroupParticipantNames,
     groupMessages,
@@ -82,6 +307,31 @@ function GroupConversationView({
     onGroupComposerChange,
     onSendGroupMessage
 }) {
+    const participantsById = Object.fromEntries(
+        (selectedGroupConversation?.participants || []).map((participant) => [
+            String(participant.userId),
+            participant
+        ])
+    );
+    const avatarUserIds = useMemo(
+        () => (selectedGroupConversation?.participants || [])
+            .map((participant) => participant.userId)
+            .filter(Boolean),
+        [selectedGroupConversation?.participants]
+    );
+    const identityStyle = clientSettings?.chatIdentityStyle || "profileMedia";
+    const nameMode = clientSettings?.chatNameMode || "displayName";
+    const messageAlignment = clientSettings?.chatMessageAlignment || "split";
+    const groupInitialsByUserId = useMemo(
+        () => buildUniqueGroupInitials(selectedGroupConversation?.participants || [], nameMode),
+        [selectedGroupConversation?.participants, nameMode]
+    );
+    const avatarUrls = useFriendMessageAvatarUrls({
+        userIds: avatarUserIds,
+        profileMediaHostUrl,
+        enabled: identityStyle === "profileMedia" && clientSettings?.autoLoadProfileAvatars !== false
+    });
+
     if (!selectedGroupConversation) {
         return (
             <EmptyState
@@ -116,6 +366,12 @@ function GroupConversationView({
                 emptyText="No messages yet. Start the group conversation."
                 messageListRef={messageListRef}
                 currentUser={currentUser}
+                participantsById={participantsById}
+                avatarUrls={avatarUrls}
+                groupInitialsByUserId={groupInitialsByUserId}
+                identityStyle={identityStyle}
+                nameMode={nameMode}
+                messageAlignment={messageAlignment}
             />
 
             <form className="friend-composer" onSubmit={onSendGroupMessage}>
@@ -135,6 +391,8 @@ function GroupConversationView({
 
 function DirectConversationView({
     currentUser,
+    profileMediaHostUrl,
+    clientSettings,
     selectedFriend,
     effectiveSelectedFriend,
     secureStatusRef,
@@ -165,6 +423,22 @@ function DirectConversationView({
     onComposerChange,
     onSendMessage
 }) {
+    const avatarUserIds = useMemo(
+        () => [
+            currentUser?.id,
+            selectedFriend?.friendUserId
+        ].filter(Boolean),
+        [currentUser?.id, selectedFriend?.friendUserId]
+    );
+    const identityStyle = clientSettings?.chatIdentityStyle || "profileMedia";
+    const nameMode = clientSettings?.chatNameMode || "displayName";
+    const messageAlignment = clientSettings?.chatMessageAlignment || "split";
+    const avatarUrls = useFriendMessageAvatarUrls({
+        userIds: avatarUserIds,
+        profileMediaHostUrl,
+        enabled: identityStyle === "profileMedia" && clientSettings?.autoLoadProfileAvatars !== false
+    });
+
     if (!selectedFriend) {
         return (
             <EmptyState
@@ -331,31 +605,23 @@ function DirectConversationView({
                 </div>
             ) : null}
 
-            <div className="friends-message-list" ref={messageListRef}>
-                {showEncryptionStage ? (
+            {showEncryptionStage ? (
+                <div className="friends-message-list" ref={messageListRef}>
                     <DirectEncryptionStage lockPhase={lockPhase} submitting={submitting} />
-                ) : messages.length === 0 ? (
-                    <p className="friends-empty-messages">No messages yet. Start the conversation.</p>
-                ) : (
-                    messages.map((message) => {
-                        const isOutgoing = message.direction === "outgoing"
-                            || (
-                                message.senderUserId != null
-                                && String(message.senderUserId) === String(currentUser?.id)
-                            );
-
-                        return (
-                            <div
-                                key={message.messageId}
-                                className={`friend-message-bubble ${isOutgoing ? "outgoing-friend-message" : "incoming-friend-message"}`}
-                            >
-                                <small>{new Date(message.createdAt).toLocaleString()}</small>
-                                <span>{message.body}</span>
-                            </div>
-                        );
-                    })
-                )}
-            </div>
+                </div>
+            ) : (
+                <MessageList
+                    messages={messages}
+                    emptyText="No messages yet. Start the conversation."
+                    messageListRef={messageListRef}
+                    currentUser={currentUser}
+                    directFriend={selectedFriend}
+                    avatarUrls={avatarUrls}
+                    identityStyle={identityStyle}
+                    nameMode={nameMode}
+                    messageAlignment={messageAlignment}
+                />
+            )}
 
             <form className="friend-composer" onSubmit={onSendMessage}>
                 <textarea

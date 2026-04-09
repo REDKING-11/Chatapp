@@ -242,7 +242,12 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
     tag: relayItem.tag
   });
 
-  if (!conversation.messages.find((message) => message.messageId === plaintext.id)) {
+  const alreadyExists = conversation.messages.find((message) => (
+    message.messageId === plaintext.id
+    || message.id === plaintext.id
+  ));
+
+  if (!alreadyExists) {
     conversation.messages.push({
       messageId: plaintext.id,
       senderUserId: relayItem.senderUserId ?? null,
@@ -259,7 +264,8 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
 
   return {
     ...plaintext,
-    direction: "incoming"
+    direction: "incoming",
+    imported: !alreadyExists
   };
 }
 

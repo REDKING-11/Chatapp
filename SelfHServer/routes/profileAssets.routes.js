@@ -10,23 +10,11 @@ const {
 const router = express.Router();
 
 router.get("/profile-assets/:userId/manifest", async (req, res) => {
-    const user = await verifyUser(req);
-
-    if (!user) {
-        return res.status(401).json({ error: "Unauthorized" });
-    }
-
     const manifest = getProfileAssetManifest(req.params.userId);
     res.json(manifest);
 });
 
 router.get("/profile-assets/:userId/:assetType", async (req, res) => {
-    const user = await verifyUser(req);
-
-    if (!user) {
-        return res.status(401).json({ error: "Unauthorized" });
-    }
-
     const assetType = req.params.assetType === "banner" ? "banner" : "avatar";
     const asset = getProfileAssetFile(req.params.userId, assetType);
 

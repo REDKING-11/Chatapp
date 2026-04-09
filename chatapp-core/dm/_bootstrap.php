@@ -2,8 +2,9 @@
 
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../auth_required.php';
+require_once __DIR__ . '/../user_profile.php';
 
-const DM_RELAY_TTL_SECONDS = 0;
+const DM_RELAY_TTL_SECONDS = 86400;
 const DM_ALLOWED_RELAY_TTLS = [0, 43200, 86400, 172800, 259200, 345600];
 
 function dmColumnExists(PDO $db, string $table, string $column): bool {
@@ -179,7 +180,13 @@ function dmFetchConversationPayload(PDO $db, int $conversationId): array {
     $conversation = dmLoadConversationDetailOrFail($db, $conversationId);
 
     $participantsStmt = $db->prepare('
-        SELECT p.user_id, u.username, p.joined_at
+        SELECT
+            p.user_id,
+            u.id,
+            u.username,
+            p.joined_at,
+            ' . userProfileUsernameTagSelect($db, 'u') . ',
+            ' . userProfileDisplayNameSelect($db, 'u') . '
         FROM dm_conversation_participants p
         JOIN users u ON u.id = p.user_id
         WHERE p.conversation_id = ?
@@ -231,9 +238,16 @@ function dmFetchConversationPayload(PDO $db, int $conversationId): array {
             'relayPolicy' => dmBuildRelayPolicyRow($conversation),
             'pendingInviteCount' => $pendingInviteCount,
             'participants' => array_map(function ($row) {
+                $profile = userProfileFromRow($row);
+
                 return [
                     'userId' => (int)$row['user_id'],
-                    'username' => $row['username'],
+                    'username' => $profile['username'],
+                    'handle' => $profile['handle'],
+                    'usernameBase' => $profile['usernameBase'],
+                    'usernameTag' => $profile['usernameTag'],
+                    'displayName' => $profile['displayName'],
+                    'displayLabel' => $profile['displayLabel'],
                     'joinedAt' => $row['joined_at']
                 ];
             }, $participants),

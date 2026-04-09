@@ -4,6 +4,7 @@ ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../user_profile.php';
 
 $data = readJsonInput();
 
@@ -11,6 +12,7 @@ $username = trim($data['username'] ?? '');
 $password = trim($data['password'] ?? '');
 $email = trim($data['email'] ?? '');
 $phone = trim($data['phone'] ?? '');
+$usernameTag = userProfileNormalizeTag(array_key_exists('usernameTag', $data) ? (string)$data['usernameTag'] : null);
 
 if ($username === '' || $password === '') {
     jsonResponse(['error' => 'Username and password are required'], 400);
@@ -52,27 +54,52 @@ if ($phone !== '') {
     }
 }
 
-$passwordHash = password_hash($password, PASSWORD_DEFAULT);
+if ($usernameTag !== null && $usernameTag !== '' && userProfileColumnExists($db, 'users', 'username_tag')) {
+    $stmt = $db->prepare('SELECT id FROM users WHERE username = ? AND username_tag = ?');
+    $stmt->execute([$username, $usernameTag]);
+    if ($stmt->fetch()) {
+        jsonResponse(['error' => 'That username tag is already in use'], 409);
+    }
+}
 
-$stmt = $db->prepare('
-    INSERT INTO users (username, email, phone, password_hash)
-    VALUES (?, ?, ?, ?)
-');
-$stmt->execute([
+$passwordHash = password_hash($password, PASSWORD_DEFAULT);
+$insertFields = ['username', 'email', 'phone', 'password_hash'];
+$insertValues = ['?', '?', '?', '?'];
+$insertParams = [
     $username,
     $email !== '' ? $email : null,
     $phone !== '' ? $phone : null,
     $passwordHash
-]);
+];
+
+if (userProfileColumnExists($db, 'users', 'username_tag')) {
+    $insertFields[] = 'username_tag';
+    $insertValues[] = '?';
+    $insertParams[] = $usernameTag !== null && $usernameTag !== '' ? $usernameTag : userProfileGenerateRandomTag();
+}
+
+$stmt = $db->prepare('
+    INSERT INTO users (' . implode(', ', $insertFields) . ')
+    VALUES (' . implode(', ', $insertValues) . ')
+');
+$stmt->execute($insertParams);
 
 $userId = (int)$db->lastInsertId();
 
 jsonResponse([
     'ok' => true,
-    'user' => [
-        'id' => $userId,
-        'username' => $username,
-        'email' => $email !== '' ? $email : null,
-        'phone' => $phone !== '' ? $phone : null
-    ]
+    'user' => array_merge(
+        [
+            'id' => $userId,
+            'email' => $email !== '' ? $email : null,
+            'phone' => $phone !== '' ? $phone : null
+        ],
+        userProfileFromRow([
+            'id' => $userId,
+            'username' => $username,
+            'username_tag' => userProfileColumnExists($db, 'users', 'username_tag')
+                ? ($usernameTag !== null && $usernameTag !== '' ? $usernameTag : $insertParams[count($insertParams) - 1])
+                : null
+        ])
+    )
 ], 201);

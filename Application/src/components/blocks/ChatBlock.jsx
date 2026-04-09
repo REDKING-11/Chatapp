@@ -4,7 +4,7 @@ import MessageList from "../../features/chat/components/MessageList";
 import ChatActionBanner from "../../features/chat/components/ChatActionBanner";
 import ChatComposer from "../../features/chat/components/ChatComposer";
 
-export default function ChatBlock({ channelId, currentUser, backendUrl }) {
+export default function ChatBlock({ channelId, currentUser, backendUrl, onServerOffline }) {
     const [input, setInput] = useState("");
     const [replyTo, setReplyTo] = useState(null);
     const [editingMessageId, setEditingMessageId] = useState(null);
@@ -19,7 +19,8 @@ export default function ChatBlock({ channelId, currentUser, backendUrl }) {
     } = useChatMessages({
         channelId,
         currentUser,
-        backendUrl
+        backendUrl,
+        onServerOffline
     });
 
     function startEdit(message) {

@@ -16,6 +16,10 @@ $stmt = $db->prepare('
         f.created_at,
         f.responded_at,
         ? AS current_user_id,
+        ' . userProfileUsernameTagSelect($db, 'requester', 'requester_username_tag') . ',
+        ' . userProfileUsernameTagSelect($db, 'addressee', 'addressee_username_tag') . ',
+        ' . userProfileDisplayNameSelect($db, 'requester', 'requester_display_name') . ',
+        ' . userProfileDisplayNameSelect($db, 'addressee', 'addressee_display_name') . ',
         requester.username AS requester_username,
         addressee.username AS addressee_username
     FROM friendships f

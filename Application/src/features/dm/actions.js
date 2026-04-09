@@ -72,10 +72,14 @@ async function handleRealtimeDelivery({ currentUser, relayItem, token }) {
     });
   }
 
-  dispatchRealtimeEvent("secureDmMessage", {
-    conversationId: relayItem.conversationId,
-    message
-  });
+  if (message?.imported === true) {
+    dispatchRealtimeEvent("secureDmMessage", {
+      conversationId: relayItem.conversationId,
+      message
+    });
+  }
+
+  return message;
 }
 
 export function closeRealtimeConnection() {
@@ -159,19 +163,33 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
             pendingCount: (payload.items || []).length
           });
 
+          let importedCount = 0;
+
           for (const item of payload.items || []) {
-            await handleRealtimeDelivery({
+            const message = await handleRealtimeDelivery({
               currentUser,
               token,
               relayItem: item
             });
+
+            if (message?.imported === true) {
+              importedCount += 1;
+            }
           }
 
-          dispatchRealtimeEvent("secureDmSyncState", {
-            status: "complete",
-            source: "realtime",
-            importedCount: (payload.items || []).length
-          });
+          if (importedCount > 0) {
+            dispatchRealtimeEvent("secureDmSyncState", {
+              status: "complete",
+              source: "realtime",
+              importedCount
+            });
+          } else {
+            dispatchRealtimeEvent("secureDmSyncState", {
+              status: "idle",
+              source: "realtime",
+              importedCount: 0
+            });
+          }
           return;
         }
 
@@ -423,7 +441,9 @@ export async function pullRelayMessages({ token, currentUser }) {
       throw error;
     }
 
-    imported.push(message);
+    if (message?.imported === true) {
+      imported.push(message);
+    }
 
     await fetch(`${CORE_API_BASE}/dm/relay/ack.php`, {
       method: "POST",
@@ -440,6 +460,12 @@ export async function pullRelayMessages({ token, currentUser }) {
       status: "complete",
       source: "poll",
       importedCount: imported.length
+    });
+  } else if ((relayData.items || []).length > 0) {
+    dispatchRealtimeEvent("secureDmSyncState", {
+      status: "idle",
+      source: "poll",
+      importedCount: 0
     });
   }
 

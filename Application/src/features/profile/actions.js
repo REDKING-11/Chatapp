@@ -21,18 +21,28 @@ async function readFileAsDataUrl(file) {
     });
 }
 
-export async function uploadProfileAssets({ backendUrl, avatarFile = null, bannerFile = null }) {
+export async function uploadProfileAssets({
+    backendUrl,
+    avatarFile = null,
+    bannerFile = null,
+    avatarDataUrl = null,
+    bannerDataUrl = null
+}) {
     if (!backendUrl) {
         throw new Error("No shared server is available to host your profile images yet.");
     }
 
     const payload = {};
 
-    if (avatarFile) {
+    if (avatarDataUrl) {
+        payload.avatarDataUrl = avatarDataUrl;
+    } else if (avatarFile) {
         payload.avatarDataUrl = await readFileAsDataUrl(avatarFile);
     }
 
-    if (bannerFile) {
+    if (bannerDataUrl) {
+        payload.bannerDataUrl = bannerDataUrl;
+    } else if (bannerFile) {
         payload.bannerDataUrl = await readFileAsDataUrl(bannerFile);
     }
 
@@ -66,9 +76,19 @@ export async function fetchProfileAssetManifest({ backendUrl, userId }) {
         return null;
     }
 
-    const res = await fetch(`${backendUrl}/api/profile-assets/${userId}/manifest`, {
-        headers: buildAuthHeaders()
-    });
+    let res;
+
+    try {
+        res = await fetch(`${backendUrl}/api/profile-assets/${userId}/manifest`, {
+            headers: buildAuthHeaders()
+        });
+    } catch {
+        return null;
+    }
+
+    if ([401, 403, 404].includes(res.status)) {
+        return null;
+    }
 
     return parseJsonResponse(res, "Failed to load profile assets");
 }
@@ -79,12 +99,18 @@ export async function fetchProfileAssetBlobUrl({ backendUrl, userId, assetType }
     }
 
     const normalizedAssetType = assetType === "banner" ? "banner" : "avatar";
-    const res = await fetch(`${backendUrl}/api/profile-assets/${userId}/${normalizedAssetType}`, {
-        headers: buildAuthHeaders()
-    });
+    let res;
+
+    try {
+        res = await fetch(`${backendUrl}/api/profile-assets/${userId}/${normalizedAssetType}`, {
+            headers: buildAuthHeaders()
+        });
+    } catch {
+        return null;
+    }
 
     if (!res.ok) {
-        if (res.status === 404) {
+        if ([401, 403, 404].includes(res.status)) {
             return null;
         }
 

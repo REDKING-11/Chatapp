@@ -2085,14 +2085,87 @@ body {
 }
 
 
+.friend-message-row {
+    width: fit-content;
+    max-width: min(78%, 620px);
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.outgoing-friend-row {
+    margin-left: auto;
+    flex-direction: row-reverse;
+}
+
+.friends-message-list.align-allLeft .outgoing-friend-row,
+.friends-message-list.align-mineLeft .outgoing-friend-row {
+    margin-left: 0;
+    flex-direction: row;
+}
+
+.friends-message-list.align-allRight .friend-message-row,
+.friends-message-list.align-mineLeft .incoming-friend-row {
+    margin-left: auto;
+    flex-direction: row-reverse;
+}
+
+.friend-message-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 12px;
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background:
+        radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.28), transparent 26%),
+        linear-gradient(135deg, var(--server-accent), var(--shell-accent));
+    color: white;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.03em;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.friend-message-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.friend-message-row.is-minimal {
+    align-items: flex-start;
+    gap: 7px;
+}
+
+.friend-message-row.is-minimal .friend-message-avatar {
+    width: auto;
+    min-width: 14px;
+    height: auto;
+    margin-top: 8px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--server-text);
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1;
+    letter-spacing: 0.02em;
+}
+
+.outgoing-friend-row.is-minimal .friend-message-avatar {
+    color: rgba(255, 255, 255, 0.9);
+}
+
 .friend-message-bubble {
     width: fit-content;
-    max-width: min(68%, 460px);
+    max-width: 100%;
     padding: 8px 12px;
     border-radius: 16px;
     display: inline-flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
     word-break: break-word;
 }
 
@@ -2102,15 +2175,39 @@ body {
 }
 
 .outgoing-friend-message {
-    margin-left: auto;
     background: var(--server-accent);
     color: white;
 }
 
-.friend-message-bubble small {
-    margin: 0;
-    opacity: 0.72;
-    line-height: 1.2;
+.friend-message-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 9px;
+    line-height: 1.1;
+    color: var(--server-text-muted);
+}
+
+.outgoing-friend-message .friend-message-meta {
+    color: rgba(255, 255, 255, 0.74);
+}
+
+.friend-message-meta strong {
+    color: inherit;
+    font-size: 11px;
+    line-height: 1;
+}
+
+.friend-message-meta span,
+.friend-message-meta time {
+    opacity: 0.74;
+    font-size: 9px;
+    line-height: 1;
+}
+
+.friend-message-meta time {
+    letter-spacing: 0.01em;
 }
 
 .settings-header-actions {
@@ -2906,7 +3003,7 @@ body[data-high-contrast="true"] .client-settings-section {
 }
 
 .client-settings-window {
-    width: min(980px, 96vw);
+    width: min(1180px, 96vw);
     max-height: 92vh;
     overflow: auto;
     background: var(--shell-surface);
@@ -3009,6 +3106,70 @@ body[data-high-contrast="true"] .client-settings-section {
     gap: 16px;
     padding: calc(var(--client-panel-padding) + 4px);
     background: var(--shell-bg);
+    min-width: 0;
+}
+
+.client-settings-body {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    min-height: min(760px, 78vh);
+    background: var(--shell-bg);
+}
+
+.client-settings-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 18px;
+    border-right: 1px solid var(--shell-border);
+    background: color-mix(in srgb, var(--shell-surface) 92%, black);
+    position: sticky;
+    top: 0;
+    align-self: start;
+    min-height: min(760px, 78vh);
+}
+
+.client-settings-user-card {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+    padding: 10px;
+    border-radius: calc(14px * var(--client-radius-multiplier));
+    background: color-mix(in srgb, var(--shell-surface-alt) 72%, transparent);
+}
+
+.client-settings-user-card strong,
+.client-settings-user-card span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.client-settings-user-card span {
+    margin-top: 3px;
+    color: var(--shell-text-muted);
+    font-size: 12px;
+}
+
+.client-settings-user-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--shell-accent), color-mix(in srgb, var(--shell-accent) 45%, #111827));
+    color: white;
+    font-weight: 800;
+}
+
+.client-settings-user-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .client-settings-section {
@@ -3041,18 +3202,19 @@ body[data-high-contrast="true"] .client-settings-section {
 
 .client-settings-tabs {
     display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 6px;
 }
 
 .client-settings-tab {
     border: 1px solid var(--shell-border);
     border-radius: calc(12px * var(--client-radius-multiplier));
-    padding: 10px 14px;
-    background: color-mix(in srgb, var(--shell-surface-alt) 84%, transparent);
+    padding: 11px 12px;
+    background: transparent;
     color: var(--shell-text-muted);
     cursor: pointer;
     font-weight: 700;
+    text-align: left;
 }
 
 .client-settings-tab.active {
@@ -3262,9 +3424,245 @@ body[data-high-contrast="true"] .client-settings-section {
     gap: 8px;
 }
 
+.client-settings-field input {
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px;
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    border: 1px solid var(--shell-border);
+    background: var(--shell-input);
+    color: var(--shell-text);
+}
+
 .client-settings-field span {
     color: var(--shell-text-muted);
     font-size: 14px;
+}
+
+.client-settings-success {
+    margin: 0;
+    color: #86efac;
+}
+
+.client-settings-muted {
+    margin: 0;
+    color: var(--shell-text-muted);
+}
+
+.client-settings-inline-actions,
+.client-profile-media-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.client-settings-inline-actions button,
+.client-profile-media-actions button {
+    border: 1px solid color-mix(in srgb, var(--shell-border) 88%, transparent);
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    min-height: 42px;
+    padding: 0 14px;
+    background: var(--shell-accent);
+    color: white;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.client-settings-inline-actions button.secondary,
+.client-profile-media-actions button.secondary {
+    background: color-mix(in srgb, var(--shell-surface-alt) 86%, transparent);
+    color: var(--shell-text);
+}
+
+.client-settings-inline-actions button:disabled,
+.client-profile-media-actions button:disabled {
+    opacity: 0.54;
+    cursor: not-allowed;
+}
+
+.client-profile-card {
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 78%, transparent);
+    border-radius: calc(18px * var(--client-radius-multiplier));
+    background: var(--shell-surface-alt);
+}
+
+.client-profile-banner {
+    min-height: 128px;
+    background:
+        radial-gradient(circle at 72% 20%, rgba(255, 255, 255, 0.72) 0 4px, transparent 5px),
+        radial-gradient(circle at 64% 38%, rgba(255, 255, 255, 0.56) 0 3px, transparent 4px),
+        linear-gradient(135deg, color-mix(in srgb, var(--shell-accent) 86%, #60a5fa), #4169e1);
+    background-size: cover;
+    background-position: center;
+}
+
+.client-profile-card-body {
+    display: flex;
+    align-items: flex-end;
+    gap: 14px;
+    padding: 0 18px 18px;
+    margin-top: -30px;
+}
+
+.client-profile-avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 22px;
+    border: 6px solid var(--shell-surface-alt);
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--shell-accent), #1e293b);
+    color: white;
+    font-size: 28px;
+    font-weight: 800;
+}
+
+.client-profile-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.client-profile-name-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    padding-bottom: 6px;
+}
+
+.client-profile-name-stack strong,
+.client-profile-name-stack span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.client-profile-name-stack span {
+    color: var(--shell-text-muted);
+}
+
+.client-settings-muted p {
+    margin: 4px 0;
+}
+
+.client-media-editor-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.68);
+    backdrop-filter: blur(10px);
+}
+
+.client-media-editor {
+    width: min(760px, 96vw);
+    max-height: 92vh;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 22px;
+    border-radius: calc(22px * var(--client-radius-multiplier));
+    border: 1px solid var(--shell-border);
+    background: color-mix(in srgb, var(--shell-surface) 96%, black);
+    box-shadow: 0 26px 90px rgba(0, 0, 0, 0.58);
+}
+
+.client-media-editor-header,
+.client-media-editor-actions {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+}
+
+.client-media-editor-header h3,
+.client-media-editor-header p {
+    margin: 0;
+}
+
+.client-media-editor-header p {
+    margin-top: 6px;
+    color: var(--shell-text-muted);
+}
+
+.client-media-crop-preview {
+    width: 100%;
+    border-radius: calc(18px * var(--client-radius-multiplier));
+    border: 1px solid color-mix(in srgb, var(--shell-border) 80%, transparent);
+    background-repeat: no-repeat;
+    background-color: #050816;
+    box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.08);
+}
+
+.client-media-crop-preview.is-avatar {
+    width: min(420px, 82vw);
+    aspect-ratio: 1;
+    align-self: center;
+}
+
+.client-media-crop-preview.is-banner {
+    aspect-ratio: 3 / 1;
+    min-height: 180px;
+}
+
+.client-media-editor-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.client-media-editor-controls label {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-radius: calc(14px * var(--client-radius-multiplier));
+    background: color-mix(in srgb, var(--shell-surface-alt) 76%, transparent);
+}
+
+.client-media-editor-controls span {
+    color: var(--shell-text-muted);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.client-media-editor-controls input {
+    width: 100%;
+    accent-color: var(--shell-accent);
+}
+
+.client-media-editor-actions {
+    justify-content: flex-end;
+}
+
+.client-media-editor-actions button {
+    min-height: 42px;
+    padding: 0 16px;
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    border: 1px solid color-mix(in srgb, var(--shell-border) 88%, transparent);
+    background: var(--shell-accent);
+    color: white;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.client-media-editor-actions button.secondary,
+.client-media-editor-header button.secondary {
+    background: color-mix(in srgb, var(--shell-surface-alt) 86%, transparent);
+    color: var(--shell-text);
+}
+
+.client-media-editor-actions button:disabled {
+    opacity: 0.58;
+    cursor: not-allowed;
 }
 
 .client-accessibility-grid {
@@ -3463,6 +3861,26 @@ body[data-high-contrast="true"] .client-settings-section {
     .client-toggle-card {
         flex-direction: column;
         align-items: stretch;
+    }
+
+    .client-settings-body {
+        grid-template-columns: 1fr;
+    }
+
+    .client-settings-sidebar {
+        position: static;
+        min-height: 0;
+        border-right: none;
+        border-bottom: 1px solid var(--shell-border);
+    }
+
+    .client-settings-tabs {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+
+    .client-media-editor-controls {
+        grid-template-columns: 1fr;
     }
 
     .client-accessibility-grid {

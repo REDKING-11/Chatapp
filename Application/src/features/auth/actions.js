@@ -27,6 +27,20 @@ export async function registerUser({ username, password, email, phone }) {
     return parseJsonResponse(res, "Register failed");
 }
 
+export async function updateUserProfile({ displayName }) {
+    const token = localStorage.getItem("authToken");
+    const res = await fetch(`${CORE_API_BASE}/auth/profile.php`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ displayName })
+    });
+
+    return parseJsonResponse(res, "Failed to update profile");
+}
+
 export function saveAuthSession({ token, user }) {
     localStorage.setItem("authToken", token);
     localStorage.setItem("authUser", JSON.stringify(user));

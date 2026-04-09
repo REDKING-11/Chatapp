@@ -146,6 +146,9 @@ export const CLIENT_SETTINGS_DEFAULTS = {
     debugMode: false,
     friendTagFolders: DEFAULT_FRIEND_TAG_FOLDERS,
     friendTagAssignments: {},
+    chatIdentityStyle: "profileMedia",
+    chatNameMode: "displayName",
+    chatMessageAlignment: "split",
     autoLoadProfileAvatars: true,
     autoLoadProfileBanners: false,
     sharedServerProfileMediaOnly: true
@@ -270,6 +273,15 @@ function sanitizeSettings(raw) {
     next.debugMode = Boolean(next.debugMode);
     next.friendTagFolders = sanitizeFriendTagFolders(next.friendTagFolders);
     next.friendTagAssignments = sanitizeFriendTagAssignments(next.friendTagAssignments);
+    if (!["profileMedia", "minimal"].includes(next.chatIdentityStyle)) {
+        next.chatIdentityStyle = CLIENT_SETTINGS_DEFAULTS.chatIdentityStyle;
+    }
+    if (!["displayName", "username"].includes(next.chatNameMode)) {
+        next.chatNameMode = CLIENT_SETTINGS_DEFAULTS.chatNameMode;
+    }
+    if (!["split", "allLeft", "allRight", "mineLeft"].includes(next.chatMessageAlignment)) {
+        next.chatMessageAlignment = CLIENT_SETTINGS_DEFAULTS.chatMessageAlignment;
+    }
     next.autoLoadProfileAvatars = Boolean(next.autoLoadProfileAvatars);
     next.autoLoadProfileBanners = Boolean(next.autoLoadProfileBanners);
     next.sharedServerProfileMediaOnly = Boolean(next.sharedServerProfileMediaOnly);
@@ -290,9 +302,11 @@ export function saveClientSettings(settings) {
     const next = sanitizeSettings(settings);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("clientSettingsChanged", {
-            detail: next
-        }));
+        window.setTimeout(() => {
+            window.dispatchEvent(new CustomEvent("clientSettingsChanged", {
+                detail: next
+            }));
+        }, 0);
     }
     return next;
 }

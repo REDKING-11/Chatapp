@@ -86,10 +86,10 @@ function FriendCard({
             onClick={() => onSelectFriend(friend.friendUserId)}
             onContextMenu={(event) => onOpenFriendContextMenu(event, friend)}
         >
-            <strong>{friend.friendUsername}</strong>
             {assignedTag ? (
                 <small className="friend-tag-pill">{assignedTag.label}</small>
             ) : null}
+            <strong>{friend.friendUsername}</strong>
             {friend.conversationId ? (
                 conversationPreviews[String(friend.conversationId)]?.hasMessage ? null : (
                     <span>DM ready</span>

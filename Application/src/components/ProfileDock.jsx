@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-    deleteProfileAsset,
     fetchProfileAssetBlobUrl,
-    fetchProfileAssetManifest,
-    uploadProfileAssets
+    fetchProfileAssetManifest
 } from "../features/profile/actions";
 
 function getUserLabel(user) {
@@ -44,12 +42,10 @@ export default function ProfileDock({
     const [profileManifest, setProfileManifest] = useState(null);
     const [avatarUrl, setAvatarUrl] = useState(null);
     const [bannerUrl, setBannerUrl] = useState(null);
-    const [uploading, setUploading] = useState(false);
+    const [mediaRefreshNonce, setMediaRefreshNonce] = useState(0);
     const cardRef = useRef(null);
     const contextMenuRef = useRef(null);
     const buttonRef = useRef(null);
-    const avatarInputRef = useRef(null);
-    const bannerInputRef = useRef(null);
     const userLabel = useMemo(() => getUserLabel(currentUser), [currentUser]);
     const userHandle = useMemo(() => getUserHandle(currentUser), [currentUser]);
     const initials = useMemo(() => getInitials(userLabel), [userLabel]);
@@ -75,7 +71,16 @@ export default function ProfileDock({
         }
 
         loadManifest();
-    }, [currentUser?.id, profileMediaHostUrl]);
+    }, [currentUser?.id, mediaRefreshNonce, profileMediaHostUrl]);
+
+    useEffect(() => {
+        function handleProfileMediaUpdated() {
+            setMediaRefreshNonce((value) => value + 1);
+        }
+
+        window.addEventListener("profileMediaUpdated", handleProfileMediaUpdated);
+        return () => window.removeEventListener("profileMediaUpdated", handleProfileMediaUpdated);
+    }, []);
 
     useEffect(() => {
         let revokedUrl = null;
@@ -170,57 +175,6 @@ export default function ProfileDock({
         setContextMenuOpen(false);
     }
 
-    async function refreshManifest() {
-        if (!profileMediaHostUrl || !currentUser?.id) {
-            setProfileManifest(null);
-            return;
-        }
-
-        const manifest = await fetchProfileAssetManifest({
-            backendUrl: profileMediaHostUrl,
-            userId: currentUser.id
-        });
-        setProfileManifest(manifest);
-    }
-
-    async function handleImageUpload(event, assetType) {
-        const file = event.target.files?.[0];
-        event.target.value = "";
-
-        if (!file) {
-            return;
-        }
-
-        try {
-            setUploading(true);
-            await uploadProfileAssets({
-                backendUrl: profileMediaHostUrl,
-                avatarFile: assetType === "avatar" ? file : null,
-                bannerFile: assetType === "banner" ? file : null
-            });
-            await refreshManifest();
-        } catch (error) {
-            window.alert(error.message || "Could not upload that profile image.");
-        } finally {
-            setUploading(false);
-        }
-    }
-
-    async function handleRemoveAsset(assetType) {
-        try {
-            setUploading(true);
-            await deleteProfileAsset({
-                backendUrl: profileMediaHostUrl,
-                assetType
-            });
-            await refreshManifest();
-        } catch (error) {
-            window.alert(error.message || "Could not remove that profile image.");
-        } finally {
-            setUploading(false);
-        }
-    }
-
     return (
         <div className="profile-dock">
             {isCardOpen ? (
@@ -265,49 +219,9 @@ export default function ProfileDock({
                             <span>{userHandle}</span>
                         </div>
 
-                        <div className="profile-dock-upload-row">
-                            <input
-                                ref={avatarInputRef}
-                                type="file"
-                                accept="image/png,image/jpeg,image/webp"
-                                className="client-hidden-input"
-                                onChange={(event) => handleImageUpload(event, "avatar")}
-                            />
-                            <input
-                                ref={bannerInputRef}
-                                type="file"
-                                accept="image/png,image/jpeg,image/webp"
-                                className="client-hidden-input"
-                                onChange={(event) => handleImageUpload(event, "banner")}
-                            />
-                            <button type="button" onClick={() => avatarInputRef.current?.click()} disabled={uploading || !profileMediaHostUrl}>
-                                {profileManifest?.avatar?.hasAsset ? "Change avatar" : "Upload avatar"}
-                            </button>
-                            <button type="button" onClick={() => bannerInputRef.current?.click()} disabled={uploading || !profileMediaHostUrl}>
-                                {profileManifest?.banner?.hasAsset ? "Change bg" : "Upload bg"}
-                            </button>
+                        <div className="profile-dock-host-note">
+                            Edit your display name, avatar, and background from Client Settings, Profile.
                         </div>
-
-                        {profileManifest?.avatar?.hasAsset || profileManifest?.banner?.hasAsset ? (
-                            <div className="profile-dock-upload-row compact">
-                                {profileManifest?.avatar?.hasAsset ? (
-                                    <button type="button" onClick={() => handleRemoveAsset("avatar")} disabled={uploading}>
-                                        Remove avatar
-                                    </button>
-                                ) : null}
-                                {profileManifest?.banner?.hasAsset ? (
-                                    <button type="button" onClick={() => handleRemoveAsset("banner")} disabled={uploading}>
-                                        Remove bg
-                                    </button>
-                                ) : null}
-                            </div>
-                        ) : null}
-
-                        {!profileMediaHostUrl ? (
-                            <div className="profile-dock-host-note">
-                                Join a server first to host your profile images there.
-                            </div>
-                        ) : null}
                     </div>
                 </div>
             ) : null}

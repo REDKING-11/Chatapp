@@ -1,10 +1,17 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     CLIENT_SETTINGS_DEFAULTS,
     downloadClientSettings,
     importClientSettingsFromFile,
     THEME_PRESETS
 } from "../features/clientSettings";
+import { updateUserProfile } from "../features/auth/actions";
+import {
+    deleteProfileAsset,
+    fetchProfileAssetBlobUrl,
+    fetchProfileAssetManifest,
+    uploadProfileAssets
+} from "../features/profile/actions";
 import { formatAppError } from "../lib/debug";
 
 const FONT_SCALE_OPTIONS = [
@@ -41,11 +48,104 @@ const HIT_TARGET_OPTIONS = [
     { value: "max", label: "Maximum" }
 ];
 
+const CHAT_IDENTITY_STYLE_OPTIONS = [
+    { value: "profileMedia", label: "Profile images" },
+    { value: "minimal", label: "Minimal letters" }
+];
+
+const CHAT_NAME_MODE_OPTIONS = [
+    { value: "displayName", label: "Display names" },
+    { value: "username", label: "Username tags" }
+];
+
+const CHAT_MESSAGE_ALIGNMENT_OPTIONS = [
+    { value: "split", label: "Others left, you right" },
+    { value: "allLeft", label: "Everyone left" },
+    { value: "allRight", label: "Everyone right" },
+    { value: "mineLeft", label: "You left, others right" }
+];
+
 const SETTINGS_TABS = [
     { id: "general", label: "General" },
     { id: "profile", label: "Profile" },
     { id: "advanced", label: "Advanced" }
 ];
+
+const PROFILE_MEDIA_LIMITS = {
+    avatar: {
+        label: "avatar",
+        sourceMaxBytes: 8 * 1024 * 1024,
+        uploadMaxBytes: 512 * 1024,
+        outputWidth: 512,
+        outputHeight: 512,
+        previewClassName: "is-avatar",
+        helpText: "PNG, JPG, or WEBP. Pick any image up to 8 MB; Chatapp outputs a 512 x 512 square and compresses it to 512 KB or less."
+    },
+    banner: {
+        label: "background",
+        sourceMaxBytes: 12 * 1024 * 1024,
+        uploadMaxBytes: 1024 * 1024,
+        outputWidth: 1200,
+        outputHeight: 400,
+        previewClassName: "is-banner",
+        helpText: "PNG, JPG, or WEBP. Pick any image up to 12 MB; Chatapp outputs a 1200 x 400 banner and compresses it to 1 MB or less."
+    }
+};
+
+function formatBytes(bytes) {
+    if (bytes >= 1024 * 1024) {
+        return `${(bytes / (1024 * 1024)).toFixed(bytes % (1024 * 1024) === 0 ? 0 : 1)} MB`;
+    }
+
+    return `${Math.ceil(bytes / 1024)} KB`;
+}
+
+function loadImageFromObjectUrl(objectUrl) {
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("Could not load that image."));
+        image.src = objectUrl;
+    });
+}
+
+async function createCroppedProfileDataUrl({ editor }) {
+    const limits = PROFILE_MEDIA_LIMITS[editor.assetType];
+    const image = await loadImageFromObjectUrl(editor.objectUrl);
+    const canvas = document.createElement("canvas");
+    canvas.width = limits.outputWidth;
+    canvas.height = limits.outputHeight;
+
+    const context = canvas.getContext("2d");
+    const baseScale = Math.max(
+        limits.outputWidth / image.naturalWidth,
+        limits.outputHeight / image.naturalHeight
+    );
+    const scale = baseScale * editor.zoom;
+    const drawWidth = image.naturalWidth * scale;
+    const drawHeight = image.naturalHeight * scale;
+    const extraX = Math.max(0, drawWidth - limits.outputWidth);
+    const extraY = Math.max(0, drawHeight - limits.outputHeight);
+    const drawX = -extraX * (editor.x / 100);
+    const drawY = -extraY * (editor.y / 100);
+
+    context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+
+    for (const quality of [0.92, 0.84, 0.76, 0.68, 0.6]) {
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        const approximateBytes = Math.ceil((dataUrl.length - "data:image/jpeg;base64,".length) * 0.75);
+
+        if (approximateBytes <= limits.uploadMaxBytes || quality === 0.6) {
+            if (approximateBytes > limits.uploadMaxBytes) {
+                throw new Error(`${limits.label} is still too large after cropping. Try a simpler or smaller image.`);
+            }
+
+            return dataUrl;
+        }
+    }
+
+    throw new Error("Could not prepare that image.");
+}
 
 function CollapsibleSection({
     title,
@@ -77,15 +177,30 @@ function CollapsibleSection({
 
 export default function ClientSettingsModal({
     settings,
+    currentUser,
+    profileMediaHostUrl,
     onChange,
     onImport,
+    onUserUpdated,
     onReset,
     onClose
 }) {
     const importInputRef = useRef(null);
+    const avatarInputRef = useRef(null);
+    const bannerInputRef = useRef(null);
     const [importError, setImportError] = useState("");
+    const [profileError, setProfileError] = useState("");
+    const [profileSuccess, setProfileSuccess] = useState("");
     const [activeTab, setActiveTab] = useState("general");
+    const [displayName, setDisplayName] = useState(currentUser?.displayName || "");
+    const [profileManifest, setProfileManifest] = useState(null);
+    const [avatarUrl, setAvatarUrl] = useState(null);
+    const [bannerUrl, setBannerUrl] = useState(null);
+    const [profileSaving, setProfileSaving] = useState(false);
+    const [mediaUploading, setMediaUploading] = useState(false);
+    const [mediaEditor, setMediaEditor] = useState(null);
     const [collapsedSections, setCollapsedSections] = useState({
+        identity: false,
         theme: false,
         readability: false,
         accessibility: false,
@@ -94,6 +209,97 @@ export default function ClientSettingsModal({
         developer: true,
         preview: true
     });
+    const userLabel = currentUser?.displayName || currentUser?.usernameBase || currentUser?.username || "User";
+    const userHandle = currentUser?.handle || currentUser?.username || "unknown";
+    const userInitial = useMemo(() => userLabel.trim().slice(0, 1).toUpperCase() || "?", [userLabel]);
+
+    useEffect(() => {
+        setDisplayName(currentUser?.displayName || "");
+    }, [currentUser?.displayName]);
+
+    useEffect(() => () => {
+        if (mediaEditor?.objectUrl) {
+            URL.revokeObjectURL(mediaEditor.objectUrl);
+        }
+    }, [mediaEditor?.objectUrl]);
+
+    useEffect(() => {
+        async function loadManifest() {
+            if (!profileMediaHostUrl || !currentUser?.id) {
+                setProfileManifest(null);
+                return;
+            }
+
+            try {
+                setProfileManifest(await fetchProfileAssetManifest({
+                    backendUrl: profileMediaHostUrl,
+                    userId: currentUser.id
+                }));
+            } catch {
+                setProfileManifest(null);
+            }
+        }
+
+        loadManifest();
+    }, [currentUser?.id, profileMediaHostUrl]);
+
+    useEffect(() => {
+        let revokedUrl = null;
+
+        async function loadAvatar() {
+            if (!profileMediaHostUrl || !currentUser?.id || !settings.autoLoadProfileAvatars || !profileManifest?.avatar?.hasAsset) {
+                setAvatarUrl(null);
+                return;
+            }
+
+            try {
+                const objectUrl = await fetchProfileAssetBlobUrl({
+                    backendUrl: profileMediaHostUrl,
+                    userId: currentUser.id,
+                    assetType: "avatar"
+                });
+                revokedUrl = objectUrl;
+                setAvatarUrl(objectUrl);
+            } catch {
+                setAvatarUrl(null);
+            }
+        }
+
+        loadAvatar();
+
+        return () => {
+            if (revokedUrl) URL.revokeObjectURL(revokedUrl);
+        };
+    }, [currentUser?.id, profileManifest?.avatar?.hasAsset, profileMediaHostUrl, settings.autoLoadProfileAvatars]);
+
+    useEffect(() => {
+        let revokedUrl = null;
+
+        async function loadBanner() {
+            if (!profileMediaHostUrl || !currentUser?.id || !settings.autoLoadProfileBanners || !profileManifest?.banner?.hasAsset) {
+                setBannerUrl(null);
+                return;
+            }
+
+            try {
+                const objectUrl = await fetchProfileAssetBlobUrl({
+                    backendUrl: profileMediaHostUrl,
+                    userId: currentUser.id,
+                    assetType: "banner"
+                });
+                revokedUrl = objectUrl;
+                setBannerUrl(objectUrl);
+            } catch {
+                setBannerUrl(null);
+            }
+        }
+
+        loadBanner();
+
+        return () => {
+            if (revokedUrl) URL.revokeObjectURL(revokedUrl);
+        };
+    }, [currentUser?.id, profileManifest?.banner?.hasAsset, profileMediaHostUrl, settings.autoLoadProfileBanners]);
 
     function toggleSection(sectionId) {
         setCollapsedSections((prev) => ({
@@ -199,6 +405,139 @@ export default function ClientSettingsModal({
         }
     }
 
+    async function refreshManifest() {
+        if (!profileMediaHostUrl || !currentUser?.id) {
+            setProfileManifest(null);
+            return;
+        }
+
+        setProfileManifest(await fetchProfileAssetManifest({
+            backendUrl: profileMediaHostUrl,
+            userId: currentUser.id
+        }));
+    }
+
+    async function handleSaveDisplayName() {
+        try {
+            setProfileSaving(true);
+            setProfileError("");
+            setProfileSuccess("");
+            const data = await updateUserProfile({ displayName });
+            onUserUpdated?.(data.user);
+            setProfileSuccess("Profile name saved.");
+        } catch (error) {
+            setProfileError(formatAppError(error, {
+                fallbackMessage: "Could not save that display name.",
+                context: "Profile update"
+            }).message);
+        } finally {
+            setProfileSaving(false);
+        }
+    }
+
+    function handleImageUpload(event, assetType) {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+
+        if (!file) {
+            return;
+        }
+
+        const limits = PROFILE_MEDIA_LIMITS[assetType];
+        if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+            setProfileError("Only PNG, JPG, and WEBP profile images are supported.");
+            return;
+        }
+
+        if (file.size > limits.sourceMaxBytes) {
+            setProfileError(`That ${limits.label} file is too large. Choose one under ${formatBytes(limits.sourceMaxBytes)}.`);
+            return;
+        }
+
+        setProfileError("");
+        setProfileSuccess("");
+        setMediaEditor((prev) => {
+            if (prev?.objectUrl) {
+                URL.revokeObjectURL(prev.objectUrl);
+            }
+
+            return {
+                assetType,
+                file,
+                objectUrl: URL.createObjectURL(file),
+                x: 50,
+                y: 50,
+                zoom: 1
+            };
+        });
+    }
+
+    async function handleApplyMediaCrop() {
+        if (!mediaEditor) {
+            return;
+        }
+
+        try {
+            setMediaUploading(true);
+            setProfileError("");
+            setProfileSuccess("");
+            const croppedDataUrl = await createCroppedProfileDataUrl({ editor: mediaEditor });
+
+            await uploadProfileAssets({
+                backendUrl: profileMediaHostUrl,
+                avatarDataUrl: mediaEditor.assetType === "avatar" ? croppedDataUrl : null,
+                bannerDataUrl: mediaEditor.assetType === "banner" ? croppedDataUrl : null
+            });
+            await refreshManifest();
+            window.dispatchEvent(new CustomEvent("profileMediaUpdated"));
+            setProfileSuccess(mediaEditor.assetType === "avatar" ? "Avatar updated." : "Profile background updated.");
+            setMediaEditor((prev) => {
+                if (prev?.objectUrl) {
+                    URL.revokeObjectURL(prev.objectUrl);
+                }
+                return null;
+            });
+        } catch (error) {
+            setProfileError(formatAppError(error, {
+                fallbackMessage: "Could not update that profile image.",
+                context: "Profile media"
+            }).message);
+        } finally {
+            setMediaUploading(false);
+        }
+    }
+
+    function handleCancelMediaEditor() {
+        setMediaEditor((prev) => {
+            if (prev?.objectUrl) {
+                URL.revokeObjectURL(prev.objectUrl);
+            }
+            return null;
+        });
+    }
+
+    async function handleRemoveAsset(assetType) {
+        try {
+            setMediaUploading(true);
+            setProfileError("");
+            setProfileSuccess("");
+            await deleteProfileAsset({
+                backendUrl: profileMediaHostUrl,
+                assetType
+            });
+            await refreshManifest();
+            window.dispatchEvent(new CustomEvent("profileMediaUpdated"));
+            setProfileSuccess(assetType === "avatar" ? "Avatar removed." : "Profile background removed.");
+        } catch (error) {
+            setProfileError(formatAppError(error, {
+                fallbackMessage: "Could not remove that profile image.",
+                context: "Profile media"
+            }).message);
+        } finally {
+            setMediaUploading(false);
+        }
+    }
+
     return (
         <div className="client-settings-overlay" onClick={onClose}>
             <div
@@ -231,6 +570,34 @@ export default function ClientSettingsModal({
                     </div>
                 </div>
 
+                <div className="client-settings-body">
+                    <aside className="client-settings-sidebar">
+                        <div className="client-settings-user-card">
+                            <div className="client-settings-user-avatar">
+                                {avatarUrl ? <img src={avatarUrl} alt={userLabel} /> : userInitial}
+                            </div>
+                            <div>
+                                <strong>{userLabel}</strong>
+                                <span>{userHandle}</span>
+                            </div>
+                        </div>
+
+                        <div className="client-settings-tabs" role="tablist" aria-label="Client settings tabs">
+                            {SETTINGS_TABS.map((tab) => (
+                                <button
+                                    key={tab.id}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={activeTab === tab.id}
+                                    className={`client-settings-tab ${activeTab === tab.id ? "active" : ""}`}
+                                    onClick={() => setActiveTab(tab.id)}
+                                >
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
+                    </aside>
+
                 <div className="client-settings-content">
                     <input
                         ref={importInputRef}
@@ -243,21 +610,6 @@ export default function ClientSettingsModal({
                     {importError ? (
                         <p className="client-settings-error">{importError}</p>
                     ) : null}
-
-                    <div className="client-settings-tabs" role="tablist" aria-label="Client settings tabs">
-                        {SETTINGS_TABS.map((tab) => (
-                            <button
-                                key={tab.id}
-                                type="button"
-                                role="tab"
-                                aria-selected={activeTab === tab.id}
-                                className={`client-settings-tab ${activeTab === tab.id ? "active" : ""}`}
-                                onClick={() => setActiveTab(tab.id)}
-                            >
-                                {tab.label}
-                            </button>
-                        ))}
-                    </div>
 
                     {activeTab === "general" ? (
                         <>
@@ -350,6 +702,60 @@ export default function ClientSettingsModal({
                                 </select>
                             </label>
                         </div>
+                    </CollapsibleSection>
+
+                    <CollapsibleSection
+                        title="Chat Identity"
+                        description="Choose how DMs and group chats show who sent each message."
+                        isOpen={!collapsedSections.chatIdentity}
+                        onToggle={() => toggleSection("chatIdentity")}
+                    >
+                        <div className="client-settings-grid">
+                            <label className="client-settings-field">
+                                <span>Message markers</span>
+                                <select
+                                    value={settings.chatIdentityStyle}
+                                    onChange={(event) => onChange("chatIdentityStyle", event.target.value)}
+                                >
+                                    {CHAT_IDENTITY_STYLE_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                            {option.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            <label className="client-settings-field">
+                                <span>Chat names</span>
+                                <select
+                                    value={settings.chatNameMode}
+                                    onChange={(event) => onChange("chatNameMode", event.target.value)}
+                                >
+                                    {CHAT_NAME_MODE_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                            {option.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            <label className="client-settings-field">
+                                <span>Message alignment</span>
+                                <select
+                                    value={settings.chatMessageAlignment}
+                                    onChange={(event) => onChange("chatMessageAlignment", event.target.value)}
+                                >
+                                    {CHAT_MESSAGE_ALIGNMENT_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                            {option.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        </div>
+                        <p className="client-settings-muted">
+                            Minimal letters auto-expand in group chats when two people would share the same letter. Server chats keep their full names.
+                        </p>
                     </CollapsibleSection>
 
                     <CollapsibleSection
@@ -453,11 +859,99 @@ export default function ClientSettingsModal({
                     {activeTab === "profile" ? (
                         <>
                     <CollapsibleSection
+                        title="Profile"
+                        description="Set your display name and preview how your profile appears."
+                        isOpen={!collapsedSections.identity}
+                        onToggle={() => toggleSection("identity")}
+                    >
+                        <div className="client-profile-card">
+                            <div
+                                className="client-profile-banner"
+                                style={bannerUrl ? { backgroundImage: `url(${bannerUrl})` } : undefined}
+                            />
+                            <div className="client-profile-card-body">
+                                <div className="client-profile-avatar">
+                                    {avatarUrl ? <img src={avatarUrl} alt={userLabel} /> : userInitial}
+                                </div>
+                                <div className="client-profile-name-stack">
+                                    <strong>{displayName.trim() || currentUser?.usernameBase || currentUser?.username}</strong>
+                                    <span>{userHandle}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {profileError ? <p className="client-settings-error">{profileError}</p> : null}
+                        {profileSuccess ? <p className="client-settings-success">{profileSuccess}</p> : null}
+
+                        <label className="client-settings-field">
+                            <span>Display name</span>
+                            <input
+                                type="text"
+                                value={displayName}
+                                placeholder={currentUser?.usernameBase || currentUser?.username || "Display name"}
+                                maxLength={64}
+                                onChange={(event) => setDisplayName(event.target.value)}
+                            />
+                        </label>
+
+                        <div className="client-settings-inline-actions">
+                            <button type="button" onClick={handleSaveDisplayName} disabled={profileSaving}>
+                                {profileSaving ? "Saving..." : "Save display name"}
+                            </button>
+                        </div>
+                    </CollapsibleSection>
+
+                    <CollapsibleSection
                         title="Profile Media"
-                        description="Control whether avatars and profile backgrounds load from shared servers."
+                        description="Upload your avatar and profile background, and control how media loads."
                         isOpen={!collapsedSections.profileMedia}
                         onToggle={() => toggleSection("profileMedia")}
                     >
+                        <input
+                            ref={avatarInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="client-hidden-input"
+                            onChange={(event) => handleImageUpload(event, "avatar")}
+                        />
+                        <input
+                            ref={bannerInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="client-hidden-input"
+                            onChange={(event) => handleImageUpload(event, "banner")}
+                        />
+
+                        <div className="client-profile-media-actions">
+                            <button type="button" onClick={() => avatarInputRef.current?.click()} disabled={mediaUploading || !profileMediaHostUrl}>
+                                {profileManifest?.avatar?.hasAsset ? "Change avatar" : "Upload avatar"}
+                            </button>
+                            <button type="button" onClick={() => bannerInputRef.current?.click()} disabled={mediaUploading || !profileMediaHostUrl}>
+                                {profileManifest?.banner?.hasAsset ? "Change background" : "Upload background"}
+                            </button>
+                            {profileManifest?.avatar?.hasAsset ? (
+                                <button type="button" className="secondary" onClick={() => handleRemoveAsset("avatar")} disabled={mediaUploading}>
+                                    Remove avatar
+                                </button>
+                            ) : null}
+                            {profileManifest?.banner?.hasAsset ? (
+                                <button type="button" className="secondary" onClick={() => handleRemoveAsset("banner")} disabled={mediaUploading}>
+                                    Remove background
+                                </button>
+                            ) : null}
+                        </div>
+
+                        {!profileMediaHostUrl ? (
+                            <p className="client-settings-muted">
+                                Join an online server first to host profile images.
+                            </p>
+                        ) : null}
+
+                        <div className="client-settings-muted">
+                            <p>{PROFILE_MEDIA_LIMITS.avatar.helpText}</p>
+                            <p>{PROFILE_MEDIA_LIMITS.banner.helpText}</p>
+                        </div>
+
                         <div className="client-accessibility-grid">
                             <label className="client-toggle-card">
                                 <div className="client-toggle-copy">
@@ -593,6 +1087,75 @@ export default function ClientSettingsModal({
                     </CollapsibleSection>
                     ) : null}
                 </div>
+                </div>
+
+                {mediaEditor ? (
+                    <div className="client-media-editor-overlay" onClick={handleCancelMediaEditor}>
+                        <div className="client-media-editor" onClick={(event) => event.stopPropagation()}>
+                            <div className="client-media-editor-header">
+                                <div>
+                                    <h3>Choose {PROFILE_MEDIA_LIMITS[mediaEditor.assetType].label} crop</h3>
+                                    <p>{PROFILE_MEDIA_LIMITS[mediaEditor.assetType].helpText}</p>
+                                </div>
+                                <button type="button" className="secondary" onClick={handleCancelMediaEditor}>
+                                    Close
+                                </button>
+                            </div>
+
+                            <div
+                                className={`client-media-crop-preview ${PROFILE_MEDIA_LIMITS[mediaEditor.assetType].previewClassName}`}
+                                style={{
+                                    backgroundImage: `url(${mediaEditor.objectUrl})`,
+                                    backgroundPosition: `${mediaEditor.x}% ${mediaEditor.y}%`,
+                                    backgroundSize: `${Math.round(mediaEditor.zoom * 100)}% auto`
+                                }}
+                            />
+
+                            <div className="client-media-editor-controls">
+                                <label>
+                                    <span>Horizontal position</span>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="100"
+                                        value={mediaEditor.x}
+                                        onChange={(event) => setMediaEditor((prev) => ({ ...prev, x: Number(event.target.value) }))}
+                                    />
+                                </label>
+                                <label>
+                                    <span>Vertical position</span>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="100"
+                                        value={mediaEditor.y}
+                                        onChange={(event) => setMediaEditor((prev) => ({ ...prev, y: Number(event.target.value) }))}
+                                    />
+                                </label>
+                                <label>
+                                    <span>Zoom</span>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="3"
+                                        step="0.05"
+                                        value={mediaEditor.zoom}
+                                        onChange={(event) => setMediaEditor((prev) => ({ ...prev, zoom: Number(event.target.value) }))}
+                                    />
+                                </label>
+                            </div>
+
+                            <div className="client-media-editor-actions">
+                                <button type="button" className="secondary" onClick={handleCancelMediaEditor}>
+                                    Cancel
+                                </button>
+                                <button type="button" onClick={handleApplyMediaCrop} disabled={mediaUploading}>
+                                    {mediaUploading ? "Uploading..." : "Use image"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
             </div>
         </div>
     );
