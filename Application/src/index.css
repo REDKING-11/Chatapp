@@ -102,6 +102,14 @@ body {
     margin: 2px 0 4px;
 }
 
+.joined-servers-bottom {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
 .friends-home-button {
     background: linear-gradient(135deg, #0f766e, #155e75);
     border-color: rgba(255, 255, 255, 0.14);
@@ -109,6 +117,29 @@ body {
 
 .friends-home-button:hover {
     background: linear-gradient(135deg, #0d9488, #0e7490);
+}
+
+.friends-home-button.has-friends-activity {
+    position: relative;
+    box-shadow:
+        0 0 0 1px var(--shell-notification-ring),
+        0 0 22px var(--shell-notification-glow);
+    background: linear-gradient(
+        135deg,
+        var(--shell-notification-accent),
+        color-mix(in srgb, var(--shell-notification-accent) 72%, #0f172a)
+    );
+}
+
+.friends-activity-dot {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--shell-notification-dot);
+    box-shadow: 0 0 0 4px var(--shell-notification-dot-glow);
 }
 
 .joined-server-button,
@@ -122,6 +153,295 @@ body {
     cursor: pointer;
     font-weight: bold;
     transition: 0.15s ease;
+}
+
+.profile-dock {
+    position: relative;
+    width: 100%;
+}
+
+.profile-dock-button {
+    width: 100%;
+    min-height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--shell-border);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--shell-surface-alt) 84%, transparent);
+    color: var(--shell-text);
+    cursor: pointer;
+    text-align: left;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+    overflow: hidden;
+}
+
+.profile-dock-button:hover,
+.profile-dock-button.is-open {
+    background: color-mix(in srgb, var(--shell-surface-hover) 68%, var(--shell-surface-alt));
+    border-color: color-mix(in srgb, var(--shell-accent) 46%, var(--shell-border));
+    transform: translateY(-1px);
+}
+
+.profile-dock-avatar {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--shell-accent) 74%, white 6%),
+        color-mix(in srgb, var(--shell-accent) 46%, var(--shell-surface))
+    );
+    color: white;
+    font-weight: 800;
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    overflow: hidden;
+}
+
+.profile-dock-avatar-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.profile-dock-meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+}
+
+.profile-dock-meta strong,
+.profile-dock-meta span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.profile-dock-meta strong {
+    font-size: 0.84rem;
+    line-height: 1.1;
+}
+
+.profile-dock-meta span {
+    color: var(--shell-text-muted);
+    font-size: 0.72rem;
+    line-height: 1.1;
+}
+
+.profile-dock-card,
+.profile-dock-context-menu {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 10px);
+    z-index: 1200;
+}
+
+.profile-dock-card {
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--shell-border);
+    border-radius: 18px;
+    background:
+        radial-gradient(circle at top left, color-mix(in srgb, var(--shell-accent-soft) 92%, transparent), transparent 55%),
+        var(--shell-surface);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+}
+
+.profile-dock-card-banner {
+    position: relative;
+    height: 90px;
+    background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--shell-accent) 86%, #34d399),
+        color-mix(in srgb, var(--shell-accent) 58%, #22d3ee)
+    );
+    background-size: cover;
+    background-position: center;
+}
+
+.profile-dock-card-star {
+    position: absolute;
+    display: block;
+    width: 16px;
+    height: 16px;
+    background: rgba(255, 244, 214, 0.92);
+    clip-path: polygon(50% 0, 64% 36%, 100% 50%, 64% 64%, 50% 100%, 36% 64%, 0 50%, 36% 36%);
+    box-shadow: 0 0 18px rgba(255, 244, 214, 0.35);
+}
+
+.profile-dock-card-star-large {
+    top: 14px;
+    right: 46px;
+}
+
+.profile-dock-card-star-small {
+    top: 34px;
+    right: 86px;
+    width: 10px;
+    height: 10px;
+    opacity: 0.9;
+}
+
+.profile-dock-card-body {
+    position: relative;
+    padding: 14px 16px 16px;
+    background: color-mix(in srgb, var(--shell-surface) 96%, black);
+}
+
+.profile-dock-card-avatar-wrap {
+    position: absolute;
+    top: -36px;
+    left: 16px;
+}
+
+.profile-dock-card-avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 24px;
+    border: 5px solid color-mix(in srgb, var(--shell-surface) 96%, black);
+    font-size: 1.35rem;
+}
+
+.profile-dock-card-status-dot {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    background: #22c55e;
+    border: 3px solid color-mix(in srgb, var(--shell-surface) 96%, black);
+}
+
+.profile-dock-card-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-bottom: 18px;
+}
+
+.profile-dock-card-actions button {
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--shell-surface-alt) 88%, transparent);
+    color: var(--shell-text);
+    cursor: pointer;
+}
+
+.profile-dock-card-actions button:hover {
+    background: color-mix(in srgb, var(--shell-accent-soft) 86%, var(--shell-surface-alt));
+}
+
+.profile-dock-card-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 30px;
+}
+
+.profile-dock-card-meta strong {
+    font-size: 1.05rem;
+    line-height: 1.15;
+}
+
+.profile-dock-card-meta span {
+    color: var(--shell-text-muted);
+    font-size: 0.9rem;
+}
+
+.profile-dock-upload-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+
+.profile-dock-upload-row.compact {
+    margin-top: 8px;
+}
+
+.profile-dock-upload-row button {
+    border: 1px solid color-mix(in srgb, var(--shell-border) 88%, transparent);
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: color-mix(in srgb, var(--shell-surface-alt) 84%, transparent);
+    color: var(--shell-text);
+    cursor: pointer;
+}
+
+.profile-dock-upload-row button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--shell-surface-hover) 82%, var(--shell-surface-alt));
+}
+
+.profile-dock-upload-row button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.profile-dock-host-note {
+    margin-top: 10px;
+    color: var(--shell-text-muted);
+    font-size: 0.74rem;
+    line-height: 1.35;
+}
+
+.profile-dock-context-menu {
+    width: 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px;
+    border: 1px solid var(--shell-border);
+    border-radius: 14px;
+    background: var(--shell-surface);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
+}
+
+.profile-dock-context-menu button {
+    width: 100%;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: transparent;
+    color: var(--shell-text);
+    cursor: pointer;
+    text-align: left;
+}
+
+.profile-dock-context-menu button:hover {
+    background: color-mix(in srgb, var(--shell-surface-hover) 84%, var(--shell-surface-alt));
+}
+
+.profile-dock-context-menu button.danger {
+    color: #fecaca;
+}
+
+.profile-dock-context-menu button.danger:hover {
+    background: color-mix(in srgb, var(--status-danger-bg) 88%, var(--shell-surface-alt));
+}
+
+.sidebar-profile-slot {
+    flex-shrink: 0;
+    padding-top: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--shell-border) 72%, transparent);
 }
 
 .joined-server-button:hover,
@@ -189,6 +509,11 @@ body {
     --server-success: #3ba55d;
     --server-radius: 12px;
     --channel-sidebar-width: 260px;
+    --server-notification-accent: color-mix(in srgb, var(--server-accent) 62%, #f59e0b);
+    --server-notification-border: color-mix(in srgb, var(--server-notification-accent) 70%, white);
+    --server-notification-surface: color-mix(in srgb, var(--server-surface) 78%, var(--server-notification-accent));
+    --server-notification-glow: color-mix(in srgb, var(--server-notification-accent) 28%, transparent);
+    --server-notification-text: color-mix(in srgb, var(--server-text) 90%, white);
 
     display: flex;
     flex: 1;
@@ -204,9 +529,20 @@ body {
     max-width: var(--channel-sidebar-width);
     background: var(--server-surface);
     border-right: 1px solid var(--server-surface-alt);
-    padding: 16px;
-    overflow-y: auto;
+    padding: 16px 16px 12px;
+    overflow: hidden;
     color: var(--server-text);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+}
+
+.channels-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
 }
 
 .main {
@@ -885,10 +1221,110 @@ body {
     word-break: break-all;
 }
 
+.server-trust-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 16px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(248, 113, 113, 0.28);
+    background:
+        linear-gradient(135deg, rgba(127, 29, 29, 0.28), rgba(69, 10, 10, 0.18)),
+        var(--server-surface);
+    color: var(--server-text);
+}
+
+.server-trust-banner strong {
+    color: #fecaca;
+}
+
+.server-trust-banner span {
+    color: var(--server-text-muted);
+}
+
+.server-trust-warning-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(2, 6, 23, 0.78);
+    backdrop-filter: blur(8px);
+}
+
+.server-trust-warning-modal {
+    width: min(520px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-top: 0;
+    border-color: rgba(248, 113, 113, 0.26);
+    background:
+        radial-gradient(circle at top left, rgba(248, 113, 113, 0.14), transparent 42%),
+        var(--server-surface);
+}
+
+.server-trust-warning-modal h2,
+.server-trust-warning-modal p {
+    margin: 0;
+}
+
+.server-trust-warning-modal p {
+    color: var(--server-text-muted);
+}
+
+.server-trust-warning-badge {
+    width: fit-content;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(248, 113, 113, 0.16);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    color: #fecaca;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.server-trust-warning-modal button {
+    align-self: flex-start;
+    border: none;
+    border-radius: 12px;
+    padding: 10px 16px;
+    background: linear-gradient(135deg, #dc2626, #b91c1c);
+    color: white;
+    cursor: pointer;
+}
+
 .friends-main {
+    --server-accent: var(--shell-accent);
+    --server-background: color-mix(in srgb, var(--shell-bg) 88%, #111827);
+    --server-surface: color-mix(in srgb, var(--shell-surface) 92%, #111827);
+    --server-surface-alt: color-mix(in srgb, var(--shell-border) 58%, var(--shell-surface-alt));
+    --server-text: var(--shell-text);
+    --server-text-muted: var(--shell-text-muted);
+    --server-danger: var(--shell-danger);
+    --server-success: #22c55e;
+    --server-notification-accent: var(--shell-notification-accent);
+    --server-notification-border: color-mix(in srgb, var(--shell-notification-accent) 72%, white);
+    --server-notification-surface: color-mix(in srgb, var(--server-surface) 80%, var(--shell-notification-accent));
+    --server-notification-glow: var(--shell-notification-glow);
+    --server-notification-text: color-mix(in srgb, var(--shell-text) 94%, white);
     display: flex;
     flex-direction: column;
     gap: 18px;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.friends-top-chrome {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    flex-shrink: 0;
 }
 
 .friends-header {
@@ -1013,6 +1449,7 @@ body {
     gap: 18px;
     flex: 1;
     min-height: 0;
+    overflow: hidden;
 }
 
 .friends-rail,
@@ -1023,7 +1460,50 @@ body {
 .friends-rail {
     display: flex;
     flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.friends-rail-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.friends-rail-header h2 {
+    margin: 0 0 6px;
+}
+
+.friends-rail-header p {
+    margin: 0;
+    color: var(--server-text-muted);
+    font-size: 13px;
+}
+
+.friends-primary-action {
+    border: none;
+    border-radius: 12px;
+    padding: 10px 14px;
+    background: var(--server-accent);
+    color: white;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.friends-rail-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+    display: flex;
+    flex-direction: column;
     gap: 18px;
+}
+
+.friends-sidebar-profile-slot {
+    padding-top: 12px;
 }
 
 .friend-request-form,
@@ -1032,6 +1512,25 @@ body {
     display: flex;
     flex-direction: column;
     gap: 12px;
+}
+
+.friends-section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.friends-section-heading h2 {
+    margin: 0;
+}
+
+.friends-inline-add-button {
+    border: 1px solid var(--server-surface-alt);
+    border-radius: 10px;
+    padding: 6px 10px;
+    background: transparent;
+    color: var(--server-text);
 }
 
 .friend-request-row {
@@ -1112,9 +1611,28 @@ body {
     letter-spacing: 0.03em;
 }
 
+.friend-card-preview {
+    color: var(--server-text-muted);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
 .selected-friend-card {
     border-color: var(--server-accent);
     box-shadow: 0 0 0 1px var(--server-accent) inset;
+}
+
+.recent-friend-activity {
+    border-color: var(--server-notification-border);
+    background:
+        linear-gradient(180deg, var(--server-notification-surface), var(--server-surface));
+    box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--server-notification-accent) 52%, white),
+        0 0 20px var(--server-notification-glow);
+}
+
+.recent-friend-activity strong {
+    color: var(--server-notification-text);
 }
 
 .friend-request-card {
@@ -1134,6 +1652,7 @@ body {
     gap: 16px;
     min-width: 0;
     min-height: 0;
+    overflow: hidden;
 }
 
 .friends-conversation-header {
@@ -1141,6 +1660,40 @@ body {
     justify-content: space-between;
     align-items: flex-start;
     gap: 12px;
+}
+
+.friends-security-line {
+    margin: 0 0 8px;
+}
+
+.friends-security-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 13px;
+    letter-spacing: 0.01em;
+    transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+
+.friends-security-status.is-secured {
+    background: color-mix(in srgb, var(--server-success) 18%, transparent);
+    border-color: color-mix(in srgb, var(--server-success) 42%, transparent);
+    color: color-mix(in srgb, var(--server-success) 34%, white);
+}
+
+.friends-security-status.is-pending {
+    background: color-mix(in srgb, var(--server-accent) 16%, transparent);
+    border-color: color-mix(in srgb, var(--server-accent) 42%, transparent);
+    color: color-mix(in srgb, var(--server-accent) 24%, white);
+}
+
+.friends-security-lock {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .friends-inline-request {
@@ -1162,6 +1715,84 @@ body {
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
+}
+
+.friends-encrypt-callout {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 18px;
+    border-radius: 18px;
+    border: 1px solid color-mix(in srgb, var(--server-accent) 34%, transparent);
+    background:
+        radial-gradient(circle at top left, color-mix(in srgb, var(--server-accent) 20%, transparent), transparent 48%),
+        linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--server-background) 84%, #0f172a),
+            color-mix(in srgb, var(--server-surface) 92%, #020617)
+        );
+}
+
+.friends-encrypt-callout strong {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.friends-encrypt-callout p {
+    margin: 0;
+    color: var(--server-text-muted);
+}
+
+.friends-error-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.friends-debug-details {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--server-danger) 34%, transparent);
+    background: color-mix(in srgb, var(--server-background) 76%, #000);
+    color: var(--server-text-muted);
+    font: 12px/1.45 "Consolas", "Courier New", monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.friends-encrypt-button {
+    border: 1px solid color-mix(in srgb, var(--server-accent) 42%, transparent);
+    border-radius: 999px;
+    padding: 12px 18px;
+    background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--server-accent) 82%, white),
+        color-mix(in srgb, var(--server-accent) 70%, #0f172a)
+    );
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    white-space: nowrap;
+    box-shadow: 0 16px 30px color-mix(in srgb, var(--server-accent) 24%, transparent);
+}
+
+.friends-encrypt-button:hover {
+    cursor: pointer;
+    filter: brightness(1.05);
+}
+
+.friends-encrypt-button.is-busy .friends-encrypt-lock {
+    animation: friends-lock-close 700ms ease-in-out infinite;
+}
+
+.friends-encrypt-lock {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .friends-conversation-header h2,
@@ -1247,6 +1878,11 @@ body {
     gap: 16px;
 }
 
+.friends-manage-popout {
+    max-height: min(82vh, 860px);
+    overflow-y: auto;
+}
+
 .friends-settings-header {
     display: flex;
     justify-content: space-between;
@@ -1321,18 +1957,142 @@ body {
     -ms-overflow-style: none;
 }
 
+.friends-rail-scroll::-webkit-scrollbar,
 .friends-message-list::-webkit-scrollbar {
-    width: 0;
-    height: 0;
+    width: 8px;
 }
 
-.friend-message-bubble {
-    max-width: min(75%, 560px);
-    padding: 12px 14px;
-    border-radius: 16px;
+.friends-rail-scroll::-webkit-scrollbar-thumb,
+.friends-message-list::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--server-surface-alt) 78%, transparent);
+    border-radius: 999px;
+}
+
+.friends-rail-scroll {
+    scrollbar-color: color-mix(in srgb, var(--server-surface-alt) 78%, transparent) transparent;
+}
+
+.friends-message-list {
+    scrollbar-color: color-mix(in srgb, var(--server-surface-alt) 78%, transparent) transparent;
+}
+
+.friends-encryption-stage {
+    flex: 1;
+    min-height: 320px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 28px;
+    border-radius: 22px;
+    background:
+        radial-gradient(circle at top, color-mix(in srgb, var(--server-success) 16%, transparent), transparent 32%),
+        radial-gradient(circle at bottom, color-mix(in srgb, var(--server-accent) 18%, transparent), transparent 34%),
+        color-mix(in srgb, var(--server-background) 78%, transparent);
+    border: 1px solid color-mix(in srgb, var(--server-accent) 28%, transparent);
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+}
+
+.friends-encryption-stage strong {
+    font-size: 22px;
+}
+
+.friends-encryption-stage p {
+    max-width: 360px;
+    margin: 0;
+    color: var(--server-text-muted);
+}
+
+.friends-encryption-lock {
+    position: relative;
+    width: 240px;
+    height: 280px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+}
+
+.friends-encryption-shackle {
+    position: absolute;
+    top: 0;
+    width: 122px;
+    height: 146px;
+    border: 14px solid rgba(226, 232, 240, 0.92);
+    border-bottom: none;
+    border-radius: 72px 72px 0 0;
+    transform-origin: 80% 100%;
+    transform: translate(-58px, -18px) rotate(-42deg);
+    transition: transform 220ms ease;
+    z-index: 2;
+}
+
+.friends-encryption-body {
+    position: relative;
+    width: 192px;
+    height: 156px;
+    border-radius: 24px;
+    background: linear-gradient(180deg, #f8fafc, #cbd5e1);
+    box-shadow: 0 24px 50px rgba(15, 23, 42, 0.28);
+    z-index: 3;
+}
+
+.friends-encryption-keyhole {
+    position: absolute;
+    left: 50%;
+    top: 34px;
+    width: 36px;
+    height: 36px;
+    border-radius: 999px;
+    background: #0f172a;
+    transform: translateX(-50%);
+}
+
+.friends-encryption-keyhole::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 28px;
+    width: 12px;
+    height: 42px;
+    border-radius: 999px;
+    background: #0f172a;
+    transform: translateX(-50%);
+}
+
+.friends-encryption-stage.is-open .friends-encryption-shackle {
+    transform: translate(-58px, -18px) rotate(-42deg);
+}
+
+.friends-encryption-stage.is-closing .friends-encryption-shackle {
+    animation: friends-lock-overlay-close 900ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.friends-encryption-stage.is-closing .friends-encryption-lock {
+    animation: friends-lock-overlay-pulse 900ms ease forwards;
+}
+
+.friends-encryption-stage.is-closed .friends-encryption-body {
+    box-shadow:
+        0 0 0 8px color-mix(in srgb, var(--server-success) 16%, transparent),
+        0 24px 50px rgba(15, 23, 42, 0.28);
+}
+
+.friends-encryption-stage.is-closed .friends-encryption-shackle {
+    transform: translate(0, 0) rotate(0deg);
+}
+
+
+.friend-message-bubble {
+    width: fit-content;
+    max-width: min(68%, 460px);
+    padding: 8px 12px;
+    border-radius: 16px;
+    display: inline-flex;
+    flex-direction: column;
+    gap: 3px;
     word-break: break-word;
 }
 
@@ -1348,7 +2108,9 @@ body {
 }
 
 .friend-message-bubble small {
-    opacity: 0.8;
+    margin: 0;
+    opacity: 0.72;
+    line-height: 1.2;
 }
 
 .settings-header-actions {
@@ -1800,4 +2562,926 @@ body {
     to {
         transform: rotate(360deg);
     }
+}
+
+@keyframes friends-lock-close {
+    0%,
+    100% {
+        transform: scale(1) rotate(0deg);
+    }
+
+    35% {
+        transform: scale(0.88) rotate(-10deg);
+    }
+
+    70% {
+        transform: scale(1.02) rotate(4deg);
+    }
+}
+
+@keyframes friends-lock-overlay-close {
+    0% {
+        transform: translate(-58px, -18px) rotate(-42deg);
+    }
+
+    58% {
+        transform: translate(6px, 6px) rotate(8deg);
+    }
+
+    76% {
+        transform: translate(-4px, -2px) rotate(-4deg);
+    }
+
+    100% {
+        transform: translate(0, 0) rotate(0deg);
+    }
+}
+
+@keyframes friends-lock-overlay-pulse {
+    0% {
+        transform: scale(0.94);
+        opacity: 0.9;
+    }
+
+    35% {
+        transform: scale(1.04);
+        opacity: 1;
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+
+/* CLIENT SETTINGS LAYER */
+
+:root {
+    --shell-surface-hover: #243047;
+    --shell-accent-soft: rgba(79, 70, 229, 0.18);
+    --shell-notification-accent: color-mix(in srgb, var(--shell-accent) 58%, #f59e0b);
+    --shell-notification-ring: color-mix(in srgb, var(--shell-notification-accent) 76%, white);
+    --shell-notification-glow: color-mix(in srgb, var(--shell-notification-accent) 36%, transparent);
+    --shell-notification-dot: color-mix(in srgb, var(--shell-notification-accent) 32%, white);
+    --shell-notification-dot-glow: color-mix(in srgb, var(--shell-notification-accent) 22%, transparent);
+    --shell-topbar: var(--shell-surface);
+    --shell-topbar-text: var(--shell-text);
+    --shell-input: #0f172a;
+    --shell-overlay: rgba(2, 6, 23, 0.72);
+    --server-surface-hover: #3c3f45;
+    --client-font-family: "Segoe UI", "Trebuchet MS", Arial, sans-serif;
+    --client-font-scale: 1;
+    --client-line-height: 1.5;
+    --client-control-padding: 10px;
+    --client-panel-padding: 18px;
+    --client-radius-multiplier: 1;
+    --client-toggle-size: 20px;
+    --focus-ring: #4f46e5;
+    --status-success-bg: rgba(59, 165, 93, 0.12);
+    --status-success-border: rgba(59, 165, 93, 0.4);
+    --status-danger-bg: rgba(239, 68, 68, 0.12);
+    --status-danger-border: rgba(239, 68, 68, 0.32);
+}
+
+html,
+body,
+#root {
+    font-family: var(--client-font-family);
+    font-size: calc(16px * var(--client-font-scale));
+    line-height: var(--client-line-height);
+}
+
+button,
+input,
+textarea,
+select {
+    transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+body[data-reduced-motion="true"] *,
+body[data-reduced-motion="true"] *::before,
+body[data-reduced-motion="true"] *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+}
+
+.topbar {
+    background: var(--shell-topbar);
+    color: var(--shell-topbar-text);
+}
+
+.topbar-actions button,
+.backend-modal-header button,
+.backend-select-button,
+.backend-add-row button,
+.settings-actions button,
+.builder-toolbar-meta .secondary,
+.builder-actions-inline button,
+.builder-button-grid button,
+.settings-mode-button,
+.friends-refresh-button,
+.friend-request-row button,
+.friend-request-card button,
+.friend-composer button,
+.friends-settings-button,
+.friends-secondary-button,
+.friends-settings-close,
+.friends-retention-controls button,
+.friends-retention-pending button,
+.builder-preview-button,
+.client-settings-header-actions button,
+.client-preview-actions button {
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    padding: var(--client-control-padding) calc(var(--client-control-padding) + 4px);
+}
+
+.topbar-actions button:hover,
+.settings-mode-button:hover {
+    background: var(--shell-surface-hover);
+}
+
+.joined-server-button,
+.join-server-button,
+.auth-card,
+.backend-modal,
+.settings-window,
+.advanced-builder-window,
+.client-settings-window {
+    border-radius: calc(16px * var(--client-radius-multiplier));
+}
+
+.server-context-menu,
+.friend-card,
+.friend-request-card,
+.friends-inline-request,
+.client-theme-card,
+.client-preview-card {
+    border-radius: calc(14px * var(--client-radius-multiplier));
+}
+
+.panel-card,
+.message-card,
+.builder-panel,
+.offline-server-state,
+.client-settings-section {
+    border-radius: calc(16px * var(--client-radius-multiplier));
+    padding: var(--client-panel-padding);
+}
+
+.server-button,
+.channel-button,
+.chat-input,
+.chat-send-button,
+.auth-form input,
+.backend-add-row input,
+.settings-field input[type="number"],
+.settings-field textarea,
+.settings-field select,
+.friends-retention-controls select,
+.friend-request-row input,
+.friend-composer textarea,
+.builder-tree-node,
+.builder-preview-input,
+.client-settings-field select {
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    color: var(--shell-text);
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+}
+
+.auth-form input,
+.backend-add-row input,
+.settings-field input[type="number"],
+.settings-field textarea,
+.settings-field select,
+.client-settings-field select {
+    background: var(--shell-input);
+}
+
+.client-settings-field select option,
+.settings-field select option {
+    background: var(--shell-surface);
+    color: var(--shell-text);
+}
+
+.friend-request-row input,
+.friend-composer textarea,
+.friends-retention-controls select,
+.chat-input {
+    padding: calc(var(--client-control-padding) + 2px);
+}
+
+.server-button:hover,
+.channel-button:hover,
+.builder-drop-zone:hover {
+    background: var(--shell-accent-soft);
+}
+
+.friends-home-button {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--shell-accent) 72%, #0f766e), color-mix(in srgb, var(--shell-accent) 36%, #155e75));
+}
+
+.friends-home-button:hover {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--shell-accent) 72%, #0d9488), color-mix(in srgb, var(--shell-accent) 36%, #0e7490));
+}
+
+.friend-tag-pill,
+.builder-drop-zone:hover {
+    background: var(--shell-accent-soft);
+}
+
+.friends-folder-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0 10px;
+    border: none;
+    background: transparent;
+    color: var(--server-text);
+    cursor: pointer;
+    text-align: left;
+}
+
+.friends-folder-toggle:hover .friends-folder-toggle-label {
+    color: color-mix(in srgb, var(--server-text) 88%, white);
+}
+
+.friends-folder-toggle-icon {
+    width: 18px;
+    flex-shrink: 0;
+    color: var(--server-text-muted);
+    font-size: 12px;
+    line-height: 1;
+}
+
+.friends-folder-toggle-label {
+    flex: 1;
+    min-width: 0;
+    font-size: 1.05rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+}
+
+.friends-folder-count {
+    flex-shrink: 0;
+    min-width: 28px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--server-surface-alt) 74%, transparent);
+    color: var(--server-text-muted);
+    font-size: 0.78rem;
+    text-align: center;
+}
+
+.friends-folder-toggle.collapsed {
+    padding-bottom: 2px;
+}
+
+.friends-sync-banner.success {
+    background: var(--status-success-bg);
+    border-color: var(--status-success-border);
+}
+
+.server-context-item.danger:hover,
+.builder-button-grid button.danger {
+    background: var(--status-danger-bg);
+}
+
+.server-offline-dot {
+    background: var(--server-danger);
+}
+
+.backend-modal-overlay,
+.settings-overlay,
+.friends-settings-overlay,
+.advanced-builder-overlay,
+.client-settings-overlay {
+    background: var(--shell-overlay);
+}
+
+.advanced-builder-header,
+.client-settings-header {
+    background: color-mix(in srgb, var(--shell-topbar) 90%, black);
+}
+
+.topbar-actions button,
+.backend-modal-header button,
+.backend-select-button,
+.settings-mode-button,
+.builder-toolbar-meta .secondary,
+.client-settings-header-actions button.secondary,
+.client-preview-actions button.secondary {
+    background: var(--shell-surface-alt);
+    color: var(--shell-text);
+}
+
+body[data-high-contrast="true"] .panel-card,
+body[data-high-contrast="true"] .message-card,
+body[data-high-contrast="true"] .friend-card,
+body[data-high-contrast="true"] .friend-request-card,
+body[data-high-contrast="true"] .builder-panel,
+body[data-high-contrast="true"] .builder-canvas-content,
+body[data-high-contrast="true"] .client-settings-section {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22) inset;
+}
+
+.client-settings-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    backdrop-filter: blur(10px);
+}
+
+.client-settings-window {
+    width: min(980px, 96vw);
+    max-height: 92vh;
+    overflow: auto;
+    background: var(--shell-surface);
+    border: 1px solid var(--shell-border);
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
+    color: var(--shell-text);
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--shell-accent) 55%, var(--shell-surface-alt)) color-mix(in srgb, var(--shell-surface-alt) 72%, transparent);
+}
+
+.friends-group-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.friends-group-label {
+    font-size: 13px;
+    color: var(--server-text-muted);
+}
+
+.friends-group-input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--server-surface-alt);
+    background: var(--server-surface);
+    color: var(--server-text);
+}
+
+.friends-group-member-picker {
+    max-height: 220px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px;
+}
+
+.friends-group-member-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--server-surface-alt);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.client-settings-window::-webkit-scrollbar {
+    width: 12px;
+}
+
+.client-settings-window::-webkit-scrollbar-track {
+    background: color-mix(in srgb, var(--shell-surface-alt) 72%, transparent);
+    border-left: 1px solid color-mix(in srgb, var(--shell-border) 50%, transparent);
+}
+
+.client-settings-window::-webkit-scrollbar-thumb {
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--shell-accent) 82%, white 8%),
+        color-mix(in srgb, var(--shell-accent) 60%, var(--shell-surface-alt))
+    );
+    border-radius: 999px;
+    border: 2px solid color-mix(in srgb, var(--shell-surface) 80%, transparent);
+}
+
+.client-settings-window::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--shell-accent) 90%, white 10%),
+        color-mix(in srgb, var(--shell-accent) 72%, var(--shell-surface-alt))
+    );
+}
+
+.client-settings-header,
+.client-settings-content,
+.client-settings-section,
+.client-toggle-list {
+    display: flex;
+}
+
+.client-settings-header {
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    padding: calc(var(--client-panel-padding) + 4px);
+    border-bottom: 1px solid var(--shell-border);
+}
+
+.client-settings-content {
+    flex-direction: column;
+    gap: 16px;
+    padding: calc(var(--client-panel-padding) + 4px);
+    background: var(--shell-bg);
+}
+
+.client-settings-section {
+    flex-direction: column;
+    gap: 16px;
+    background: var(--shell-surface);
+    border: 1px solid var(--shell-border);
+}
+
+.client-settings-section-heading h3,
+.client-settings-header h2,
+.client-preview-card h4 {
+    margin: 0;
+}
+
+.client-settings-section-heading p,
+.client-settings-header p,
+.client-toggle-row p,
+.client-preview-card p {
+    margin: 6px 0 0;
+    color: var(--shell-text-muted);
+}
+
+.client-settings-header-actions,
+.client-preview-actions,
+.client-theme-swatches,
+.client-toggle-list {
+    gap: 10px;
+}
+
+.client-settings-tabs {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.client-settings-tab {
+    border: 1px solid var(--shell-border);
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    padding: 10px 14px;
+    background: color-mix(in srgb, var(--shell-surface-alt) 84%, transparent);
+    color: var(--shell-text-muted);
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.client-settings-tab.active {
+    background: color-mix(in srgb, var(--shell-accent-soft) 88%, var(--shell-surface-alt));
+    border-color: color-mix(in srgb, var(--shell-accent) 48%, var(--shell-border));
+    color: var(--shell-text);
+}
+
+.client-settings-section-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+
+.client-settings-section-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.client-settings-section-chevron {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--shell-surface-alt) 78%, transparent);
+    color: var(--shell-text-muted);
+    font-size: 12px;
+}
+
+.client-theme-swatches {
+    display: flex;
+    align-items: center;
+}
+
+.client-settings-header-actions,
+.client-preview-actions {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.client-hidden-input {
+    display: none;
+}
+
+.client-settings-error {
+    margin: 0;
+    color: #fca5a5;
+}
+
+.client-tag-folder-list {
+    display: grid;
+    gap: 16px;
+}
+
+.client-tag-folder-card {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px;
+    border-radius: calc(16px * var(--client-radius-multiplier));
+    border: 1px solid color-mix(in srgb, var(--shell-border) 82%, transparent);
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--shell-surface-alt) 92%, transparent),
+            color-mix(in srgb, var(--shell-bg) 18%, var(--shell-surface-alt))
+        );
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+.client-tag-folder-header,
+.client-tag-row {
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
+}
+
+.client-tag-folder-header input,
+.client-tag-row input {
+    flex: 1;
+    min-width: 0;
+    min-height: 46px;
+    padding: 12px 14px;
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    border: 1px solid color-mix(in srgb, var(--shell-border) 84%, transparent);
+    background: var(--shell-input);
+    color: var(--shell-text);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.client-tag-folder-header input::placeholder,
+.client-tag-row input::placeholder {
+    color: var(--shell-text-muted);
+}
+
+.client-tag-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.client-tag-action-button,
+.client-tag-add-button,
+.client-tag-add-folder-button {
+    border: 1px solid color-mix(in srgb, var(--shell-border) 88%, transparent);
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    min-height: 46px;
+    cursor: pointer;
+}
+
+.client-tag-action-button {
+    min-width: 112px;
+    padding-inline: 14px;
+    background: color-mix(in srgb, var(--shell-surface) 72%, var(--shell-surface-alt));
+    color: var(--shell-text);
+}
+
+.client-tag-action-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--shell-surface-hover) 72%, var(--shell-surface-alt));
+    border-color: color-mix(in srgb, var(--shell-accent) 32%, var(--shell-border));
+}
+
+.client-tag-remove-button:hover:not(:disabled),
+.client-tag-remove-folder-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--status-danger-bg) 82%, var(--shell-surface-alt));
+    border-color: var(--status-danger-border);
+    color: #fecaca;
+}
+
+.client-tag-action-button:disabled {
+    opacity: 0.48;
+    cursor: not-allowed;
+}
+
+.client-tag-add-button,
+.client-tag-add-folder-button {
+    width: 100%;
+    justify-content: center;
+    background: color-mix(in srgb, var(--shell-accent-soft) 62%, var(--shell-surface-alt));
+    color: var(--shell-text);
+    font-weight: 600;
+}
+
+.client-tag-add-button:hover,
+.client-tag-add-folder-button:hover {
+    background: color-mix(in srgb, var(--shell-accent-soft) 88%, var(--shell-surface-alt));
+    border-color: color-mix(in srgb, var(--shell-accent) 42%, var(--shell-border));
+    transform: translateY(-1px);
+}
+
+.client-tag-add-folder-button {
+    margin-top: 4px;
+}
+
+.client-theme-grid,
+.client-settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.client-theme-card {
+    border: 1px solid var(--shell-border);
+    background: var(--shell-surface-alt);
+    color: var(--shell-text);
+    cursor: pointer;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.client-theme-card.selected {
+    border-color: var(--focus-ring);
+    box-shadow: 0 0 0 1px var(--focus-ring) inset;
+}
+
+.client-theme-card-title {
+    font-weight: 700;
+}
+
+.client-theme-swatches span {
+    display: inline-block;
+    flex: 1;
+    height: 28px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.client-settings-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.client-settings-field span {
+    color: var(--shell-text-muted);
+    font-size: 14px;
+}
+
+.client-accessibility-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.client-toggle-card {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 14px;
+    min-height: 210px;
+    padding: var(--client-panel-padding);
+    border: 1px solid color-mix(in srgb, var(--shell-border) 70%, transparent);
+    border-radius: calc(16px * var(--client-radius-multiplier));
+    background: color-mix(in srgb, var(--shell-surface-alt) 84%, transparent);
+}
+
+.client-toggle-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.client-toggle-control {
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--shell-border) 50%, transparent);
+}
+
+.client-toggle-control input {
+    width: var(--client-toggle-size);
+    height: var(--client-toggle-size);
+    accent-color: var(--shell-accent);
+    flex-shrink: 0;
+}
+
+.client-toggle-control select {
+    width: 100%;
+    border: 1px solid var(--shell-border);
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    padding: var(--client-control-padding) calc(var(--client-control-padding) + 2px);
+    background: var(--shell-input);
+    color: var(--shell-text);
+}
+
+.client-preview-card {
+    border: 1px solid var(--shell-border);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--shell-surface-alt) 88%, transparent), color-mix(in srgb, var(--shell-accent-soft) 62%, transparent));
+}
+
+.onboarding-screen {
+    padding: 24px;
+}
+
+.onboarding-card {
+    max-width: 920px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.onboarding-progress {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.onboarding-progress-step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--shell-border);
+    border-radius: calc(14px * var(--client-radius-multiplier));
+    background: var(--shell-surface-alt);
+    color: var(--shell-text-muted);
+}
+
+.onboarding-progress-step span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--shell-border) 55%, transparent);
+    color: var(--shell-text);
+    font-weight: 700;
+}
+
+.onboarding-progress-step.active,
+.onboarding-progress-step.complete {
+    color: var(--shell-text);
+    border-color: color-mix(in srgb, var(--shell-accent) 65%, var(--shell-border));
+}
+
+.onboarding-progress-step.active span,
+.onboarding-progress-step.complete span {
+    background: var(--shell-accent);
+    color: white;
+}
+
+.onboarding-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.onboarding-panel h1 {
+    margin: 0;
+}
+
+.onboarding-panel p,
+.onboarding-list {
+    margin: 0;
+}
+
+.onboarding-list {
+    padding-left: 20px;
+    color: var(--shell-text-muted);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.onboarding-actions,
+.onboarding-footer {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.onboarding-actions button,
+.onboarding-footer button {
+    border: none;
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    padding: var(--client-control-padding) calc(var(--client-control-padding) + 6px);
+    background: var(--shell-accent);
+    color: white;
+    cursor: pointer;
+}
+
+.onboarding-actions button.secondary,
+.onboarding-footer button.secondary {
+    background: var(--shell-surface-alt);
+    color: var(--shell-text);
+}
+
+.onboarding-actions button:disabled,
+.onboarding-footer button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.onboarding-policy-card {
+    padding: var(--client-panel-padding);
+    border: 1px solid var(--shell-border);
+    border-radius: calc(16px * var(--client-radius-multiplier));
+    background: var(--shell-surface-alt);
+}
+
+.onboarding-policy-card strong {
+    display: block;
+    margin-bottom: 8px;
+}
+
+.onboarding-check {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 12px 0;
+}
+
+.onboarding-check input {
+    width: 20px;
+    height: 20px;
+    margin-top: 2px;
+    accent-color: var(--shell-accent);
+}
+
+.onboarding-success {
+    margin: 0;
+    color: #86efac;
+}
+
+@media (max-width: 900px) {
+    .client-theme-grid,
+    .client-settings-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .client-settings-header,
+    .client-toggle-card {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .client-accessibility-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .onboarding-progress {
+        grid-template-columns: 1fr;
+    }
+
+    .client-tag-folder-header,
+    .client-tag-row {
+        flex-direction: column;
+    }
+
+    .client-tag-action-button {
+        width: 100%;
+    }
+}
+
+
+
+
+.settings-field select,
+.client-settings-field select,
+.friends-retention-controls select {
+    padding-left: 12px;
 }

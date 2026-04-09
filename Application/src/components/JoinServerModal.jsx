@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { joinServer } from "../features/servers/actions";
+import { formatAppError } from "../lib/debug";
 
 export default function JoinServerModal({ onJoinSuccess, onClose }) {
     const [backendUrl, setBackendUrl] = useState("http://localhost:3000");
@@ -14,7 +15,10 @@ export default function JoinServerModal({ onJoinSuccess, onClose }) {
             const joinedServer = await joinServer({ backendUrl });
             onJoinSuccess(joinedServer);
         } catch (err) {
-            setError(err.message);
+            setError(formatAppError(err, {
+                fallbackMessage: "Could not join that server right now.",
+                context: "Join server"
+            }).message);
         } finally {
             setLoading(false);
         }

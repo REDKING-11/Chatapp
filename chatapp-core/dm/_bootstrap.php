@@ -3,8 +3,29 @@
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../auth_required.php';
 
-const DM_RELAY_TTL_SECONDS = 86400;
+const DM_RELAY_TTL_SECONDS = 0;
 const DM_ALLOWED_RELAY_TTLS = [0, 43200, 86400, 172800, 259200, 345600];
+
+function dmColumnExists(PDO $db, string $table, string $column): bool {
+    static $cache = [];
+
+    $cacheKey = $table . '.' . $column;
+    if (array_key_exists($cacheKey, $cache)) {
+        return $cache[$cacheKey];
+    }
+
+    $stmt = $db->prepare('
+        SELECT COUNT(*) AS count_found
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = ?
+          AND COLUMN_NAME = ?
+    ');
+    $stmt->execute([$table, $column]);
+
+    $cache[$cacheKey] = ((int)($stmt->fetch()['count_found'] ?? 0)) > 0;
+    return $cache[$cacheKey];
+}
 
 function dmTrimmedString($value): ?string {
     if (!is_string($value)) {
@@ -74,6 +95,8 @@ function dmBuildRelayPolicyRow(array $conversation): array {
 }
 
 function dmLoadConversationDetailOrFail(PDO $db, int $conversationId): array {
+    $hasKindColumn = dmColumnExists($db, 'dm_conversations', 'kind');
+    $hasTitleColumn = dmColumnExists($db, 'dm_conversations', 'title');
     $conversationStmt = $db->prepare('
         SELECT
             id,
@@ -83,7 +106,13 @@ function dmLoadConversationDetailOrFail(PDO $db, int $conversationId): array {
             relay_ttl_seconds,
             relay_ttl_requested_seconds,
             relay_ttl_requested_by_user_id,
-            relay_ttl_requested_at
+            relay_ttl_requested_at' .
+            ($hasKindColumn ? ',
+            kind' : ',
+            "direct" AS kind') .
+            ($hasTitleColumn ? ',
+            title' : ',
+            NULL AS title') . '
         FROM dm_conversations
         WHERE id = ?
         LIMIT 1
@@ -149,10 +178,23 @@ function dmFetchConversationPayload(PDO $db, int $conversationId): array {
     $keysStmt->execute([$conversationId]);
     $wrappedKeys = $keysStmt->fetchAll();
 
+    $conversationKind = in_array($conversation['kind'] ?? 'direct', ['direct', 'group'], true)
+        ? $conversation['kind']
+        : (count($participants) > 2 ? 'group' : 'direct');
+    $explicitTitle = dmTrimmedString($conversation['title'] ?? null);
+    $fallbackTitle = $conversationKind === 'group'
+        ? implode(', ', array_map(function ($row) {
+            return $row['username'];
+        }, $participants))
+        : 'Direct Message';
+    $resolvedTitle = $explicitTitle ?? $fallbackTitle;
+
     return [
         'conversation' => [
             'id' => (int)$conversation['id'],
             'createdByUserId' => (int)$conversation['created_by_user_id'],
+            'kind' => $conversationKind,
+            'title' => $resolvedTitle,
             'createdAt' => $conversation['created_at'],
             'updatedAt' => $conversation['updated_at'],
             'relayPolicy' => dmBuildRelayPolicyRow($conversation),
