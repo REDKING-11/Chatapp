@@ -14,6 +14,13 @@ $kind = dmTrimmedString($data['kind'] ?? null) ?? 'direct';
 $title = dmTrimmedString($data['title'] ?? null);
 
 $participantIds = array_values(array_unique(array_map('intval', array_merge([(int)$user['id']], $participantUserIds))));
+$creatorUserId = (int)$user['id'];
+$invitedParticipantIds = array_values(array_filter(
+    $participantIds,
+    function ($participantId) use ($creatorUserId) {
+        return (int)$participantId !== $creatorUserId;
+    }
+));
 
 if (count($participantIds) < 2) {
     jsonResponse(['error' => 'At least two participants are required'], 400);
@@ -58,8 +65,28 @@ try {
     $conversationId = (int)$db->lastInsertId();
 
     $participantStmt = $db->prepare('INSERT INTO dm_conversation_participants (conversation_id, user_id) VALUES (?, ?)');
-    foreach ($participantIds as $participantId) {
+    $acceptedParticipantIds = $kind === 'group' ? [$creatorUserId] : $participantIds;
+    foreach ($acceptedParticipantIds as $participantId) {
         $participantStmt->execute([$conversationId, $participantId]);
+    }
+
+    if ($kind === 'group' && dmTableExists($db, 'dm_group_invites')) {
+        $inviteStmt = $db->prepare('
+            INSERT INTO dm_group_invites (
+                conversation_id,
+                inviter_user_id,
+                invited_user_id,
+                status
+            ) VALUES (?, ?, ?, "pending")
+        ');
+
+        foreach ($invitedParticipantIds as $invitedUserId) {
+            $inviteStmt->execute([
+                $conversationId,
+                $creatorUserId,
+                $invitedUserId
+            ]);
+        }
     }
 
     $keyStmt = $db->prepare('

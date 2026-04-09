@@ -1,6 +1,7 @@
 import { parseJsonResponse } from "../../lib/api";
+import { getCoreApiBase } from "../../lib/env";
 
-const CORE_API_BASE = import.meta.env.VITE_CORE_API_BASE;
+const CORE_API_BASE = getCoreApiBase();
 
 export async function loginUser({ username, password }) {
     const res = await fetch(`${CORE_API_BASE}/auth/login.php`, {

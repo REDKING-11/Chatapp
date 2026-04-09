@@ -7,21 +7,29 @@ function EmptyState({ title, description }) {
     );
 }
 
-function MessageList({ messages, emptyText, messageListRef }) {
+function MessageList({ messages, emptyText, messageListRef, currentUser }) {
     return (
         <div className="friends-message-list" ref={messageListRef}>
             {messages.length === 0 ? (
                 <p className="friends-empty-messages">{emptyText}</p>
             ) : (
-                messages.map((message) => (
-                    <div
-                        key={message.messageId}
-                        className={`friend-message-bubble ${message.direction === "outgoing" ? "outgoing-friend-message" : "incoming-friend-message"}`}
-                    >
-                        <small>{new Date(message.createdAt).toLocaleString()}</small>
-                        <span>{message.body}</span>
-                    </div>
-                ))
+                messages.map((message) => {
+                    const isOutgoing = message.direction === "outgoing"
+                        || (
+                            message.senderUserId != null
+                            && String(message.senderUserId) === String(currentUser?.id)
+                        );
+
+                    return (
+                        <div
+                            key={message.messageId}
+                            className={`friend-message-bubble ${isOutgoing ? "outgoing-friend-message" : "incoming-friend-message"}`}
+                        >
+                            <small>{new Date(message.createdAt).toLocaleString()}</small>
+                            <span>{message.body}</span>
+                        </div>
+                    );
+                })
             )}
         </div>
     );
@@ -64,6 +72,7 @@ function DirectEncryptionStage({ lockPhase, submitting }) {
 }
 
 function GroupConversationView({
+    currentUser,
     selectedGroupConversation,
     activeGroupParticipantNames,
     groupMessages,
@@ -106,6 +115,7 @@ function GroupConversationView({
                 messages={groupMessages}
                 emptyText="No messages yet. Start the group conversation."
                 messageListRef={messageListRef}
+                currentUser={currentUser}
             />
 
             <form className="friend-composer" onSubmit={onSendGroupMessage}>
@@ -124,6 +134,7 @@ function GroupConversationView({
 }
 
 function DirectConversationView({
+    currentUser,
     selectedFriend,
     effectiveSelectedFriend,
     secureStatusRef,
@@ -326,15 +337,23 @@ function DirectConversationView({
                 ) : messages.length === 0 ? (
                     <p className="friends-empty-messages">No messages yet. Start the conversation.</p>
                 ) : (
-                    messages.map((message) => (
-                        <div
-                            key={message.messageId}
-                            className={`friend-message-bubble ${message.direction === "outgoing" ? "outgoing-friend-message" : "incoming-friend-message"}`}
-                        >
-                            <small>{new Date(message.createdAt).toLocaleString()}</small>
-                            <span>{message.body}</span>
-                        </div>
-                    ))
+                    messages.map((message) => {
+                        const isOutgoing = message.direction === "outgoing"
+                            || (
+                                message.senderUserId != null
+                                && String(message.senderUserId) === String(currentUser?.id)
+                            );
+
+                        return (
+                            <div
+                                key={message.messageId}
+                                className={`friend-message-bubble ${isOutgoing ? "outgoing-friend-message" : "incoming-friend-message"}`}
+                            >
+                                <small>{new Date(message.createdAt).toLocaleString()}</small>
+                                <span>{message.body}</span>
+                            </div>
+                        );
+                    })
                 )}
             </div>
 

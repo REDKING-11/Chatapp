@@ -1,10 +1,13 @@
 function GroupSection({
+    invites,
     conversations,
     selectedGroupConversationId,
     activeView,
     conversationPreviews,
     conversationHasUnreadActivity,
     onCreateGroup,
+    onAcceptGroupInvite,
+    onDeclineGroupInvite,
     onSelectGroupConversation
 }) {
     return (
@@ -19,6 +22,30 @@ function GroupSection({
                     New
                 </button>
             </div>
+            {invites.length > 0 ? (
+                <div className="friends-list">
+                    {invites.map((invite) => (
+                        <div key={invite.id} className="friend-request-card pending">
+                            <div>
+                                <strong>{invite.title}</strong>
+                                <small>Invited by {invite.inviterUsername}</small>
+                            </div>
+                            <div className="friends-inline-request-actions">
+                                <button
+                                    type="button"
+                                    className="friends-secondary-button"
+                                    onClick={() => onDeclineGroupInvite(invite.id)}
+                                >
+                                    Decline
+                                </button>
+                                <button type="button" onClick={() => onAcceptGroupInvite(invite.id)}>
+                                    Join
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : null}
             {conversations.length === 0 ? <p>No group chats yet.</p> : null}
 
             <div className="friends-list">
@@ -29,7 +56,7 @@ function GroupSection({
                         onClick={() => onSelectGroupConversation(conversation.id)}
                     >
                         <strong>{conversation.title}</strong>
-                        <span>{(conversation.participants || []).length} members</span>
+                        <span>{((conversation.participants || []).length + Number(conversation.pendingInviteCount || 0))} members</span>
                         <small className="friend-card-preview">
                             {conversationPreviews[String(conversation.id)]?.text || "No messages yet"}
                         </small>
@@ -136,6 +163,7 @@ export default function FriendsRail({
     clientSettings,
     loading,
     friendsState,
+    groupInvites,
     groupConversations,
     selectedFriendId,
     selectedGroupConversationId,
@@ -148,6 +176,8 @@ export default function FriendsRail({
     conversationHasUnreadActivity,
     onOpenAddFriend,
     onCreateGroup,
+    onAcceptGroupInvite,
+    onDeclineGroupInvite,
     onSelectGroupConversation,
     onSelectFriend,
     onOpenFriendContextMenu,
@@ -179,12 +209,15 @@ export default function FriendsRail({
                 </div>
 
                 <GroupSection
+                    invites={groupInvites}
                     conversations={groupConversations}
                     selectedGroupConversationId={selectedGroupConversationId}
                     activeView={activeView}
                     conversationPreviews={conversationPreviews}
                     conversationHasUnreadActivity={conversationHasUnreadActivity}
                     onCreateGroup={onCreateGroup}
+                    onAcceptGroupInvite={onAcceptGroupInvite}
+                    onDeclineGroupInvite={onDeclineGroupInvite}
                     onSelectGroupConversation={onSelectGroupConversation}
                 />
 

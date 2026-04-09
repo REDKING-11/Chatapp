@@ -1,6 +1,7 @@
 import { parseJsonResponse } from "../../lib/api";
+import { getCoreApiBase } from "../../lib/env";
 
-const CORE_API_BASE = import.meta.env.VITE_CORE_API_BASE;
+const CORE_API_BASE = getCoreApiBase();
 const REALTIME_WS_BASE =
   import.meta.env.VITE_REALTIME_WS_BASE ||
   CORE_API_BASE.replace(/^http/i, "ws").replace(/\/$/, "") + "/ws/";

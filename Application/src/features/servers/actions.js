@@ -1,6 +1,7 @@
 import { parseJsonResponse } from "../../lib/api";
+import { getCoreApiBase } from "../../lib/env";
 
-const CORE_API_BASE = import.meta.env.VITE_CORE_API_BASE;
+const CORE_API_BASE = getCoreApiBase();
 
 function normalizeServerFetchError(error, fallbackMessage) {
     if (error instanceof TypeError) {

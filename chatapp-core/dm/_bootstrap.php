@@ -27,6 +27,25 @@ function dmColumnExists(PDO $db, string $table, string $column): bool {
     return $cache[$cacheKey];
 }
 
+function dmTableExists(PDO $db, string $table): bool {
+    static $cache = [];
+
+    if (array_key_exists($table, $cache)) {
+        return $cache[$table];
+    }
+
+    $stmt = $db->prepare('
+        SELECT COUNT(*) AS count_found
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = ?
+    ');
+    $stmt->execute([$table]);
+
+    $cache[$table] = ((int)($stmt->fetch()['count_found'] ?? 0)) > 0;
+    return $cache[$table];
+}
+
 function dmTrimmedString($value): ?string {
     if (!is_string($value)) {
         return null;
@@ -188,6 +207,18 @@ function dmFetchConversationPayload(PDO $db, int $conversationId): array {
         }, $participants))
         : 'Direct Message';
     $resolvedTitle = $explicitTitle ?? $fallbackTitle;
+    $pendingInviteCount = 0;
+
+    if (dmTableExists($db, 'dm_group_invites')) {
+        $inviteStmt = $db->prepare('
+            SELECT COUNT(*) AS invite_count
+            FROM dm_group_invites
+            WHERE conversation_id = ?
+              AND status = "pending"
+        ');
+        $inviteStmt->execute([$conversationId]);
+        $pendingInviteCount = (int)($inviteStmt->fetch()['invite_count'] ?? 0);
+    }
 
     return [
         'conversation' => [
@@ -198,6 +229,7 @@ function dmFetchConversationPayload(PDO $db, int $conversationId): array {
             'createdAt' => $conversation['created_at'],
             'updatedAt' => $conversation['updated_at'],
             'relayPolicy' => dmBuildRelayPolicyRow($conversation),
+            'pendingInviteCount' => $pendingInviteCount,
             'participants' => array_map(function ($row) {
                 return [
                     'userId' => (int)$row['user_id'],
