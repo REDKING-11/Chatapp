@@ -1,4 +1,5 @@
 import { parseJsonResponse } from "../../lib/api";
+import { getCoreApiBase } from "../../lib/env";
 import { getStoredAuthToken } from "../session/actions";
 import {
     createDirectConversation,
@@ -9,7 +10,7 @@ import {
     sendDirectMessage
 } from "../dm/actions";
 
-const CORE_API_BASE = import.meta.env.VITE_CORE_API_BASE;
+const CORE_API_BASE = getCoreApiBase();
 
 function authHeaders() {
     const token = getStoredAuthToken();

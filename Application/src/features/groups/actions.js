@@ -1,4 +1,5 @@
 import { parseJsonResponse } from "../../lib/api";
+import { getCoreApiBase } from "../../lib/env";
 import { getStoredAuthToken } from "../session/actions";
 import {
     fetchUserDmDevices,
@@ -6,7 +7,7 @@ import {
     sendDirectMessage
 } from "../dm/actions";
 
-const CORE_API_BASE = import.meta.env.VITE_CORE_API_BASE;
+const CORE_API_BASE = getCoreApiBase();
 
 function authHeaders() {
     const token = getStoredAuthToken();
@@ -52,6 +53,17 @@ export async function fetchGroupConversations() {
     const data = await parseJsonResponse(res, "Failed to load conversations");
 
     return (data.conversations || []).filter((conversation) => conversation.kind === "group");
+}
+
+export async function fetchPendingGroupInvites() {
+    const res = await fetch(`${CORE_API_BASE}/dm/invites/list.php`, {
+        headers: {
+            Authorization: `Bearer ${getStoredAuthToken()}`
+        }
+    });
+    const data = await parseJsonResponse(res, "Failed to load group invites");
+
+    return data.invites || [];
 }
 
 export async function createGroupConversation({
@@ -177,4 +189,34 @@ export async function sendGroupConversationMessage({
         currentUser,
         conversationId
     });
+}
+
+export async function acceptGroupInvite({ currentUser, inviteId }) {
+    const res = await fetch(`${CORE_API_BASE}/dm/invites/accept.php`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ inviteId })
+    });
+    const data = await parseJsonResponse(res, "Failed to accept group invite");
+
+    const opened = await openGroupConversation({
+        currentUser,
+        conversationId: data.conversation.id
+    });
+
+    return {
+        inviteId,
+        conversation: data.conversation,
+        messages: opened.messages || []
+    };
+}
+
+export async function declineGroupInvite(inviteId) {
+    const res = await fetch(`${CORE_API_BASE}/dm/invites/decline.php`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ inviteId })
+    });
+
+    return parseJsonResponse(res, "Failed to decline group invite");
 }

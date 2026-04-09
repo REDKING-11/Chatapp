@@ -592,7 +592,15 @@ function App() {
     const selectedJoinedServer =
         joinedServers.find((server) => server.id === selectedJoinedServerId) || null;
     const isFriendsView = selectedJoinedServerId === FRIENDS_TAB_ID;
-    const profileMediaHostUrl = selectedJoinedServer?.backendUrl || joinedServers[0]?.backendUrl || null;
+    const selectedServerIsOnline = selectedJoinedServer
+        ? serverStatuses[selectedJoinedServer.id] === "online"
+        : false;
+    const fallbackProfileMediaServer = joinedServers.find(
+        (server) => serverStatuses[server.id] === "online"
+    );
+    const profileMediaHostUrl = selectedServerIsOnline
+        ? selectedJoinedServer.backendUrl
+        : fallbackProfileMediaServer?.backendUrl || null;
 
     return (
         <>

@@ -2946,6 +2946,12 @@ body[data-high-contrast="true"] .client-settings-section {
     padding: 4px;
 }
 
+.friends-group-helper {
+    margin: 0;
+    font-size: 13px;
+    color: var(--server-text-muted);
+}
+
 .friends-group-member-option {
     display: flex;
     align-items: center;

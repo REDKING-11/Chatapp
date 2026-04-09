@@ -27,9 +27,12 @@ import {
 import { RELAY_RETENTION_OPTIONS } from "../features/dm/actions";
 import {
     createGroupConversation,
+    fetchPendingGroupInvites,
     fetchGroupConversations,
     openGroupConversation,
-    sendGroupConversationMessage
+    sendGroupConversationMessage,
+    acceptGroupInvite,
+    declineGroupInvite
 } from "../features/groups/actions";
 
 export default function FriendsHome({
@@ -48,6 +51,7 @@ export default function FriendsHome({
     const [selectedFriendId, setSelectedFriendId] = useState(null);
     const [messages, setMessages] = useState([]);
     const [groupConversations, setGroupConversations] = useState([]);
+    const [groupInvites, setGroupInvites] = useState([]);
     const [selectedGroupConversationId, setSelectedGroupConversationId] = useState(null);
     const [groupMessages, setGroupMessages] = useState([]);
     const [groupComposer, setGroupComposer] = useState("");
@@ -76,6 +80,7 @@ export default function FriendsHome({
     const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
     const [groupTitle, setGroupTitle] = useState("");
     const [groupMemberIds, setGroupMemberIds] = useState([]);
+    const [groupCreateError, setGroupCreateError] = useState("");
     const [syncState, setSyncState] = useState({
         status: "idle",
         importedCount: 0,
@@ -90,6 +95,8 @@ export default function FriendsHome({
     const lockCloseTimeoutRef = useRef(null);
     const lockHideTimeoutRef = useRef(null);
     const viewAcknowledgeTimeoutRef = useRef(null);
+    const groupConversationsRef = useRef([]);
+    const selectedGroupConversationIdRef = useRef(null);
 
     const legacyFriendTagsStorageKey = `friendTags:${currentUser.id}`;
     const collapsedFriendFoldersStorageKey = `collapsedFriendFolders:${currentUser.id}`;
@@ -199,20 +206,59 @@ export default function FriendsHome({
     async function loadGroupConversationList(preferredConversationId = null) {
         try {
             const conversations = await fetchGroupConversations();
-            setGroupConversations(conversations);
-            setSelectedGroupConversationId((prev) => {
-                const desiredId = preferredConversationId || prev;
+            const existingConversations = groupConversationsRef.current;
+            const fetchedIds = new Set(conversations.map((conversation) => String(conversation.id)));
+            const mergedConversations = [
+                ...conversations,
+                ...existingConversations.filter(
+                    (conversation) => !fetchedIds.has(String(conversation.id))
+                )
+            ];
 
-                if (desiredId && conversations.some((conversation) => String(conversation.id) === String(desiredId))) {
+            setGroupConversations(mergedConversations);
+            setSelectedGroupConversationId((prev) => {
+                const desiredId = preferredConversationId || prev || selectedGroupConversationIdRef.current;
+
+                if (
+                    desiredId
+                    && mergedConversations.some((conversation) => String(conversation.id) === String(desiredId))
+                ) {
                     return desiredId;
                 }
 
-                return conversations[0]?.id ?? null;
+                return mergedConversations[0]?.id ?? null;
             });
         } catch (err) {
             showError(err);
         }
     }
+
+    async function loadGroupInvites() {
+        try {
+            setGroupInvites(await fetchPendingGroupInvites());
+        } catch (err) {
+            showError(err);
+        }
+    }
+
+    function upsertGroupConversation(conversation) {
+        if (!conversation?.id) {
+            return;
+        }
+
+        setGroupConversations((prev) => {
+            const next = prev.filter((entry) => String(entry.id) !== String(conversation.id));
+            return [conversation, ...next];
+        });
+    }
+
+    useEffect(() => {
+        groupConversationsRef.current = groupConversations;
+    }, [groupConversations]);
+
+    useEffect(() => {
+        selectedGroupConversationIdRef.current = selectedGroupConversationId;
+    }, [selectedGroupConversationId]);
 
     useEffect(() => {
         loadFriends();
@@ -220,6 +266,10 @@ export default function FriendsHome({
 
     useEffect(() => {
         loadGroupConversationList();
+    }, []);
+
+    useEffect(() => {
+        loadGroupInvites();
     }, []);
 
     useEffect(() => {
@@ -403,11 +453,13 @@ export default function FriendsHome({
         const intervalId = window.setInterval(() => {
             loadFriends();
             loadGroupConversationList();
+            loadGroupInvites();
         }, 15000);
 
         function handleWindowFocus() {
             loadFriends();
             loadGroupConversationList();
+            loadGroupInvites();
         }
 
         window.addEventListener("focus", handleWindowFocus);
@@ -942,8 +994,10 @@ export default function FriendsHome({
 
     async function handleCreateGroup(event) {
         event.preventDefault();
+        setGroupCreateError("");
 
         if (!groupTitle.trim() || groupMemberIds.length < 2) {
+            setGroupCreateError("Choose a group name and at least two friends for a group chat.");
             return;
         }
 
@@ -957,6 +1011,12 @@ export default function FriendsHome({
                     id: friend.friendUserId,
                     username: friend.friendUsername
                 }));
+
+            if (participantUsers.length < 2) {
+                setGroupCreateError("Select at least two friends from the list before creating the group.");
+                return;
+            }
+
             const result = await createGroupConversation({
                 currentUser,
                 title: groupTitle.trim(),
@@ -968,16 +1028,20 @@ export default function FriendsHome({
                 conversationId: result.conversation.id
             });
 
+            upsertGroupConversation(result.conversation);
             setGroupMessages(opened.messages);
-            setGroupConversationMeta(result.conversation);
+            setGroupConversationMeta(opened.conversation || result.conversation);
             setGroupComposer("");
             setShowCreateGroupModal(false);
             setGroupTitle("");
             setGroupMemberIds([]);
+            setGroupCreateError("");
             setActiveView("group");
             setSelectedGroupConversationId(result.conversation.id);
             await loadGroupConversationList(result.conversation.id);
+            await loadGroupInvites();
         } catch (err) {
+            setGroupCreateError(String(err?.message || err || "Could not create the group chat."));
             showError(err);
         } finally {
             setSubmitting(false);
@@ -1008,6 +1072,44 @@ export default function FriendsHome({
                 ...(opened.conversation || {})
             }));
             await loadGroupConversationList(selectedGroupConversationId);
+            await loadGroupInvites();
+        } catch (err) {
+            showError(err);
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
+    async function handleAcceptGroupInvite(inviteId) {
+        setSubmitting(true);
+        clearErrorState();
+
+        try {
+            const accepted = await acceptGroupInvite({
+                currentUser,
+                inviteId
+            });
+            upsertGroupConversation(accepted.conversation);
+            setGroupMessages(accepted.messages);
+            setGroupConversationMeta(accepted.conversation);
+            setActiveView("group");
+            setSelectedGroupConversationId(accepted.conversation.id);
+            setGroupInvites((prev) => prev.filter((invite) => String(invite.id) !== String(inviteId)));
+            await loadGroupConversationList(accepted.conversation.id);
+        } catch (err) {
+            showError(err);
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
+    async function handleDeclineGroupInvite(inviteId) {
+        setSubmitting(true);
+        clearErrorState();
+
+        try {
+            await declineGroupInvite(inviteId);
+            setGroupInvites((prev) => prev.filter((invite) => String(invite.id) !== String(inviteId)));
         } catch (err) {
             showError(err);
         } finally {
@@ -1414,14 +1516,15 @@ export default function FriendsHome({
     return (
         <main className="main friends-main">
             <div className="friends-top-chrome">
-                <FriendsHeader
-                    autoRefreshEnabled={autoRefreshEnabled}
-                    onRefresh={() => {
-                        loadFriends();
-                        loadGroupConversationList(selectedGroupConversationId);
-                    }}
-                    onToggleAutoRefresh={setAutoRefreshEnabled}
-                />
+                    <FriendsHeader
+                        autoRefreshEnabled={autoRefreshEnabled}
+                        onRefresh={() => {
+                            loadFriends();
+                            loadGroupConversationList(selectedGroupConversationId);
+                            loadGroupInvites();
+                        }}
+                        onToggleAutoRefresh={setAutoRefreshEnabled}
+                    />
 
                 {syncState.status === "syncing" ? (
                     <div className="friends-sync-banner syncing">
@@ -1453,6 +1556,7 @@ export default function FriendsHome({
                     clientSettings={clientSettings}
                     loading={loading}
                     friendsState={friendsState}
+                    groupInvites={groupInvites}
                     groupConversations={groupConversations}
                     selectedFriendId={selectedFriendId}
                     selectedGroupConversationId={selectedGroupConversationId}
@@ -1465,6 +1569,8 @@ export default function FriendsHome({
                     conversationHasUnreadActivity={conversationHasUnreadActivity}
                     onOpenAddFriend={() => setShowAddFriendModal(true)}
                     onCreateGroup={() => setShowCreateGroupModal(true)}
+                    onAcceptGroupInvite={handleAcceptGroupInvite}
+                    onDeclineGroupInvite={handleDeclineGroupInvite}
                     onSelectGroupConversation={handleSelectGroupConversation}
                     onSelectFriend={handleSelectFriend}
                     onOpenFriendContextMenu={openFriendContextMenu}
@@ -1474,6 +1580,7 @@ export default function FriendsHome({
                 />
 
                 <FriendsConversationPanel
+                    currentUser={currentUser}
                     activeView={activeView}
                     selectedGroupConversation={selectedGroupConversation}
                     activeGroupParticipantNames={activeGroupParticipantNames}
@@ -1557,8 +1664,12 @@ export default function FriendsHome({
                     groupTitle={groupTitle}
                     groupMemberIds={groupMemberIds}
                     selectedRelayTtlSeconds={selectedRelayTtlSeconds}
+                    errorMessage={groupCreateError}
                     submitting={submitting}
-                    onClose={() => setShowCreateGroupModal(false)}
+                    onClose={() => {
+                        setShowCreateGroupModal(false);
+                        setGroupCreateError("");
+                    }}
                     onGroupTitleChange={setGroupTitle}
                     onRelayTtlChange={setSelectedRelayTtlSeconds}
                     onToggleGroupMember={toggleGroupMemberSelection}

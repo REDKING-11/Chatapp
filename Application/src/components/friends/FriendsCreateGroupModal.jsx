@@ -5,6 +5,7 @@ export default function FriendsCreateGroupModal({
     groupTitle,
     groupMemberIds,
     selectedRelayTtlSeconds,
+    errorMessage,
     submitting,
     onClose,
     onGroupTitleChange,
@@ -79,11 +80,19 @@ export default function FriendsCreateGroupModal({
                         )}
                     </div>
 
+                    <p className="friends-group-helper">
+                        Select at least two friends. A group chat includes you plus the friends you pick.
+                    </p>
+
+                    {errorMessage ? (
+                        <p className="friends-error">{errorMessage}</p>
+                    ) : null}
+
                     <button
                         type="submit"
                         disabled={submitting || !groupTitle.trim() || groupMemberIds.length < 2}
                     >
-                        Create group
+                        {submitting ? "Creating group..." : "Create group"}
                     </button>
                 </form>
             </div>
