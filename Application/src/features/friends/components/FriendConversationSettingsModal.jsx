@@ -1,4 +1,4 @@
-import { RELAY_RETENTION_OPTIONS } from "../../features/dm/actions";
+import { RELAY_RETENTION_OPTIONS } from "../../dm/actions";
 
 export default function FriendConversationSettingsModal({
     selectedFriend,

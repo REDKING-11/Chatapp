@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
     fetchProfileAssetBlobUrl,
     fetchProfileAssetManifest
-} from "../../features/profile/actions";
+} from "../../profile/actions";
 
 function EmptyState({ title, description }) {
     return (
@@ -134,6 +134,17 @@ function getMessageSenderUserId({ message, currentUser, directFriend }) {
     return "";
 }
 
+function getReplyPreviewBody(text) {
+    const normalizedText = text && typeof text === "object" ? text.body : text;
+    const trimmed = String(normalizedText || "").trim();
+
+    if (!trimmed) {
+        return "Message";
+    }
+
+    return trimmed.length > 72 ? `${trimmed.slice(0, 69).trimEnd()}...` : trimmed;
+}
+
 function useFriendMessageAvatarUrls({ userIds, profileMediaHostUrl, enabled }) {
     const [avatarUrls, setAvatarUrls] = useState({});
     const userIdKey = useMemo(
@@ -149,7 +160,7 @@ function useFriendMessageAvatarUrls({ userIds, profileMediaHostUrl, enabled }) {
         setAvatarUrls({});
 
         if (!enabled || !profileMediaHostUrl || normalizedUserIds.length === 0) {
-            return () => {};
+            return () => { };
         }
 
         async function loadAvatarUrls() {
@@ -207,8 +218,16 @@ function MessageList({
     groupInitialsByUserId = {},
     identityStyle = "profileMedia",
     nameMode = "displayName",
-    messageAlignment = "split"
+    messageAlignment = "split",
+    onReply = null,
+    onEdit = null,
+    onDelete = null
 }) {
+    const messageMap = useMemo(
+        () => Object.fromEntries(messages.map((message) => [String(message.messageId), message])),
+        [messages]
+    );
+
     return (
         <div className={`friends-message-list align-${messageAlignment}`} ref={messageListRef}>
             {messages.length === 0 ? (
@@ -230,6 +249,20 @@ function MessageList({
                     });
                     const avatarUrl = identityStyle === "profileMedia" ? avatarUrls[senderUserId] : null;
                     const compactLabel = groupInitialsByUserId[senderUserId] || getInitials(displayName);
+                    const messageBody = getReplyPreviewBody(message.body);
+                    const repliedMessage = message.replyTo?.messageId
+                        ? messageMap[String(message.replyTo.messageId)]
+                        : null;
+                    const replyAuthor = message.replyTo?.author
+                        || (repliedMessage
+                            ? getMessageDisplayName({
+                                message: repliedMessage,
+                                currentUser,
+                                participantsById,
+                                directFriend,
+                                nameMode
+                            })
+                            : "Message");
 
                     return (
                         <div
@@ -247,8 +280,32 @@ function MessageList({
                                 <div className="friend-message-meta">
                                     <strong>{displayName}</strong>
                                     <time>{new Date(message.createdAt).toLocaleString()}</time>
+                                    {message.editedAt ? <small>edited</small> : null}
                                 </div>
-                                <span>{message.body}</span>
+                                {message.replyTo ? (
+                                    <div className="friend-message-reply-preview">
+                                        <strong>{replyAuthor}</strong>
+                                        <span>{getReplyPreviewBody(message.replyTo.body || repliedMessage?.body)}</span>
+                                    </div>
+                                ) : null}
+                                <span className={message.isDeleted ? "friend-message-deleted" : ""}>{messageBody}</span>
+                                <div className="friend-message-actions">
+                                    {!message.isDeleted && onReply ? (
+                                        <button type="button" onClick={() => onReply({ ...message, author: displayName })}>
+                                            Reply
+                                        </button>
+                                    ) : null}
+                                    {!message.isDeleted && isOutgoing && onEdit ? (
+                                        <button type="button" onClick={() => onEdit({ ...message, author: displayName })}>
+                                            Edit
+                                        </button>
+                                    ) : null}
+                                    {!message.isDeleted && isOutgoing && onDelete ? (
+                                        <button type="button" onClick={() => onDelete(message)}>
+                                            Delete
+                                        </button>
+                                    ) : null}
+                                </div>
                             </div>
                         </div>
                     );
@@ -267,7 +324,33 @@ function InlineNotice({ children, actions = null }) {
     );
 }
 
-function DirectEncryptionStage({ lockPhase, submitting }) {
+function MessageActionBanner({ replyTo, editingMessage, onCancel }) {
+    const activeMessage = editingMessage || replyTo;
+
+    if (!activeMessage) {
+        return null;
+    }
+
+    return (
+        <div className="friends-message-action-banner">
+            <span>
+                {editingMessage ? "Editing" : "Replying to"}{" "}
+                <strong>{activeMessage.author || "message"}</strong>
+                {activeMessage.body ? `: ${getReplyPreviewBody(activeMessage.body)}` : ""}
+            </span>
+            <button type="button" onClick={onCancel}>
+                Cancel
+            </button>
+        </div>
+    );
+}
+
+function DirectEncryptionStage({
+    lockPhase,
+    submitting,
+    effectiveSelectedFriend,
+    onEncryptChat
+}) {
     return (
         <div className={`friends-encryption-stage ${lockPhase === "open" ? "is-open" : ""} ${lockPhase === "closing" ? "is-closing" : ""} ${lockPhase === "closed" ? "is-closed" : ""}`}>
             <div className="friends-encryption-lock" aria-hidden="true">
@@ -283,13 +366,26 @@ function DirectEncryptionStage({ lockPhase, submitting }) {
                         ? "Encrypting chat..."
                         : "Chat is locked"}
             </strong>
-            <p>
-                {lockPhase === "closed"
-                    ? "Secure DM ready. Opening your encrypted conversation."
-                    : submitting
-                        ? "Creating the secure DM and sharing the encryption key."
-                        : "You need to encrypt this chat before messages can be sent."}
-            </p>
+            <div className="friends-encryption-stage-actions">
+                <p>
+                    {lockPhase === "closed"
+                        ? "Secure DM ready. Opening your encrypted conversation."
+                        : submitting
+                            ? "Creating the secure DM and sharing the encryption key."
+                            : "You need to encrypt this chat before messages can be sent."}
+                </p>
+                {!effectiveSelectedFriend?.conversationId ? (
+                        <button
+                            type="button"
+                            className={`friends-encrypt-button ${submitting ? "is-busy" : ""}`}
+                            onClick={onEncryptChat}
+                            disabled={submitting}
+                        >
+                            <span className="friends-encrypt-lock" aria-hidden="true">🔒</span>
+                            <span>{submitting ? "Encrypting..." : "Encrypt chat"}</span>
+                        </button>
+                ) : null}
+            </div>
         </div>
     );
 }
@@ -302,10 +398,16 @@ function GroupConversationView({
     activeGroupParticipantNames,
     groupMessages,
     groupComposer,
+    groupReplyTo,
+    groupEditingMessage,
     submitting,
     messageListRef,
     onGroupComposerChange,
-    onSendGroupMessage
+    onSendGroupMessage,
+    onGroupReply,
+    onGroupEdit,
+    onGroupDelete,
+    onCancelGroupAction
 }) {
     const participantsById = Object.fromEntries(
         (selectedGroupConversation?.participants || []).map((participant) => [
@@ -372,17 +474,26 @@ function GroupConversationView({
                 identityStyle={identityStyle}
                 nameMode={nameMode}
                 messageAlignment={messageAlignment}
+                onReply={onGroupReply}
+                onEdit={onGroupEdit}
+                onDelete={onGroupDelete}
+            />
+
+            <MessageActionBanner
+                replyTo={groupReplyTo}
+                editingMessage={groupEditingMessage}
+                onCancel={onCancelGroupAction}
             />
 
             <form className="friend-composer" onSubmit={onSendGroupMessage}>
                 <textarea
                     value={groupComposer}
                     onChange={(event) => onGroupComposerChange(event.target.value)}
-                    placeholder={`Message ${selectedGroupConversation.title}`}
+                    placeholder={groupEditingMessage ? "Update message..." : groupReplyTo ? "Write reply..." : `Message ${selectedGroupConversation.title}`}
                     rows={3}
                 />
                 <button type="submit" disabled={submitting || !groupComposer.trim()}>
-                    Send group message
+                    {groupEditingMessage ? "Save edit" : "Send group message"}
                 </button>
             </form>
         </>
@@ -410,6 +521,8 @@ function DirectConversationView({
     lockPhase,
     messages,
     composer,
+    directReplyTo,
+    directEditingMessage,
     isDirectConversationEncrypted,
     canComposeDirectMessage,
     messageListRef,
@@ -421,7 +534,11 @@ function DirectConversationView({
     onRetentionAccept,
     onEncryptChat,
     onComposerChange,
-    onSendMessage
+    onSendMessage,
+    onDirectReply,
+    onDirectEdit,
+    onDirectDelete,
+    onCancelDirectAction
 }) {
     const avatarUserIds = useMemo(
         () => [
@@ -587,27 +704,14 @@ function DirectConversationView({
                 </InlineNotice>
             ) : null}
 
-            {!effectiveSelectedFriend?.conversationId ? (
-                <div className="friends-encrypt-callout">
-                    <div>
-                        <strong>Secure this chat</strong>
-                        <p>This sends the hidden setup handshake so both sides can open the encrypted DM.</p>
-                    </div>
-                    <button
-                        type="button"
-                        className={`friends-encrypt-button ${submitting ? "is-busy" : ""}`}
-                        onClick={onEncryptChat}
-                        disabled={submitting}
-                    >
-                        <span className="friends-encrypt-lock" aria-hidden="true">🔒</span>
-                        <span>{submitting ? "Encrypting..." : "Encrypt chat"}</span>
-                    </button>
-                </div>
-            ) : null}
-
             {showEncryptionStage ? (
                 <div className="friends-message-list" ref={messageListRef}>
-                    <DirectEncryptionStage lockPhase={lockPhase} submitting={submitting} />
+                    <DirectEncryptionStage
+                        lockPhase={lockPhase}
+                        submitting={submitting}
+                        effectiveSelectedFriend={effectiveSelectedFriend}
+                        onEncryptChat={onEncryptChat}
+                    />
                 </div>
             ) : (
                 <MessageList
@@ -620,25 +724,34 @@ function DirectConversationView({
                     identityStyle={identityStyle}
                     nameMode={nameMode}
                     messageAlignment={messageAlignment}
+                    onReply={onDirectReply}
+                    onEdit={onDirectEdit}
+                    onDelete={onDirectDelete}
                 />
             )}
 
-            <form className="friend-composer" onSubmit={onSendMessage}>
-                <textarea
-                    value={composer}
-                    onChange={(event) => onComposerChange(event.target.value)}
-                    placeholder={
-                        isDirectConversationEncrypted
-                            ? `Message ${selectedFriend.friendUsername}`
-                            : "Encrypt chat first"
-                    }
-                    rows={3}
-                    disabled={!isDirectConversationEncrypted || submitting}
-                />
-                <button type="submit" disabled={!canComposeDirectMessage || !composer.trim()}>
-                    Send DM
-                </button>
-            </form>
+            {isDirectConversationEncrypted ? (
+                <>
+                    <MessageActionBanner
+                        replyTo={directReplyTo}
+                        editingMessage={directEditingMessage}
+                        onCancel={onCancelDirectAction}
+                    />
+
+                    <form className="friend-composer" onSubmit={onSendMessage}>
+                        <textarea
+                            value={composer}
+                            onChange={(event) => onComposerChange(event.target.value)}
+                            placeholder={directEditingMessage ? "Update message..." : directReplyTo ? "Write reply..." : `Message ${selectedFriend.friendUsername}`}
+                            rows={3}
+                            disabled={submitting}
+                        />
+                        <button type="submit" disabled={!canComposeDirectMessage || !composer.trim()}>
+                            {directEditingMessage ? "Save edit" : "Send DM"}
+                        </button>
+                    </form>
+                </>
+            ) : null}
         </>
     );
 }

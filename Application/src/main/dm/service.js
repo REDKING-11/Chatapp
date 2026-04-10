@@ -52,6 +52,29 @@ function getConversationOrThrow(userState, conversationId) {
   return conversation;
 }
 
+function normalizePlaintextBody(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value && typeof value === "object") {
+    return normalizePlaintextBody(value.body);
+  }
+
+  return value == null ? "" : String(value);
+}
+
+function normalizeReplyTo(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  return {
+    ...value,
+    body: normalizePlaintextBody(value.body)
+  };
+}
+
 export function initializeDevice({ userId, username, deviceName }) {
   const { userState } = ensureDevice(userId, username, deviceName);
 
@@ -186,13 +209,24 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
   const { store, userState } = ensureDevice(userId, username);
   const conversation = getConversationOrThrow(userState, conversationId);
   const messageId = randomId("dmmsg");
+  const createdAt = new Date().toISOString();
+  const plaintextPayload = typeof plaintext === "object" && plaintext !== null
+    ? {
+        ...plaintext,
+        id: messageId,
+        body: plaintext.body ?? "",
+        kind: plaintext.kind || "message",
+        createdAt
+      }
+    : {
+        id: messageId,
+        body: plaintext,
+        kind: "message",
+        createdAt
+      };
   const envelope = encryptPayload({
     conversationKey: conversation.conversationKey,
-    plaintext: {
-      id: messageId,
-      body: plaintext,
-      createdAt: new Date().toISOString()
-    },
+    plaintext: plaintextPayload,
     aad: {
       version: 1,
       conversationId,
@@ -210,7 +244,7 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
     nonce: envelope.nonce,
     aad: envelope.aad,
     tag: envelope.tag,
-    createdAt: new Date().toISOString(),
+    createdAt,
     direction: "outgoing"
   };
 
@@ -269,6 +303,60 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
   };
 }
 
+function buildVisibleMessages({ conversation, userId }) {
+  const visibleMessages = [];
+  const visibleMessageMap = new Map();
+
+  conversation.messages.forEach((message) => {
+    const plaintext = decryptPayload({
+      conversationKey: conversation.conversationKey,
+      ciphertext: message.ciphertext,
+      nonce: message.nonce,
+      aad: message.aad,
+      tag: message.tag
+    });
+    const kind = plaintext.kind || "message";
+    const senderUserId = message.senderUserId;
+
+    if (kind === "edit" || kind === "delete") {
+      const targetMessageId = plaintext.targetMessageId;
+      const targetMessage = targetMessageId ? visibleMessageMap.get(String(targetMessageId)) : null;
+
+      if (!targetMessage || String(targetMessage.senderUserId) !== String(senderUserId)) {
+        return;
+      }
+
+      if (kind === "edit") {
+        targetMessage.body = normalizePlaintextBody(plaintext.body || targetMessage.body);
+        targetMessage.editedAt = plaintext.createdAt || message.createdAt;
+      } else {
+        targetMessage.body = "Message deleted";
+        targetMessage.deletedAt = plaintext.createdAt || message.createdAt;
+        targetMessage.isDeleted = true;
+      }
+
+      return;
+    }
+
+    const visibleMessage = {
+      messageId: message.messageId,
+      senderUserId: message.senderUserId,
+      senderDeviceId: message.senderDeviceId,
+      direction: message.direction,
+      body: normalizePlaintextBody(plaintext.body),
+      createdAt: plaintext.createdAt,
+      replyTo: normalizeReplyTo(plaintext.replyTo),
+      editedAt: plaintext.editedAt || null,
+      isDeleted: false
+    };
+
+    visibleMessages.push(visibleMessage);
+    visibleMessageMap.set(String(visibleMessage.messageId), visibleMessage);
+  });
+
+  return visibleMessages;
+}
+
 export function listConversations({ userId, username }) {
   const { userState } = ensureDevice(userId, username);
 
@@ -287,24 +375,7 @@ export function listMessages({ userId, conversationId }) {
   const userState = getUserState(store, userId);
   const conversation = getConversationOrThrow(userState, conversationId);
 
-  return conversation.messages.map((message) => {
-    const plaintext = decryptPayload({
-      conversationKey: conversation.conversationKey,
-      ciphertext: message.ciphertext,
-      nonce: message.nonce,
-      aad: message.aad,
-      tag: message.tag
-    });
-
-    return {
-      messageId: message.messageId,
-      senderUserId: message.senderUserId,
-      senderDeviceId: message.senderDeviceId,
-      direction: message.direction,
-      body: plaintext.body,
-      createdAt: plaintext.createdAt
-    };
-  });
+  return buildVisibleMessages({ conversation, userId });
 }
 
 export function exportConversationPackage({ userId, username, conversationId }) {

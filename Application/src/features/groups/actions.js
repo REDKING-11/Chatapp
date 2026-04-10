@@ -176,13 +176,63 @@ export async function openGroupConversation({ currentUser, conversationId }) {
 export async function sendGroupConversationMessage({
     currentUser,
     conversationId,
+    body,
+    replyTo = null
+}) {
+    await sendDirectMessage({
+        token: getStoredAuthToken(),
+        currentUser,
+        conversationId,
+        body,
+        messageOptions: {
+            kind: "message",
+            replyTo
+        }
+    });
+
+    return openGroupConversation({
+        currentUser,
+        conversationId
+    });
+}
+
+export async function editGroupConversationMessage({
+    currentUser,
+    conversationId,
+    messageId,
     body
 }) {
     await sendDirectMessage({
         token: getStoredAuthToken(),
         currentUser,
         conversationId,
-        body
+        body,
+        messageOptions: {
+            kind: "edit",
+            targetMessageId: messageId
+        }
+    });
+
+    return openGroupConversation({
+        currentUser,
+        conversationId
+    });
+}
+
+export async function deleteGroupConversationMessage({
+    currentUser,
+    conversationId,
+    messageId
+}) {
+    await sendDirectMessage({
+        token: getStoredAuthToken(),
+        currentUser,
+        conversationId,
+        body: "",
+        messageOptions: {
+            kind: "delete",
+            targetMessageId: messageId
+        }
     });
 
     return openGroupConversation({

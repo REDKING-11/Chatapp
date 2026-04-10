@@ -352,14 +352,20 @@ export async function sendDirectMessage({
   token,
   currentUser,
   conversationId,
-  body
+  body,
+  messageOptions = {}
 }) {
   const encryptedMessage = await window.secureDm.createMessage({
     userId: currentUser.id,
     username: currentUser.username,
     conversationId,
     senderUserId: currentUser.id,
-    plaintext: body
+    plaintext: {
+      kind: messageOptions.kind || "message",
+      body,
+      replyTo: messageOptions.replyTo || null,
+      targetMessageId: messageOptions.targetMessageId || null
+    }
   });
 
   try {
