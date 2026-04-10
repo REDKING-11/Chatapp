@@ -1,6 +1,6 @@
 import LayoutRenderer from "./LayoutRenderer";
 import { defaultLayouts } from "../layouts/defaultLayouts";
-import FriendsHome from "./FriendsHome";
+import FriendsHome from "../features/friends/pages/FriendsHome";
 
 export default function MainView({
     channel,

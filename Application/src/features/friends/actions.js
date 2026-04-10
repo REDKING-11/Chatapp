@@ -360,7 +360,7 @@ export async function initializeFriendDirectConversation({ currentUser, friend, 
     };
 }
 
-export async function sendFriendDirectMessage({ currentUser, friend, body, relayTtlSeconds }) {
+export async function sendFriendDirectMessage({ currentUser, friend, body, relayTtlSeconds, replyTo = null }) {
     const initialized = await initializeFriendDirectConversation({
         currentUser,
         friend,
@@ -372,7 +372,11 @@ export async function sendFriendDirectMessage({ currentUser, friend, body, relay
         token: getStoredAuthToken(),
         currentUser,
         conversationId,
-        body
+        body,
+        messageOptions: {
+            kind: "message",
+            replyTo
+        }
     });
 
     const opened = await openFriendConversation({
@@ -388,6 +392,42 @@ export async function sendFriendDirectMessage({ currentUser, friend, body, relay
         messages: opened.messages,
         conversation: initialized.conversation || opened.conversation
     };
+}
+
+export async function editFriendDirectMessage({ currentUser, friend, messageId, body }) {
+    await sendDirectMessage({
+        token: getStoredAuthToken(),
+        currentUser,
+        conversationId: friend.conversationId,
+        body,
+        messageOptions: {
+            kind: "edit",
+            targetMessageId: messageId
+        }
+    });
+
+    return openFriendConversation({
+        currentUser,
+        friend
+    });
+}
+
+export async function deleteFriendDirectMessage({ currentUser, friend, messageId }) {
+    await sendDirectMessage({
+        token: getStoredAuthToken(),
+        currentUser,
+        conversationId: friend.conversationId,
+        body: "",
+        messageOptions: {
+            kind: "delete",
+            targetMessageId: messageId
+        }
+    });
+
+    return openFriendConversation({
+        currentUser,
+        friend
+    });
 }
 
 export async function requestFriendRelayRetention({ conversationId, relayTtlSeconds }) {

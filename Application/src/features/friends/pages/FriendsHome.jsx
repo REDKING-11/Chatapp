@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import FriendContextMenu from "./friends/FriendContextMenu";
-import FriendsAddFriendModal from "./friends/FriendsAddFriendModal";
-import FriendConversationSettingsModal from "./friends/FriendConversationSettingsModal";
-import FriendsConversationPanel from "./friends/FriendsConversationPanel";
-import FriendsCreateGroupModal from "./friends/FriendsCreateGroupModal";
-import FriendsHeader from "./friends/FriendsHeader";
-import FriendsRail from "./friends/FriendsRail";
-import { formatAppError, isDebugModeEnabled } from "../lib/debug";
-import { loadClientSettings, saveClientSettings } from "../features/clientSettings";
+import FriendContextMenu from "../components/FriendContextMenu";
+import FriendsAddFriendModal from "../components/FriendsAddFriendModal";
+import FriendRemovalConfirmModal from "../components/FriendRemovalConfirmModal";
+import FriendConversationSettingsModal from "../components/FriendConversationSettingsModal";
+import FriendsConversationPanel from "../components/FriendsConversationPanel";
+import FriendsCreateGroupModal from "../components/FriendsCreateGroupModal";
+import FriendsHeader from "../components/FriendsHeader";
+import FriendsRail from "../components/FriendsRail";
+import { formatAppError, isDebugModeEnabled } from "../../../lib/debug";
+import { loadClientSettings, saveClientSettings } from "../../clientSettings";
 import {
     acceptFriendRequest,
     acceptFriendRelayRetention,
@@ -15,6 +16,8 @@ import {
     declineFriendConversationHistory,
     fetchFriends,
     fetchHistoryAccessStatus,
+    deleteFriendDirectMessage,
+    editFriendDirectMessage,
     initializeFriendDirectConversation,
     importPendingHistoryTransfers,
     openFriendConversation,
@@ -23,17 +26,28 @@ import {
     requestFriendRelayRetention,
     sendFriendDirectMessage,
     sendFriendRequest
-} from "../features/friends/actions";
-import { RELAY_RETENTION_OPTIONS } from "../features/dm/actions";
+} from "../actions";
+import { RELAY_RETENTION_OPTIONS } from "../../dm/actions";
 import {
     createGroupConversation,
     fetchPendingGroupInvites,
     fetchGroupConversations,
     openGroupConversation,
     sendGroupConversationMessage,
+    editGroupConversationMessage,
+    deleteGroupConversationMessage,
     acceptGroupInvite,
     declineGroupInvite
-} from "../features/groups/actions";
+} from "../../groups/actions";
+import {
+    getLatestIncomingMessageByTimestamp,
+    getLatestMessageByTimestamp,
+    getMessageTimestamp,
+    getPreviewIncomingTimestamp,
+    getPreviewTimestamp,
+    truncateNotificationBody,
+    truncatePreview
+} from "../utils/messagePreviews";
 
 export default function FriendsHome({
     currentUser,
@@ -55,10 +69,14 @@ export default function FriendsHome({
     const [selectedGroupConversationId, setSelectedGroupConversationId] = useState(null);
     const [groupMessages, setGroupMessages] = useState([]);
     const [groupComposer, setGroupComposer] = useState("");
+    const [groupReplyTo, setGroupReplyTo] = useState(null);
+    const [groupEditingMessage, setGroupEditingMessage] = useState(null);
     const [groupConversationMeta, setGroupConversationMeta] = useState(null);
     const [conversationPreviews, setConversationPreviews] = useState({});
     const [activeView, setActiveView] = useState("friend");
     const [composer, setComposer] = useState("");
+    const [directReplyTo, setDirectReplyTo] = useState(null);
+    const [directEditingMessage, setDirectEditingMessage] = useState(null);
     const [friendUsername, setFriendUsername] = useState("");
     const [showAddFriendModal, setShowAddFriendModal] = useState(false);
     const [loading, setLoading] = useState(true);
@@ -78,6 +96,7 @@ export default function FriendsHome({
     const [lockPhase, setLockPhase] = useState("hidden");
     const [isEncryptingChat, setIsEncryptingChat] = useState(false);
     const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+    const [friendRemovalConfirm, setFriendRemovalConfirm] = useState(null);
     const [groupTitle, setGroupTitle] = useState("");
     const [groupMemberIds, setGroupMemberIds] = useState([]);
     const [groupCreateError, setGroupCreateError] = useState("");
@@ -87,6 +106,7 @@ export default function FriendsHome({
         source: null
     });
     const [conversationSeenTimestamps, setConversationSeenTimestamps] = useState({});
+    const [hasLoadedConversationSeenTimestamps, setHasLoadedConversationSeenTimestamps] = useState(false);
     const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== "hidden");
     const [previewRefreshNonce, setPreviewRefreshNonce] = useState(0);
     const messageListRef = useRef(null);
@@ -125,36 +145,12 @@ export default function FriendsHome({
         setErrorDebugDetails(isDebugModeEnabled() ? debugDetails : "");
     }
 
-    function truncatePreview(text, maxLength = 16) {
-        const trimmed = String(text || "").trim();
-
-        if (!trimmed) {
-            return "";
-        }
-
-        if (trimmed.length <= maxLength) {
-            return trimmed;
-        }
-
-        return `${trimmed.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
-    }
-
-    function truncateNotificationBody(text, maxLength = 80) {
-        const trimmed = String(text || "").trim();
-
-        if (!trimmed) {
-            return "";
-        }
-
-        if (trimmed.length <= maxLength) {
-            return trimmed;
-        }
-
-        return `${trimmed.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
-    }
-
     async function maybeShowDesktopNotification({ conversationId, message }) {
         if (!window.desktopNotifications || !message || message.direction !== "incoming") {
+            return;
+        }
+
+        if (message.kind && message.kind !== "message") {
             return;
         }
 
@@ -277,6 +273,7 @@ export default function FriendsHome({
     useEffect(() => {
         hasInitializedSeenBaselineRef.current = false;
         sessionStartedAtRef.current = Date.now();
+        setHasLoadedConversationSeenTimestamps(false);
     }, [currentUser?.id]);
 
     useEffect(() => {
@@ -330,6 +327,8 @@ export default function FriendsHome({
             setConversationSeenTimestamps(raw ? JSON.parse(raw) : {});
         } catch {
             setConversationSeenTimestamps({});
+        } finally {
+            setHasLoadedConversationSeenTimestamps(true);
         }
     }, [conversationSeenStorageKey]);
 
@@ -435,11 +434,15 @@ export default function FriendsHome({
     }, [forgottenConversationIds, forgottenConversationsStorageKey]);
 
     useEffect(() => {
+        if (!hasLoadedConversationSeenTimestamps) {
+            return;
+        }
+
         localStorage.setItem(
             conversationSeenStorageKey,
             JSON.stringify(conversationSeenTimestamps)
         );
-    }, [conversationSeenStorageKey, conversationSeenTimestamps]);
+    }, [conversationSeenStorageKey, conversationSeenTimestamps, hasLoadedConversationSeenTimestamps]);
 
     useEffect(() => {
         setForgottenConversationIds((prev) => {
@@ -737,7 +740,7 @@ export default function FriendsHome({
         let cancelled = false;
 
         async function loadConversationPreviews() {
-            if (!window.secureDm || !currentUser) {
+            if (!window.secureDm || !currentUser || !hasLoadedConversationSeenTimestamps) {
                 return;
             }
 
@@ -762,27 +765,31 @@ export default function FriendsHome({
                         userId: currentUser.id,
                         conversationId
                     });
-                    const latestMessage = localMessages[localMessages.length - 1];
+                    const latestMessage = getLatestMessageByTimestamp(localMessages);
+                    const latestIncomingMessage = getLatestIncomingMessageByTimestamp(localMessages);
 
                     nextPreviews[conversationId] = latestMessage?.body
                         ? {
                             text: truncatePreview(latestMessage.body),
                             hasMessage: true,
                             timestamp: latestMessage.createdAt || null,
-                            direction: latestMessage.direction || null
+                            direction: latestMessage.direction || null,
+                            latestIncomingTimestamp: latestIncomingMessage?.createdAt || null
                         }
                         : {
                             text: "No messages yet",
                             hasMessage: false,
                             timestamp: null,
-                            direction: null
+                            direction: null,
+                            latestIncomingTimestamp: null
                         };
                 } catch {
                     nextPreviews[conversationId] = {
                         text: "Encrypted chat",
                         hasMessage: false,
                         timestamp: null,
-                        direction: null
+                        direction: null,
+                        latestIncomingTimestamp: null
                     };
                 }
             }
@@ -794,16 +801,23 @@ export default function FriendsHome({
                     const baselineSeenTimestamps = {};
 
                     Object.entries(nextPreviews).forEach(([conversationId, preview]) => {
-                        const latestTimestamp = getPreviewTimestamp(preview);
-                        if (latestTimestamp != null) {
-                            baselineSeenTimestamps[String(conversationId)] = latestTimestamp;
+                        const latestIncomingTimestamp = getPreviewIncomingTimestamp(preview);
+                        if (latestIncomingTimestamp != null) {
+                            baselineSeenTimestamps[String(conversationId)] = latestIncomingTimestamp;
                         }
                     });
 
-                    setConversationSeenTimestamps((prev) => ({
-                        ...prev,
-                        ...baselineSeenTimestamps
-                    }));
+                    setConversationSeenTimestamps((prev) => {
+                        const next = { ...prev };
+
+                        Object.entries(baselineSeenTimestamps).forEach(([conversationId, timestamp]) => {
+                            if (next[conversationId] == null) {
+                                next[conversationId] = timestamp;
+                            }
+                        });
+
+                        return next;
+                    });
                     hasInitializedSeenBaselineRef.current = true;
                 }
             }
@@ -814,7 +828,7 @@ export default function FriendsHome({
         return () => {
             cancelled = true;
         };
-    }, [currentUser, friendsState.friends, groupConversations, messages, groupMessages, previewRefreshNonce]);
+    }, [currentUser, friendsState.friends, groupConversations, messages, groupMessages, previewRefreshNonce, hasLoadedConversationSeenTimestamps]);
 
     useEffect(() => {
         function handleVisibilityChange() {
@@ -871,6 +885,8 @@ export default function FriendsHome({
     function handleSelectFriend(friendUserId) {
         setActiveView("friend");
         setSelectedFriendId(friendUserId);
+        setDirectReplyTo(null);
+        setDirectEditingMessage(null);
     }
 
     function handleSelectGroupConversation(conversationId) {
@@ -878,6 +894,8 @@ export default function FriendsHome({
         setSelectedGroupConversationId(conversationId);
         setShowConversationSettings(false);
         setFriendContextMenu(null);
+        setGroupReplyTo(null);
+        setGroupEditingMessage(null);
     }
 
     async function handleAccept(friendshipId) {
@@ -905,12 +923,26 @@ export default function FriendsHome({
         clearErrorState();
 
         try {
-            const result = await sendFriendDirectMessage({
-                currentUser,
-                friend: effectiveSelectedFriend,
-                body: composer.trim(),
-                relayTtlSeconds: selectedRelayTtlSeconds
-            });
+            const result = directEditingMessage
+                ? await editFriendDirectMessage({
+                    currentUser,
+                    friend: effectiveSelectedFriend,
+                    messageId: directEditingMessage.messageId,
+                    body: composer.trim()
+                })
+                : await sendFriendDirectMessage({
+                    currentUser,
+                    friend: effectiveSelectedFriend,
+                    body: composer.trim(),
+                    relayTtlSeconds: selectedRelayTtlSeconds,
+                    replyTo: directReplyTo ? {
+                        messageId: directReplyTo.messageId,
+                        body: directReplyTo.body,
+                        author: directReplyTo.author
+                    } : null
+                });
+
+            const conversationId = result.conversationId || effectiveSelectedFriend.conversationId;
 
             setForgottenConversationIds((prev) => {
                 const next = { ...prev };
@@ -918,6 +950,8 @@ export default function FriendsHome({
                 return next;
             });
             setComposer("");
+            setDirectReplyTo(null);
+            setDirectEditingMessage(null);
             setMessages(result.messages);
             setConversationMeta(result.conversation);
             setHasLocalConversationAccess(true);
@@ -925,7 +959,7 @@ export default function FriendsHome({
                 ...prev,
                 friends: prev.friends.map((friend) =>
                     friend.friendUserId === effectiveSelectedFriend.friendUserId
-                        ? { ...friend, conversationId: result.conversationId }
+                        ? { ...friend, conversationId }
                         : friend
                 )
             }));
@@ -1112,13 +1146,27 @@ export default function FriendsHome({
         clearErrorState();
 
         try {
-            const opened = await sendGroupConversationMessage({
-                currentUser,
-                conversationId: selectedGroupConversationId,
-                body: groupComposer.trim()
-            });
+            const opened = groupEditingMessage
+                ? await editGroupConversationMessage({
+                    currentUser,
+                    conversationId: selectedGroupConversationId,
+                    messageId: groupEditingMessage.messageId,
+                    body: groupComposer.trim()
+                })
+                : await sendGroupConversationMessage({
+                    currentUser,
+                    conversationId: selectedGroupConversationId,
+                    body: groupComposer.trim(),
+                    replyTo: groupReplyTo ? {
+                        messageId: groupReplyTo.messageId,
+                        body: groupReplyTo.body,
+                        author: groupReplyTo.author
+                    } : null
+                });
 
             setGroupComposer("");
+            setGroupReplyTo(null);
+            setGroupEditingMessage(null);
             setGroupMessages(opened.messages);
             setGroupConversationMeta((prev) => ({
                 ...(prev || {}),
@@ -1357,65 +1405,29 @@ export default function FriendsHome({
         clearErrorState();
     }
 
-    async function handleRemoveFriend(friend) {
+    function requestRemoveFriend(friend, hardDelete = false) {
         setFriendContextMenu(null);
-
-        const confirmed = window.confirm(
-            `Remove ${friend.friendUsername} from your friends list? Re-adding the same friend later will restore this hidden conversation.`
-        );
-        if (!confirmed) {
-            return;
-        }
-
-        setSubmitting(true);
-        clearErrorState();
-
-        try {
-            await removeFriend(friend.friendshipId);
-            const nextAssignments = { ...friendTags };
-            delete nextAssignments[String(friend.friendUserId)];
-            setClientSettingsSnapshot(saveClientSettings({
-                ...clientSettingsSnapshot,
-                friendTagAssignments: nextAssignments
-            }));
-
-            if (String(selectedFriendId) === String(friend.friendUserId)) {
-                setSelectedFriendId(null);
-                setMessages([]);
-                setConversationMeta(null);
-                setHistoryAccessRequest(null);
-            }
-
-            await loadFriends();
-        } catch (err) {
-            showError(err);
-        } finally {
-            setSubmitting(false);
-        }
+        setFriendRemovalConfirm({ friend, hardDelete });
     }
 
-    async function handleHardDeleteFriend(friend) {
-        setFriendContextMenu(null);
-
-        const confirmed = window.confirm(
-            `Hard delete ${friend.friendUsername} and remove your local conversation history on this device? This cannot delete copies on other devices.`
-        );
-        if (!confirmed) {
+    async function handleConfirmRemoveFriend() {
+        if (!friendRemovalConfirm) {
             return;
         }
 
+        const { friend, hardDelete } = friendRemovalConfirm;
         setSubmitting(true);
         clearErrorState();
 
         try {
-            if (friend.conversationId) {
+            if (hardDelete && friend.conversationId) {
                 await window.secureDm.deleteConversation({
                     userId: currentUser.id,
                     conversationId: friend.conversationId
                 });
             }
 
-            await removeFriend(friend.friendshipId, { hardDelete: true });
+            await removeFriend(friend.friendshipId, hardDelete ? { hardDelete: true } : {});
             const nextAssignments = { ...friendTags };
             delete nextAssignments[String(friend.friendUserId)];
             setClientSettingsSnapshot(saveClientSettings({
@@ -1431,7 +1443,58 @@ export default function FriendsHome({
                 setShowConversationSettings(false);
             }
 
+            setFriendRemovalConfirm(null);
             await loadFriends();
+        } catch (err) {
+            showError(err);
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
+    async function handleDeleteDirectMessage(message) {
+        if (!effectiveSelectedFriend?.conversationId || !message?.messageId || message.isDeleted) {
+            return;
+        }
+
+        setSubmitting(true);
+        clearErrorState();
+
+        try {
+            const opened = await deleteFriendDirectMessage({
+                currentUser,
+                friend: effectiveSelectedFriend,
+                messageId: message.messageId
+            });
+            setMessages(opened.messages);
+            setConversationMeta(opened.conversation);
+        } catch (err) {
+            showError(err);
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
+    async function handleDeleteGroupMessage(message) {
+        if (!selectedGroupConversationId || !message?.messageId || message.isDeleted) {
+            return;
+        }
+
+        setSubmitting(true);
+        clearErrorState();
+
+        try {
+            const opened = await deleteGroupConversationMessage({
+                currentUser,
+                conversationId: selectedGroupConversationId,
+                messageId: message.messageId
+            });
+            setGroupMessages(opened.messages);
+            setGroupConversationMeta((prev) => ({
+                ...(prev || {}),
+                ...(opened.conversation || {})
+            }));
+            await loadGroupConversationList(selectedGroupConversationId);
         } catch (err) {
             showError(err);
         } finally {
@@ -1492,32 +1555,23 @@ export default function FriendsHome({
         ? selectedGroupConversationId
         : effectiveSelectedFriend?.conversationId || null;
 
-    function getPreviewTimestamp(preview) {
-        if (!preview?.timestamp) {
-            return null;
-        }
-
-        const timestamp = new Date(preview.timestamp).getTime();
-        return Number.isNaN(timestamp) ? null : timestamp;
-    }
-
     function conversationHasUnreadActivity(conversationId) {
         if (!conversationId) {
             return false;
         }
 
         const preview = conversationPreviews[String(conversationId)];
-        if (!preview?.hasMessage || preview.direction !== "incoming") {
+        if (!preview?.hasMessage) {
             return false;
         }
 
-        const latestTimestamp = getPreviewTimestamp(preview);
-        if (latestTimestamp == null) {
+        const latestIncomingTimestamp = getPreviewIncomingTimestamp(preview);
+        if (latestIncomingTimestamp == null) {
             return false;
         }
 
         const seenTimestamp = Number(conversationSeenTimestamps[String(conversationId)] || 0);
-        return latestTimestamp > seenTimestamp;
+        return latestIncomingTimestamp > seenTimestamp;
     }
 
     const hasUnreadActivity = useMemo(() => {
@@ -1546,15 +1600,15 @@ export default function FriendsHome({
 
         viewAcknowledgeTimeoutRef.current = window.setTimeout(() => {
             const preview = conversationPreviews[String(activeConversationId)];
-            const latestTimestamp = getPreviewTimestamp(preview);
+            const latestIncomingTimestamp = getPreviewIncomingTimestamp(preview);
 
-            if (latestTimestamp == null) {
+            if (latestIncomingTimestamp == null) {
                 return;
             }
 
             setConversationSeenTimestamps((prev) => ({
                 ...prev,
-                [String(activeConversationId)]: latestTimestamp
+                [String(activeConversationId)]: latestIncomingTimestamp
             }));
             viewAcknowledgeTimeoutRef.current = null;
         }, 800);
@@ -1642,6 +1696,8 @@ export default function FriendsHome({
                     activeGroupParticipantNames={activeGroupParticipantNames}
                     groupMessages={groupMessages}
                     groupComposer={groupComposer}
+                    groupReplyTo={groupReplyTo}
+                    groupEditingMessage={groupEditingMessage}
                     selectedFriend={selectedFriend}
                     effectiveSelectedFriend={effectiveSelectedFriend}
                     secureStatusRef={secureStatusRef}
@@ -1659,11 +1715,28 @@ export default function FriendsHome({
                     lockPhase={lockPhase}
                     messages={messages}
                     composer={composer}
+                    directReplyTo={directReplyTo}
+                    directEditingMessage={directEditingMessage}
                     isDirectConversationEncrypted={isDirectConversationEncrypted}
                     canComposeDirectMessage={canComposeDirectMessage}
                     messageListRef={messageListRef}
                     onGroupComposerChange={setGroupComposer}
                     onSendGroupMessage={handleSendGroupMessage}
+                    onGroupReply={(message) => {
+                        setGroupEditingMessage(null);
+                        setGroupReplyTo(message);
+                    }}
+                    onGroupEdit={(message) => {
+                        setGroupReplyTo(null);
+                        setGroupEditingMessage(message);
+                        setGroupComposer(message.body || "");
+                    }}
+                    onGroupDelete={handleDeleteGroupMessage}
+                    onCancelGroupAction={() => {
+                        setGroupReplyTo(null);
+                        setGroupEditingMessage(null);
+                        setGroupComposer("");
+                    }}
                     onOpenConversationSettings={() => setShowConversationSettings(true)}
                     onForgetOldConversation={handleForgetOldConversation}
                     onHistoryRequest={handleHistoryRequest}
@@ -1673,6 +1746,21 @@ export default function FriendsHome({
                     onEncryptChat={handleEncryptChat}
                     onComposerChange={setComposer}
                     onSendMessage={handleSendMessage}
+                    onDirectReply={(message) => {
+                        setDirectEditingMessage(null);
+                        setDirectReplyTo(message);
+                    }}
+                    onDirectEdit={(message) => {
+                        setDirectReplyTo(null);
+                        setDirectEditingMessage(message);
+                        setComposer(message.body || "");
+                    }}
+                    onDirectDelete={handleDeleteDirectMessage}
+                    onCancelDirectAction={() => {
+                        setDirectReplyTo(null);
+                        setDirectEditingMessage(null);
+                        setComposer("");
+                    }}
                 />
             </div>
 
@@ -1733,6 +1821,13 @@ export default function FriendsHome({
                 />
             ) : null}
 
+            <FriendRemovalConfirmModal
+                confirmation={friendRemovalConfirm}
+                submitting={submitting}
+                onCancel={() => setFriendRemovalConfirm(null)}
+                onConfirm={handleConfirmRemoveFriend}
+            />
+
             <FriendContextMenu
                 contextMenu={friendContextMenu}
                 friendTagFolders={friendTagFolders}
@@ -1742,8 +1837,8 @@ export default function FriendsHome({
                 }}
                 onApplyTag={(tagId) => applyFriendTag(friendContextMenu.friend.friendUserId, tagId)}
                 onClearTag={() => clearFriendTag(friendContextMenu.friend.friendUserId)}
-                onRemoveFriend={() => handleRemoveFriend(friendContextMenu.friend)}
-                onHardDeleteFriend={() => handleHardDeleteFriend(friendContextMenu.friend)}
+                onRemoveFriend={() => requestRemoveFriend(friendContextMenu.friend)}
+                onHardDeleteFriend={() => requestRemoveFriend(friendContextMenu.friend, true)}
             />
         </main>
     );
