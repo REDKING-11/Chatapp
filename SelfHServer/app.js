@@ -8,6 +8,7 @@ const messageRoutes = require("./routes/message.routes");
 const memberRoutes = require("./routes/member.routes");
 const customizationRoutes = require("./routes/customization.routes");
 const profileAssetsRoutes = require("./routes/profileAssets.routes");
+const serverProfilesRoutes = require("./routes/serverProfiles.routes");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -27,6 +28,7 @@ app.use("/api", messageRoutes);
 app.use("/api", memberRoutes);
 app.use("/api", customizationRoutes);
 app.use("/api", profileAssetsRoutes);
+app.use("/api", serverProfilesRoutes);
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

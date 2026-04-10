@@ -330,7 +330,7 @@ body {
     display: flex;
     justify-content: flex-end;
     gap: 8px;
-    margin-bottom: 18px;
+    margin-bottom: 8px;
 }
 
 .profile-dock-card-actions button {
@@ -354,7 +354,7 @@ body {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    margin-top: 30px;
+    margin-top: 8px;
 }
 
 .profile-dock-card-meta strong {
@@ -403,6 +403,135 @@ body {
     line-height: 1.35;
 }
 
+.profile-dock-server-description {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 14px;
+    padding: 12px;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 70%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--shell-surface-alt) 82%, transparent);
+}
+
+.profile-dock-server-description-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 4px;
+}
+
+.profile-dock-server-description-header > div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.profile-dock-server-description-header strong {
+    font-size: 0.84rem;
+}
+
+.profile-dock-server-description-header span,
+.profile-dock-server-description-footer span,
+.profile-dock-server-description-status {
+    color: var(--shell-text-muted);
+    font-size: 0.72rem;
+    line-height: 1.35;
+}
+
+.profile-dock-server-description textarea {
+    width: 100%;
+    min-height: 88px;
+    resize: vertical;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 78%, transparent);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: color-mix(in srgb, var(--shell-bg) 52%, var(--shell-surface));
+    color: var(--shell-text);
+}
+
+.profile-dock-server-description-settings {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 84%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--shell-surface) 62%, transparent);
+    color: var(--shell-text);
+    cursor: pointer;
+}
+
+.profile-dock-server-description-settings:hover {
+    background: color-mix(in srgb, var(--shell-accent-soft) 72%, var(--shell-surface-alt));
+}
+
+.profile-dock-server-description-display {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 72%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--shell-bg) 38%, var(--shell-surface));
+}
+
+.profile-dock-server-description-display p,
+.profile-dock-server-description-display span {
+    margin: 0;
+}
+
+.profile-dock-server-description-display p {
+    color: var(--shell-text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.profile-dock-server-description textarea::placeholder {
+    color: var(--shell-text-muted);
+}
+
+.profile-dock-server-description-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.profile-dock-server-description-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.profile-dock-server-description-footer button {
+    border: 1px solid color-mix(in srgb, var(--shell-border) 88%, transparent);
+    border-radius: 10px;
+    min-height: 36px;
+    padding: 0 12px;
+    background: var(--shell-accent);
+    color: white;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.profile-dock-server-description-footer button.secondary {
+    background: color-mix(in srgb, var(--shell-surface-alt) 86%, transparent);
+    color: var(--shell-text);
+}
+
+.profile-dock-server-description-footer button:disabled {
+    opacity: 0.58;
+    cursor: not-allowed;
+}
+
+.profile-dock-server-description-status {
+    margin: 0;
+}
+
 .profile-dock-context-menu {
     width: 180px;
     display: flex;
@@ -439,6 +568,8 @@ body {
 }
 
 .sidebar-profile-slot {
+    position: relative;
+    z-index: 30;
     flex-shrink: 0;
     padding-top: 10px;
     border-top: 1px solid color-mix(in srgb, var(--shell-border) 72%, transparent);
@@ -524,13 +655,15 @@ body {
 }
 
 .channels {
+    position: relative;
+    z-index: 20;
     width: var(--channel-sidebar-width);
     min-width: var(--channel-sidebar-width);
     max-width: var(--channel-sidebar-width);
     background: var(--server-surface);
     border-right: 1px solid var(--server-surface-alt);
     padding: 16px 16px 12px;
-    overflow: hidden;
+    overflow: visible;
     color: var(--server-text);
     display: flex;
     flex-direction: column;
@@ -542,6 +675,7 @@ body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
     padding-right: 4px;
 }
 
@@ -3970,11 +4104,20 @@ body[data-high-contrast="true"] .client-settings-section {
 }
 
 .client-profile-name-stack {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 4px;
     min-width: 0;
-    padding-bottom: 6px;
+    max-width: min(100%, 320px);
+    padding: 10px 14px 12px;
+    margin-left: -6px;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 42%, transparent);
+    border-radius: calc(14px * var(--client-radius-multiplier));
+    background: color-mix(in srgb, var(--shell-surface) 48%, transparent);
+    backdrop-filter: blur(12px) saturate(1.15);
+    -webkit-backdrop-filter: blur(12px) saturate(1.15);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
 }
 
 .client-profile-name-stack strong,
