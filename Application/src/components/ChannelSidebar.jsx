@@ -5,6 +5,7 @@ export default function ChannelSidebar({
     selectedChannelId,
     onSelectChannel,
     currentUser,
+    backendUrl,
     profileMediaHostUrl,
     clientSettings,
     onOpenClientSettings,
@@ -33,6 +34,7 @@ export default function ChannelSidebar({
             <div className="sidebar-profile-slot">
                 <ProfileDock
                     currentUser={currentUser}
+                    backendUrl={backendUrl}
                     profileMediaHostUrl={profileMediaHostUrl}
                     clientSettings={clientSettings}
                     onOpenClientSettings={onOpenClientSettings}

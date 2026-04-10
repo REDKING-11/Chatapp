@@ -684,6 +684,7 @@ function App() {
                             selectedChannelId={selectedChannelId}
                             onSelectChannel={setSelectedChannelId}
                             currentUser={currentUser}
+                            backendUrl={selectedJoinedServer?.backendUrl || null}
                             profileMediaHostUrl={profileMediaHostUrl}
                             clientSettings={clientSettings}
                             onOpenClientSettings={() => setShowClientSettings(true)}

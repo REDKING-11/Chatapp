@@ -1,6 +1,13 @@
-const CORE_API_BASE =
-    process.env.CORE_API_BASE ||
-    "http://56.228.2.7";
+const CORE_API_BASES = Array.from(
+    new Set(
+        [
+            process.env.CORE_API_BASE,
+            "http://56.228.2.7",
+            "https://56.228.2.7",
+            "https://core.samlam24.treok.io"
+        ].filter(Boolean)
+    )
+);
 
 async function verifyUser(req) {
     const auth = req.headers.authorization || "";
@@ -11,38 +18,41 @@ async function verifyUser(req) {
     const token = match[1].trim();
     if (!token) return null;
 
-    try {
-        const res = await fetch(`${CORE_API_BASE}/auth/me.php`, {
-            method: "GET",
-            headers: {
-                Authorization: `Bearer ${token}`,
-                Accept: "application/json"
-            }
-        });
-
-        const raw = await res.text();
-
-        let data = null;
+    for (const baseUrl of CORE_API_BASES) {
         try {
-            data = raw ? JSON.parse(raw) : null;
-        } catch {
-            console.error("verifyUser: invalid JSON from core auth:", raw);
-            return null;
-        }
+            const res = await fetch(`${baseUrl}/auth/me.php`, {
+                method: "GET",
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: "application/json"
+                }
+            });
 
-        if (!res.ok) {
-            console.error("verifyUser failed:", res.status, data);
-            return null;
-        }
+            const raw = await res.text();
 
-        return data?.user || null;
-    } catch (err) {
-        console.error("verifyUser request error:", err);
-        return null;
+            let data = null;
+            try {
+                data = raw ? JSON.parse(raw) : null;
+            } catch {
+                console.error("verifyUser: invalid JSON from core auth:", baseUrl, raw);
+                continue;
+            }
+
+            if (!res.ok) {
+                console.error("verifyUser failed:", baseUrl, res.status, data);
+                continue;
+            }
+
+            return data?.user || null;
+        } catch (err) {
+            console.error("verifyUser request error:", baseUrl, err);
+        }
     }
+
+    return null;
 }
 
 module.exports = {
     verifyUser,
-    CORE_API_BASE
+    CORE_API_BASES
 };

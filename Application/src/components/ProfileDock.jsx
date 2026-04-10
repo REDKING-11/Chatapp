@@ -3,6 +3,10 @@ import {
     fetchProfileAssetBlobUrl,
     fetchProfileAssetManifest
 } from "../features/profile/actions";
+import {
+    fetchServerProfile,
+    updateServerProfile
+} from "../features/profile/serverProfileActions";
 
 function getUserLabel(user) {
     return user?.displayName || user?.usernameBase || user?.username || "User";
@@ -32,6 +36,7 @@ function getInitials(label) {
 
 export default function ProfileDock({
     currentUser,
+    backendUrl,
     profileMediaHostUrl,
     clientSettings,
     onOpenClientSettings,
@@ -43,14 +48,18 @@ export default function ProfileDock({
     const [avatarUrl, setAvatarUrl] = useState(null);
     const [bannerUrl, setBannerUrl] = useState(null);
     const [mediaRefreshNonce, setMediaRefreshNonce] = useState(0);
+    const [serverProfile, setServerProfile] = useState(null);
+    const [serverDescription, setServerDescription] = useState("");
+    const [serverProfileSaving, setServerProfileSaving] = useState(false);
+    const [serverProfileStatus, setServerProfileStatus] = useState("");
+    const [isEditingServerDescription, setIsEditingServerDescription] = useState(false);
     const cardRef = useRef(null);
     const contextMenuRef = useRef(null);
     const buttonRef = useRef(null);
     const userLabel = useMemo(() => getUserLabel(currentUser), [currentUser]);
     const userHandle = useMemo(() => getUserHandle(currentUser), [currentUser]);
     const initials = useMemo(() => getInitials(userLabel), [userLabel]);
-    const shouldLoadAvatars = Boolean(clientSettings?.autoLoadProfileAvatars);
-    const shouldLoadBanners = Boolean(clientSettings?.autoLoadProfileBanners);
+    const hasServerProfile = Boolean(backendUrl);
 
     useEffect(() => {
         async function loadManifest() {
@@ -86,7 +95,7 @@ export default function ProfileDock({
         let revokedUrl = null;
 
         async function loadAvatar() {
-            if (!profileMediaHostUrl || !currentUser?.id || !shouldLoadAvatars || !profileManifest?.avatar?.hasAsset) {
+            if (!profileMediaHostUrl || !currentUser?.id || !profileManifest?.avatar?.hasAsset) {
                 setAvatarUrl(null);
                 return;
             }
@@ -111,13 +120,13 @@ export default function ProfileDock({
                 URL.revokeObjectURL(revokedUrl);
             }
         };
-    }, [currentUser?.id, profileManifest?.avatar?.hasAsset, profileMediaHostUrl, shouldLoadAvatars]);
+    }, [currentUser?.id, profileManifest?.avatar?.hasAsset, profileMediaHostUrl]);
 
     useEffect(() => {
         let revokedUrl = null;
 
         async function loadBanner() {
-            if (!profileMediaHostUrl || !currentUser?.id || !shouldLoadBanners || !profileManifest?.banner?.hasAsset) {
+            if (!profileMediaHostUrl || !currentUser?.id || !profileManifest?.banner?.hasAsset) {
                 setBannerUrl(null);
                 return;
             }
@@ -142,7 +151,50 @@ export default function ProfileDock({
                 URL.revokeObjectURL(revokedUrl);
             }
         };
-    }, [currentUser?.id, profileManifest?.banner?.hasAsset, profileMediaHostUrl, shouldLoadBanners]);
+    }, [currentUser?.id, profileManifest?.banner?.hasAsset, profileMediaHostUrl]);
+
+    useEffect(() => {
+        setServerProfile(null);
+        setServerDescription("");
+        setServerProfileStatus("");
+        setIsEditingServerDescription(false);
+    }, [backendUrl, currentUser?.id]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        async function loadServerProfile() {
+            if (!isCardOpen || !backendUrl || !currentUser?.id) {
+                return;
+            }
+
+            try {
+                const profile = await fetchServerProfile({ backendUrl });
+
+                if (cancelled) {
+                    return;
+                }
+
+                setServerProfile(profile);
+                setServerDescription(profile?.description || "");
+                setServerProfileStatus("");
+                setIsEditingServerDescription(false);
+            } catch {
+                if (!cancelled) {
+                    setServerProfile(null);
+                    setServerDescription("");
+                    setServerProfileStatus("Could not load this server profile yet.");
+                    setIsEditingServerDescription(false);
+                }
+            }
+        }
+
+        loadServerProfile();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [backendUrl, currentUser?.id, isCardOpen]);
 
     useEffect(() => {
         if (!isCardOpen && !contextMenuOpen) {
@@ -175,6 +227,30 @@ export default function ProfileDock({
         setContextMenuOpen(false);
     }
 
+    async function handleSaveServerDescription() {
+        if (!backendUrl || serverProfileSaving) {
+            return;
+        }
+
+        setServerProfileSaving(true);
+        setServerProfileStatus("");
+
+        try {
+            const profile = await updateServerProfile({
+                backendUrl,
+                description: serverDescription
+            });
+            setServerProfile(profile);
+            setServerDescription(profile?.description || "");
+            setServerProfileStatus("Saved for this server.");
+            setIsEditingServerDescription(false);
+        } catch (error) {
+            setServerProfileStatus(error?.message || "Could not save this server profile.");
+        } finally {
+            setServerProfileSaving(false);
+        }
+    }
+
     return (
         <div className="profile-dock">
             {isCardOpen ? (
@@ -197,7 +273,7 @@ export default function ProfileDock({
 
                         <div className="profile-dock-card-actions">
                             <button type="button" title="Profile card">
-                                <span>✓</span>
+                                <span>v</span>
                             </button>
                             <button type="button" title="Copy handle" onClick={handleCopyHandle}>
                                 <span>#</span>
@@ -210,7 +286,7 @@ export default function ProfileDock({
                                     onOpenClientSettings?.();
                                 }}
                             >
-                                <span>⚙</span>
+                                <span>o</span>
                             </button>
                         </div>
 
@@ -222,6 +298,86 @@ export default function ProfileDock({
                         <div className="profile-dock-host-note">
                             Edit your display name, avatar, and background from Client Settings, Profile.
                         </div>
+
+                        {hasServerProfile ? (
+                            <div className="profile-dock-server-description">
+                                <div className="profile-dock-server-description-header">
+                                    <div>
+                                        <strong>Server Description</strong>
+                                        <span>Only you can edit this for this server.</span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="profile-dock-server-description-settings"
+                                        title={isEditingServerDescription ? "Close server description editor" : "Edit server description"}
+                                        onClick={() => {
+                                            setServerProfileStatus("");
+                                            setServerDescription(serverProfile?.description || "");
+                                            setIsEditingServerDescription((prev) => !prev);
+                                        }}
+                                    >
+                                        <span>o</span>
+                                    </button>
+                                </div>
+
+                                {!isEditingServerDescription ? (
+                                    <div className="profile-dock-server-description-display">
+                                        <p>
+                                            {serverProfile?.description?.trim()
+                                                || "No server-specific profile description yet."}
+                                        </p>
+                                        <span>
+                                            {serverProfile?.updatedAt
+                                                ? `Updated ${new Date(serverProfile.updatedAt).toLocaleString()}`
+                                                : "Use settings to add one."}
+                                        </span>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <textarea
+                                            value={serverDescription}
+                                            onChange={(event) => {
+                                                setServerDescription(event.target.value.slice(0, 280));
+                                                if (serverProfileStatus) {
+                                                    setServerProfileStatus("");
+                                                }
+                                            }}
+                                            placeholder="Add a server-specific profile description..."
+                                            maxLength={280}
+                                        />
+
+                                        <div className="profile-dock-server-description-footer">
+                                            <span>{serverDescription.length}/280</span>
+                                            <div className="profile-dock-server-description-actions">
+                                                <button
+                                                    type="button"
+                                                    className="secondary"
+                                                    onClick={() => {
+                                                        setServerDescription(serverProfile?.description || "");
+                                                        setServerProfileStatus("");
+                                                        setIsEditingServerDescription(false);
+                                                    }}
+                                                    disabled={serverProfileSaving}
+                                                >
+                                                    Cancel
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleSaveServerDescription}
+                                                    disabled={serverProfileSaving}
+                                                >
+                                                    {serverProfileSaving ? "Saving..." : "Save"}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+
+                                {serverProfileStatus ? (
+                                    <p className="profile-dock-server-description-status">{serverProfileStatus}</p>
+                                ) : null}
+                            </div>
+                        ) : null}
                     </div>
                 </div>
             ) : null}

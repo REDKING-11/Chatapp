@@ -247,7 +247,7 @@ export default function ClientSettingsModal({
         let revokedUrl = null;
 
         async function loadAvatar() {
-            if (!profileMediaHostUrl || !currentUser?.id || !settings.autoLoadProfileAvatars || !profileManifest?.avatar?.hasAsset) {
+            if (!profileMediaHostUrl || !currentUser?.id || !profileManifest?.avatar?.hasAsset) {
                 setAvatarUrl(null);
                 return;
             }
@@ -270,13 +270,13 @@ export default function ClientSettingsModal({
         return () => {
             if (revokedUrl) URL.revokeObjectURL(revokedUrl);
         };
-    }, [currentUser?.id, profileManifest?.avatar?.hasAsset, profileMediaHostUrl, settings.autoLoadProfileAvatars]);
+    }, [currentUser?.id, profileManifest?.avatar?.hasAsset, profileMediaHostUrl]);
 
     useEffect(() => {
         let revokedUrl = null;
 
         async function loadBanner() {
-            if (!profileMediaHostUrl || !currentUser?.id || !settings.autoLoadProfileBanners || !profileManifest?.banner?.hasAsset) {
+            if (!profileMediaHostUrl || !currentUser?.id || !profileManifest?.banner?.hasAsset) {
                 setBannerUrl(null);
                 return;
             }
@@ -299,7 +299,7 @@ export default function ClientSettingsModal({
         return () => {
             if (revokedUrl) URL.revokeObjectURL(revokedUrl);
         };
-    }, [currentUser?.id, profileManifest?.banner?.hasAsset, profileMediaHostUrl, settings.autoLoadProfileBanners]);
+    }, [currentUser?.id, profileManifest?.banner?.hasAsset, profileMediaHostUrl]);
 
     function toggleSection(sectionId) {
         setCollapsedSections((prev) => ({
@@ -874,7 +874,7 @@ export default function ClientSettingsModal({
                                     {avatarUrl ? <img src={avatarUrl} alt={userLabel} /> : userInitial}
                                 </div>
                                 <div className="client-profile-name-stack">
-                                    <strong>{displayName.trim() || currentUser?.usernameBase || currentUser?.username}</strong>
+                                    <strong className="client-profile-name">{displayName.trim() || currentUser?.usernameBase || currentUser?.username}</strong>
                                     <span>{userHandle}</span>
                                 </div>
                             </div>
