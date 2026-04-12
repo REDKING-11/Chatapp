@@ -31,7 +31,7 @@ module.exports = {
         programFilesFolderName: 'LibreChat',
         shortcutFolderName: 'Chatapp',
         shortcutName: 'Chatapp',
-        defaultInstallMode: 'perUser',
+        defaultInstallMode: 'perMachine',
         features: false,
         ui: {
           chooseDirectory: true
