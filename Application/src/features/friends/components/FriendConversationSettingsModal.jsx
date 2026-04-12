@@ -1,7 +1,10 @@
+import { useEffect, useRef } from "react";
 import { DISAPPEARING_MESSAGE_OPTIONS, RELAY_RETENTION_OPTIONS } from "../../dm/actions";
 
 function WheelSelect({ options, value, disabled, onChange, ariaLabel }) {
+    const selectRef = useRef(null);
     const selectedIndex = Math.max(0, options.findIndex((option) => option.seconds === value));
+    const visibleOffsets = [-1, 0, 1];
 
     function moveSelection(direction) {
         if (disabled || options.length === 0) {
@@ -16,17 +19,33 @@ function WheelSelect({ options, value, disabled, onChange, ariaLabel }) {
         }
     }
 
+    useEffect(() => {
+        const node = selectRef.current;
+
+        if (!node) {
+            return undefined;
+        }
+
+        function handleWheel(event) {
+            event.preventDefault();
+            moveSelection(event.deltaY > 0 ? 1 : -1);
+        }
+
+        node.addEventListener("wheel", handleWheel, { passive: false });
+
+        return () => {
+            node.removeEventListener("wheel", handleWheel);
+        };
+    }, [selectedIndex, disabled, options, value]);
+
     return (
         <div
+            ref={selectRef}
             className={`friends-wheel-select ${disabled ? "is-disabled" : ""}`.trim()}
             role="listbox"
             aria-label={ariaLabel}
             aria-activedescendant={`${ariaLabel}-${value}`}
             tabIndex={disabled ? -1 : 0}
-            onWheel={(event) => {
-                event.preventDefault();
-                moveSelection(event.deltaY > 0 ? 1 : -1);
-            }}
             onKeyDown={(event) => {
                 if (event.key === "ArrowDown") {
                     event.preventDefault();
@@ -39,31 +58,45 @@ function WheelSelect({ options, value, disabled, onChange, ariaLabel }) {
         >
             <div className="friends-wheel-select-viewport">
                 <div className="friends-wheel-select-highlight" aria-hidden="true" />
-                {options.map((option, index) => {
-                    const distance = Math.abs(index - selectedIndex);
-                    const toneClass = distance === 0
-                        ? "is-active"
-                        : distance === 1
-                            ? "is-near"
-                            : distance === 2
-                                ? "is-far"
-                                : "is-hidden";
+                <div className="friends-wheel-track">
+                    {visibleOffsets.map((offset) => {
+                        const option = options[selectedIndex + offset] || null;
+                        const distance = Math.abs(offset);
+                        const toneClass = distance === 0
+                            ? "is-active"
+                            : distance === 1
+                                ? "is-near"
+                                : "is-far";
 
-                    return (
-                        <button
-                            key={option.seconds}
-                            id={`${ariaLabel}-${option.seconds}`}
-                            type="button"
-                            role="option"
-                            aria-selected={option.seconds === value}
-                            className={`friends-wheel-option ${toneClass}`.trim()}
-                            disabled={disabled}
-                            onClick={() => onChange(option.seconds)}
-                        >
-                            {option.label}
-                        </button>
-                    );
-                })}
+                        if (!option) {
+                            return (
+                                <div
+                                    key={`empty-${offset}`}
+                                    className={`friends-wheel-spacer ${toneClass}`.trim()}
+                                    aria-hidden="true"
+                                />
+                            );
+                        }
+
+                        return (
+                            <div
+                                key={option.seconds}
+                                id={`${ariaLabel}-${option.seconds}`}
+                                role="option"
+                                aria-selected={option.seconds === value}
+                                className={`friends-wheel-option ${toneClass}`.trim()}
+                                aria-disabled={disabled}
+                                onClick={() => {
+                                    if (!disabled) {
+                                        onChange(option.seconds);
+                                    }
+                                }}
+                            >
+                                <span>{option.label}</span>
+                            </div>
+                        );
+                    })}
+                </div>
             </div>
         </div>
     );
@@ -142,7 +175,7 @@ export default function FriendConversationSettingsModal({
                         disabled={
                             submitting ||
                             (effectiveSelectedFriend?.conversationId
-                                ? selectedRelayTtlSeconds === (relayPolicy?.currentSeconds ?? 0) &&
+                                ? selectedRelayTtlSeconds === (relayPolicy?.currentSeconds ?? 86400) &&
                                   relayPolicy?.pendingSeconds == null
                                 : false)
                         }

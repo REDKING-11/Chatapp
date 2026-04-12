@@ -276,6 +276,7 @@ export default function FriendsRail({
                     <label className="friends-search friends-rail-search">
                         <div className="friends-search-header">
                             <span>Search friends</span>
+                            {friendsState.friends.length > 0 ? (
                             <button
                                 type="button"
                                 className="menu-burger"
@@ -285,6 +286,7 @@ export default function FriendsRail({
                             >
                                 <span aria-hidden="true">≡</span>
                             </button>
+                            ) : null}
                         </div>
                         <input
                             type="search"

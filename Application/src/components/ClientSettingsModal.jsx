@@ -13,6 +13,7 @@ import {
     uploadProfileAssets
 } from "../features/profile/actions";
 import { formatAppError } from "../lib/debug";
+import { SHORTCUT_GROUPS } from "../lib/shortcuts";
 import PolicyDocumentModal from "./PolicyDocumentModal";
 import privacyPolicyMarkdown from "../assets/PP.md?raw";
 import termsOfServiceMarkdown from "../assets/TOS.md?raw";
@@ -73,36 +74,6 @@ const SETTINGS_TABS = [
     { id: "profile", label: "Profile" },
     { id: "advanced", label: "Advanced" },
     { id: "more", label: "More" }
-];
-
-const SHORTCUT_GROUPS = [
-    {
-        title: "Messaging",
-        items: [
-            { keys: "Ctrl + Enter", description: "Send the current message from the composer." },
-            { keys: "Ctrl + Shift + E", description: "Focus the active message composer." },
-            { keys: "Ctrl + Shift + .", description: "Open the active emoji picker." },
-            { keys: "Ctrl + Shift + F", description: "Open the active file picker." },
-            { keys: "Ctrl + Shift + R", description: "Open reactions for the selected or latest message." },
-            { keys: "Up", description: "Edit your last message when the composer is empty." }
-        ]
-    },
-    {
-        title: "Windows",
-        items: [
-            { keys: "Alt + S", description: "Open conversation settings in the current DM." },
-            { keys: "Ctrl + ,", description: "Open Client Settings from anywhere in the app." },
-            { keys: "Ctrl + K", description: "Open the quick switcher for friends, groups, servers, and channels." },
-            { keys: "Esc", description: "Close open popouts, pickers, modals, and menus." }
-        ]
-    },
-    {
-        title: "Server Navigation",
-        items: [
-            { keys: "Alt + Enter", description: "Open Server Settings for the current server." },
-            { keys: "Ctrl + Shift + S", description: "Alternative shortcut for Server Settings." }
-        ]
-    }
 ];
 
 const PROFILE_MEDIA_LIMITS = {
@@ -217,6 +188,7 @@ export default function ClientSettingsModal({
     onImport,
     onUserUpdated,
     onTabReset,
+    onLogout,
     onClose
 }) {
     const importInputRef = useRef(null);
@@ -234,6 +206,7 @@ export default function ClientSettingsModal({
     const [mediaUploading, setMediaUploading] = useState(false);
     const [mediaEditor, setMediaEditor] = useState(null);
     const [openPolicy, setOpenPolicy] = useState("");
+    const [accountNotice, setAccountNotice] = useState("");
     const [collapsedSections, setCollapsedSections] = useState({
         identity: false,
         theme: false,
@@ -241,6 +214,7 @@ export default function ClientSettingsModal({
         accessibility: false,
         profileMedia: false,
         friendTags: false,
+        account: false,
         developer: true,
         preview: true,
         shortcuts: false,
@@ -877,6 +851,36 @@ export default function ClientSettingsModal({
                     ) : null}
 
                     {activeTab === "advanced" ? (
+                        <>
+                    <CollapsibleSection
+                        title="Account"
+                        description="Session and account actions for this device."
+                        isOpen={!collapsedSections.account}
+                        onToggle={() => toggleSection("account")}
+                    >
+                        <div className="client-settings-inline-actions">
+                            <button
+                                type="button"
+                                className="secondary"
+                                onClick={() => {
+                                    setAccountNotice("");
+                                    onClose?.();
+                                    onLogout?.();
+                                }}
+                            >
+                                Logout
+                            </button>
+                            <button
+                                type="button"
+                                className="danger"
+                                onClick={() => setAccountNotice("Delete account is WIP right now.")}
+                            >
+                                Delete account
+                            </button>
+                        </div>
+                        {accountNotice ? <p className="client-settings-muted">{accountNotice}</p> : null}
+                    </CollapsibleSection>
+
                     <CollapsibleSection
                         title="Developer"
                         description="Control whether raw technical errors and extra diagnostics are shown on this device."
@@ -899,6 +903,7 @@ export default function ClientSettingsModal({
                             </label>
                         </div>
                     </CollapsibleSection>
+                        </>
                     ) : null}
 
                     {activeTab === "profile" ? (
