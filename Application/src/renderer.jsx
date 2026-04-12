@@ -10,7 +10,12 @@ import InitialSetupWizard from "./components/InitialSetupWizard";
 import JoinedServersSidebar from "./components/JoinedServerSidebar";
 import JoinServerModal from "./components/JoinServerModal";
 import QuickSwitcherModal from "./components/QuickSwitcherModal";
+import ShortcutInfoModal from "./components/ShortcutInfoModal";
 import ServerSettingsPanel from "./components/ServerSettingsPanel";
+import infoBlackIcon from "./assets/Info-black.png";
+import infoWhiteIcon from "./assets/Info-white.png";
+import infoFirstIcon from "./assets/Info-First.png";
+import infoFirstWhiteIcon from "./assets/Info-First-white.png";
 import {
     applyClientSettings,
     loadClientSettings,
@@ -53,6 +58,7 @@ import {
 
 const FRIENDS_TAB_ID = "__friends__";
 const SERVER_STATUS_RECHECK_MS = 30000;
+const SHORTCUT_INFO_SEEN_VERSION = "v2";
 
 function isExpectedOfflineFetchError(error) {
     if (!error) return false;
@@ -80,12 +86,14 @@ function App() {
     const [showSettings, setShowSettings] = useState(false);
     const [showClientSettings, setShowClientSettings] = useState(false);
     const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
+    const [showShortcutInfo, setShowShortcutInfo] = useState(false);
     const [pendingMessageNavigation, setPendingMessageNavigation] = useState(null);
     const [customization, setCustomization] = useState(null);
     const [settingsServer, setSettingsServer] = useState(null);
     const [friendsSwitcherItems, setFriendsSwitcherItems] = useState([]);
     const [clientSettings, setClientSettings] = useState(() => loadClientSettings());
     const [onboardingState, setOnboardingState] = useState(() => loadOnboardingState());
+    const [hasSeenShortcutInfo, setHasSeenShortcutInfo] = useState(false);
 
     const serverThemeRef = useRef(null);
     const serverCustomCssRef = useRef(null);
@@ -93,6 +101,20 @@ function App() {
     useEffect(() => {
         applyClientSettings(clientSettings);
     }, [clientSettings]);
+
+    useEffect(() => {
+        if (!currentUser?.id) {
+            setHasSeenShortcutInfo(false);
+            return;
+        }
+
+        try {
+            const seen = localStorage.getItem(`shortcutInfoSeen:${SHORTCUT_INFO_SEEN_VERSION}:${currentUser.id}`) === "true";
+            setHasSeenShortcutInfo(seen);
+        } catch {
+            setHasSeenShortcutInfo(false);
+        }
+    }, [currentUser?.id]);
 
     useEffect(() => {
         async function restoreSession() {
@@ -195,6 +217,12 @@ function App() {
                     return;
                 }
 
+                if (showShortcutInfo) {
+                    event.preventDefault();
+                    setShowShortcutInfo(false);
+                    return;
+                }
+
                 emitShortcut("closeOverlay");
                 return;
             }
@@ -235,7 +263,7 @@ function App() {
 
         window.addEventListener("keydown", handleGlobalShortcut);
         return () => window.removeEventListener("keydown", handleGlobalShortcut);
-    }, [joinedServers, selectedJoinedServerId, showClientSettings, showQuickSwitcher, showSettings]);
+    }, [joinedServers, selectedJoinedServerId, showClientSettings, showQuickSwitcher, showSettings, showShortcutInfo]);
 
     useEffect(() => {
         function handleNavigate(event) {
@@ -786,6 +814,21 @@ function App() {
         setClientSettings(importedSettings);
     }
 
+    function handleOpenShortcutInfo() {
+        setShowShortcutInfo(true);
+
+        if (!currentUser?.id) {
+            return;
+        }
+
+        try {
+            localStorage.setItem(`shortcutInfoSeen:${SHORTCUT_INFO_SEEN_VERSION}:${currentUser.id}`, "true");
+            setHasSeenShortcutInfo(true);
+        } catch {
+            setHasSeenShortcutInfo(true);
+        }
+    }
+
     function handleOnboardingComplete(acceptance) {
         setOnboardingState(saveOnboardingState({
             completed: true,
@@ -834,6 +877,10 @@ function App() {
     const profileMediaHostUrl = selectedServerIsOnline
         ? selectedJoinedServer.backendUrl
         : fallbackProfileMediaServer?.backendUrl || null;
+    const isLightTheme = clientSettings.themePreset === "light";
+    const topbarInfoIcon = !hasSeenShortcutInfo
+        ? (isLightTheme ? infoFirstIcon : infoFirstWhiteIcon)
+        : (isLightTheme ? infoBlackIcon : infoWhiteIcon);
     const quickSwitcherItems = [
         {
             id: "nav:friends",
@@ -900,9 +947,19 @@ function App() {
                 </div>
 
                 <div className="topbar-actions">
+                    <button
+                        className={`topbar-info-button ${!hasSeenShortcutInfo ? "is-first-open" : ""}`.trim()}
+                        onClick={handleOpenShortcutInfo}
+                        title="Shortcuts and help"
+                        aria-label="Shortcuts and help"
+                    >
+                        <img
+                            src={topbarInfoIcon}
+                            alt=""
+                            aria-hidden="true"
+                        />
+                    </button>
                     <button onClick={() => setShowClientSettings(true)}>Client Settings</button>
-                    <button onClick={() => setShowJoinModal(true)}>Join Server</button>
-                    <button onClick={handleLogout}>Logout</button>
                 </div>
             </div>
 
@@ -991,6 +1048,12 @@ function App() {
                 />
             ) : null}
 
+            {showShortcutInfo ? (
+                <ShortcutInfoModal
+                    onClose={() => setShowShortcutInfo(false)}
+                />
+            ) : null}
+
             {showClientSettings ? (
                 <ClientSettingsModal
                     settings={clientSettings}
@@ -1003,6 +1066,7 @@ function App() {
                         saveAuthUser(user);
                     }}
                     onTabReset={handleClientSettingsTabReset}
+                    onLogout={handleLogout}
                     onClose={() => setShowClientSettings(false)}
                 />
             ) : null}

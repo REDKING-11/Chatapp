@@ -93,7 +93,6 @@ export default function FriendsHome({
     const [conversationMeta, setConversationMeta] = useState(null);
     const [hasLocalConversationAccess, setHasLocalConversationAccess] = useState(true);
     const [showConversationSettings, setShowConversationSettings] = useState(false);
-    const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
     const [historyAccessRequest, setHistoryAccessRequest] = useState(null);
     const [collapsedFriendFolders, setCollapsedFriendFolders] = useState({});
     const [clientSettingsSnapshot, setClientSettingsSnapshot] = useState(() => loadClientSettings());
@@ -125,6 +124,7 @@ export default function FriendsHome({
     const viewAcknowledgeTimeoutRef = useRef(null);
     const groupConversationsRef = useRef([]);
     const selectedGroupConversationIdRef = useRef(null);
+    const selectedFriendIdRef = useRef(null);
     const hasInitializedSeenBaselineRef = useRef(false);
     const sessionStartedAtRef = useRef(Date.now());
     const incomingDownloadTargetsRef = useRef({});
@@ -172,6 +172,28 @@ export default function FriendsHome({
     function clearComposerAttachments() {
         setDirectAttachments([]);
         setGroupAttachments([]);
+    }
+
+    function mergeOrderedById(existingItems, incomingItems, getId) {
+        const incomingMap = new Map(
+            (incomingItems || []).map((item) => [String(getId(item)), item])
+        );
+        const merged = [];
+
+        (existingItems || []).forEach((item) => {
+            const key = String(getId(item));
+
+            if (incomingMap.has(key)) {
+                merged.push(incomingMap.get(key));
+                incomingMap.delete(key);
+            }
+        });
+
+        incomingMap.forEach((item) => {
+            merged.push(item);
+        });
+
+        return merged;
     }
 
     async function maybeShowDesktopNotification({ conversationId, message }) {
@@ -224,35 +246,50 @@ export default function FriendsHome({
         }
     }
 
-    async function loadFriends() {
-        setLoading(true);
-        clearErrorState();
+    async function loadFriends({ preserveOrder = false, background = false } = {}) {
+        if (!background) {
+            setLoading(true);
+            clearErrorState();
+        }
 
         try {
             const data = await fetchFriends();
-            setFriendsState(data);
+            setFriendsState((prev) => ({
+                incomingRequests: data.incomingRequests || [],
+                outgoingRequests: data.outgoingRequests || [],
+                friends: preserveOrder
+                    ? mergeOrderedById(prev.friends, data.friends || [], (friend) => friend.friendUserId)
+                    : (data.friends || [])
+            }));
 
-            if (!selectedFriendId && data.friends.length > 0) {
+            if (!selectedFriendIdRef.current && (data.friends || []).length > 0) {
                 setSelectedFriendId(data.friends[0].friendUserId);
             }
         } catch (err) {
-            showError(err);
+            if (!background) {
+                showError(err);
+            } else {
+                console.warn("Background friends refresh failed:", err);
+            }
         } finally {
-            setLoading(false);
+            if (!background) {
+                setLoading(false);
+            }
         }
     }
 
-    async function loadGroupConversationList(preferredConversationId = null) {
+    async function loadGroupConversationList(preferredConversationId = null, { preserveOrder = false, background = false } = {}) {
         try {
             const conversations = await fetchGroupConversations();
             const existingConversations = groupConversationsRef.current;
-            const fetchedIds = new Set(conversations.map((conversation) => String(conversation.id)));
-            const mergedConversations = [
-                ...conversations,
-                ...existingConversations.filter(
-                    (conversation) => !fetchedIds.has(String(conversation.id))
-                )
-            ];
+            const mergedConversations = preserveOrder
+                ? mergeOrderedById(existingConversations, conversations || [], (conversation) => conversation.id)
+                : [
+                    ...(conversations || []),
+                    ...existingConversations.filter(
+                        (conversation) => !(conversations || []).some((entry) => String(entry.id) === String(conversation.id))
+                    )
+                ];
 
             setGroupConversations(mergedConversations);
             setSelectedGroupConversationId((prev) => {
@@ -268,15 +305,23 @@ export default function FriendsHome({
                 return mergedConversations[0]?.id ?? null;
             });
         } catch (err) {
-            showError(err);
+            if (!background) {
+                showError(err);
+            } else {
+                console.warn("Background group refresh failed:", err);
+            }
         }
     }
 
-    async function loadGroupInvites() {
+    async function loadGroupInvites({ background = false } = {}) {
         try {
             setGroupInvites(await fetchPendingGroupInvites());
         } catch (err) {
-            showError(err);
+            if (!background) {
+                showError(err);
+            } else {
+                console.warn("Background group invite refresh failed:", err);
+            }
         }
     }
 
@@ -298,6 +343,10 @@ export default function FriendsHome({
     useEffect(() => {
         selectedGroupConversationIdRef.current = selectedGroupConversationId;
     }, [selectedGroupConversationId]);
+
+    useEffect(() => {
+        selectedFriendIdRef.current = selectedFriendId;
+    }, [selectedFriendId]);
 
     useEffect(() => {
         hasInitializedSeenBaselineRef.current = false;
@@ -501,20 +550,20 @@ export default function FriendsHome({
     }, [currentUser]);
 
     useEffect(() => {
-        if (!autoRefreshEnabled) {
-            return undefined;
+        async function refreshSidebarState() {
+            await Promise.all([
+                loadFriends({ preserveOrder: true, background: true }),
+                loadGroupConversationList(null, { preserveOrder: true, background: true }),
+                loadGroupInvites({ background: true })
+            ]);
         }
 
         const intervalId = window.setInterval(() => {
-            loadFriends();
-            loadGroupConversationList();
-            loadGroupInvites();
+            refreshSidebarState();
         }, 15000);
 
         function handleWindowFocus() {
-            loadFriends();
-            loadGroupConversationList();
-            loadGroupInvites();
+            refreshSidebarState();
         }
 
         window.addEventListener("focus", handleWindowFocus);
@@ -523,7 +572,7 @@ export default function FriendsHome({
             window.clearInterval(intervalId);
             window.removeEventListener("focus", handleWindowFocus);
         };
-    }, [autoRefreshEnabled]);
+    }, []);
 
     const selectedFriend = useMemo(() => (
         friendsState.friends.find(
@@ -629,7 +678,7 @@ export default function FriendsHome({
 
     useEffect(() => {
         async function loadConversation() {
-            if (!effectiveSelectedFriend) {
+            if (!selectedFriend) {
                 setMessages([]);
                 setConversationMeta(null);
                 setHasLocalConversationAccess(true);
@@ -638,22 +687,29 @@ export default function FriendsHome({
                 return;
             }
 
+            const friendToLoad = (
+                selectedFriendForgottenConversationId
+                && String(selectedFriend.conversationId) === String(selectedFriendForgottenConversationId)
+            )
+                ? { ...selectedFriend, conversationId: null }
+                : selectedFriend;
+
             try {
                 const data = await openFriendConversation({
                     currentUser,
-                    friend: effectiveSelectedFriend
+                    friend: friendToLoad
                 });
 
                 setMessages(data.messages);
                 setConversationMeta(data.conversation);
                 setHasLocalConversationAccess(data.hasLocalAccess !== false);
-                setSelectedRelayTtlSeconds(data.conversation?.relayPolicy?.currentSeconds ?? 0);
+                setSelectedRelayTtlSeconds(data.conversation?.relayPolicy?.currentSeconds ?? 86400);
                 setSelectedDisappearingTtlSeconds(data.conversation?.disappearingPolicy?.currentSeconds ?? 0);
 
-                if (effectiveSelectedFriend.conversationId) {
+                if (friendToLoad.conversationId) {
                     const historyStatus = await fetchHistoryAccessStatus({
-                        friendUserId: effectiveSelectedFriend.friendUserId,
-                        conversationId: effectiveSelectedFriend.conversationId
+                        friendUserId: friendToLoad.friendUserId,
+                        conversationId: friendToLoad.conversationId
                     });
                     setHistoryAccessRequest(historyStatus.request);
                 } else {
@@ -666,7 +722,13 @@ export default function FriendsHome({
         }
 
         loadConversation();
-    }, [selectedFriendId, friendsState.friends, currentUser, effectiveSelectedFriend]);
+    }, [
+        currentUser,
+        selectedFriend?.friendUserId,
+        selectedFriend?.conversationId,
+        selectedFriend?.friendUsername,
+        selectedFriendForgottenConversationId
+    ]);
 
     useEffect(() => {
         async function loadSelectedGroupConversation() {
@@ -1565,7 +1627,7 @@ export default function FriendsHome({
             });
 
             setConversationMeta(conversation);
-            setSelectedRelayTtlSeconds(conversation?.relayPolicy?.currentSeconds ?? 0);
+            setSelectedRelayTtlSeconds(conversation?.relayPolicy?.currentSeconds ?? 86400);
             setSelectedDisappearingTtlSeconds(conversation?.disappearingPolicy?.currentSeconds ?? selectedDisappearingTtlSeconds);
             if (window.secureDm?.syncConversationMetadata) {
                 await window.secureDm.syncConversationMetadata({
@@ -2042,8 +2104,8 @@ export default function FriendsHome({
         && pendingDisappearingRequest.pendingRequestedByUserId !== Number(currentUser.id)
     );
     const currentRelayLabel = RELAY_RETENTION_OPTIONS.find(
-        (option) => option.seconds === (relayPolicy?.currentSeconds ?? selectedRelayTtlSeconds)
-    )?.label || "No relay";
+        (option) => option.seconds === (relayPolicy?.currentSeconds ?? selectedRelayTtlSeconds ?? 86400)
+    )?.label || "24 hours";
     const pendingRelayLabel = pendingRelayRequest
         ? RELAY_RETENTION_OPTIONS.find((option) => option.seconds === pendingRelayRequest.pendingSeconds)?.label
         || `${pendingRelayRequest.pendingHours} hours`
@@ -2164,15 +2226,7 @@ export default function FriendsHome({
     return (
         <main className="main friends-main">
             <div className="friends-top-chrome">
-                    <FriendsHeader
-                        autoRefreshEnabled={autoRefreshEnabled}
-                        onRefresh={() => {
-                            loadFriends();
-                            loadGroupConversationList(selectedGroupConversationId);
-                            loadGroupInvites();
-                        }}
-                        onToggleAutoRefresh={setAutoRefreshEnabled}
-                    />
+                    <FriendsHeader />
 
                 {syncState.status === "syncing" ? (
                     <div className="friends-sync-banner syncing">
