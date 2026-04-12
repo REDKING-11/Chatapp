@@ -75,6 +75,203 @@ function normalizeReplyTo(value) {
   };
 }
 
+function normalizeAttachments(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+
+      return {
+        transferId: entry.transferId ? String(entry.transferId) : "",
+        fileName: entry.fileName ? String(entry.fileName) : "file",
+        mimeType: entry.mimeType ? String(entry.mimeType) : "application/octet-stream",
+        fileSize: Math.max(0, Number(entry.fileSize) || 0)
+      };
+    })
+    .filter((entry) => entry && entry.transferId);
+}
+
+function normalizeDisappearingSeconds(value) {
+  const seconds = Math.max(0, Number(value) || 0);
+  return Number.isFinite(seconds) ? seconds : 0;
+}
+
+function syncConversationRecord(existingConversation, conversation) {
+  if (!conversation || typeof conversation !== "object") {
+    return existingConversation || null;
+  }
+
+  return {
+    ...(existingConversation || {}),
+    conversationId: conversation.id ?? conversation.conversationId ?? existingConversation?.conversationId,
+    title: conversation.title ?? existingConversation?.title ?? "Direct Message",
+    participantUserIds: Array.isArray(conversation.participants)
+      ? conversation.participants.map((participant) => Number(participant.userId))
+      : Array.isArray(conversation.participantUserIds)
+        ? conversation.participantUserIds.map(Number)
+        : existingConversation?.participantUserIds || [],
+    wrappedKeys: Array.isArray(conversation.wrappedKeys)
+      ? conversation.wrappedKeys
+      : existingConversation?.wrappedKeys || [],
+    createdAt: conversation.createdAt ?? existingConversation?.createdAt ?? new Date().toISOString(),
+    updatedAt: conversation.updatedAt ?? existingConversation?.updatedAt ?? conversation.createdAt ?? existingConversation?.createdAt ?? new Date().toISOString(),
+    disappearingMessageSeconds: normalizeDisappearingSeconds(
+      conversation.disappearingPolicy?.currentSeconds ?? conversation.messageTtlSeconds ?? existingConversation?.disappearingMessageSeconds ?? 0
+    )
+  };
+}
+
+function mergeStoredMessages(existingMessages, incomingMessages) {
+  const merged = new Map();
+
+  [...(Array.isArray(existingMessages) ? existingMessages : []), ...(Array.isArray(incomingMessages) ? incomingMessages : [])]
+    .forEach((message) => {
+      if (!message || typeof message !== "object") {
+        return;
+      }
+
+      const messageId = message.messageId != null ? String(message.messageId) : "";
+      const remoteMessageId = message.remoteMessageId != null ? String(message.remoteMessageId) : "";
+      const fallbackKey = messageId || (remoteMessageId ? `remote:${remoteMessageId}` : "");
+
+      if (!fallbackKey) {
+        return;
+      }
+
+      const existing = merged.get(fallbackKey);
+
+      if (!existing) {
+        merged.set(fallbackKey, message);
+        return;
+      }
+
+      // Prefer entries that have remote ids/control metadata, but keep any local-only data too.
+      merged.set(fallbackKey, {
+        ...existing,
+        ...message,
+        remoteMessageId: message.remoteMessageId ?? existing.remoteMessageId ?? null,
+        control: message.control ?? existing.control ?? null
+      });
+    });
+
+  return Array.from(merged.values()).sort((left, right) => {
+    const leftTime = new Date(left?.createdAt || 0).getTime();
+    const rightTime = new Date(right?.createdAt || 0).getTime();
+
+    if (leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+
+    return String(left?.messageId || "").localeCompare(String(right?.messageId || ""));
+  });
+}
+
+function createEmptyReactions() {
+  return {};
+}
+
+function normalizeReactions(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return createEmptyReactions();
+  }
+
+  return Object.entries(value).reduce((acc, [emoji, userIds]) => {
+    if (!emoji) {
+      return acc;
+    }
+
+    acc[String(emoji)] = Array.from(new Set((Array.isArray(userIds) ? userIds : []).map(String)));
+    return acc;
+  }, {});
+}
+
+function toggleReactionOnMessage(targetMessage, senderUserId, emoji) {
+  if (!targetMessage || !emoji) {
+    return;
+  }
+
+  const reactionKey = String(emoji);
+  const userKey = String(senderUserId);
+  const existingUsers = Array.isArray(targetMessage.reactions?.[reactionKey])
+    ? targetMessage.reactions[reactionKey].map(String)
+    : [];
+
+  const hasReaction = existingUsers.includes(userKey);
+  const nextUsers = hasReaction
+    ? existingUsers.filter((entry) => entry !== userKey)
+    : [...existingUsers, userKey];
+
+  targetMessage.reactions = {
+    ...(targetMessage.reactions || {}),
+    [reactionKey]: nextUsers
+  };
+
+  if (nextUsers.length === 0) {
+    delete targetMessage.reactions[reactionKey];
+  }
+}
+
+function inferMessageKind(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "message";
+  }
+
+  if (payload.kind) {
+    return String(payload.kind);
+  }
+
+  if (payload.emoji && payload.targetMessageId) {
+    return "reaction";
+  }
+
+  return "message";
+}
+
+function buildControlMetadata(payload) {
+  const kind = inferMessageKind(payload);
+
+  if (kind === "message") {
+    return null;
+  }
+
+  return {
+    kind,
+    targetMessageId: payload?.targetMessageId ? String(payload.targetMessageId) : null,
+    emoji: payload?.emoji ? String(payload.emoji) : null
+  };
+}
+
+function pruneExpiredMessagesInConversation(conversation) {
+  if (!conversation || !Array.isArray(conversation.messages)) {
+    return false;
+  }
+
+  const ttlSeconds = normalizeDisappearingSeconds(conversation.disappearingMessageSeconds);
+
+  if (ttlSeconds <= 0) {
+    return false;
+  }
+
+  const cutoffTimestamp = Date.now() - ttlSeconds * 1000;
+  const originalLength = conversation.messages.length;
+  conversation.messages = conversation.messages.filter((message) => {
+    const createdAt = new Date(message?.createdAt || 0).getTime();
+
+    if (!Number.isFinite(createdAt) || createdAt <= 0) {
+      return true;
+    }
+
+    return createdAt >= cutoffTimestamp;
+  });
+
+  return conversation.messages.length !== originalLength;
+}
+
 export function initializeDevice({ userId, username, deviceName }) {
   const { userState } = ensureDevice(userId, username, deviceName);
 
@@ -127,6 +324,7 @@ export function createConversation({ userId, username, title, participants, reci
     conversationKey,
     wrappedKeys,
     messages: [],
+    disappearingMessageSeconds: 0,
     createdAt: new Date().toISOString()
   };
 
@@ -179,27 +377,44 @@ export function importConversation({ userId, username, conversation }) {
   });
 
   userState.conversations[String(conversation.id)] = {
-    conversationId: conversation.id,
-    title: conversation.title ?? "Direct Message",
-    participantUserIds: (conversation.participants || []).map((participant) => Number(participant.userId)),
+    ...syncConversationRecord(existingConversation, conversation),
     conversationKey,
-    wrappedKeys: conversation.wrappedKeys || [],
     messages: Array.isArray(conversation.messages)
-      ? conversation.messages.map((message) => ({
-          messageId: message.id,
-          senderUserId: message.senderUserId,
-          senderDeviceId: message.senderDeviceId,
-          ciphertext: message.ciphertext,
-          nonce: message.nonce,
-          aad: message.aad,
-          tag: message.tag,
-          createdAt: message.createdAt,
-          direction: Number(message.senderUserId) === Number(userId) ? "outgoing" : "incoming"
+      ? mergeStoredMessages(existingConversation?.messages || [], conversation.messages.map((message) => {
+          let plaintext = null;
+          let control = null;
+
+          try {
+            plaintext = decryptPayload({
+              conversationKey,
+              ciphertext: message.ciphertext,
+              nonce: message.nonce,
+              aad: message.aad,
+              tag: message.tag
+            });
+            control = buildControlMetadata(plaintext);
+          } catch {
+            control = null;
+          }
+
+          return {
+            messageId: plaintext?.id || message.id,
+            remoteMessageId: message.id,
+            senderUserId: message.senderUserId,
+            senderDeviceId: message.senderDeviceId,
+            ciphertext: message.ciphertext,
+            nonce: message.nonce,
+            aad: message.aad,
+            tag: message.tag,
+            createdAt: message.createdAt,
+            direction: Number(message.senderUserId) === Number(userId) ? "outgoing" : "incoming",
+            control
+          };
         }))
-      : existingConversation?.messages || [],
-    createdAt: conversation.createdAt,
-    updatedAt: conversation.updatedAt ?? existingConversation?.updatedAt ?? conversation.createdAt
+      : existingConversation?.messages || []
   };
+
+  pruneExpiredMessagesInConversation(userState.conversations[String(conversation.id)]);
 
   writeSecureDmStore(store);
   return listMessages({ userId, conversationId: conversation.id });
@@ -215,7 +430,7 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
         ...plaintext,
         id: messageId,
         body: plaintext.body ?? "",
-        kind: plaintext.kind || "message",
+        kind: inferMessageKind(plaintext),
         createdAt
       }
     : {
@@ -235,9 +450,11 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
       senderDeviceId: userState.device.deviceId
     }
   });
+  const control = buildControlMetadata(plaintextPayload);
 
   const storedMessage = {
     messageId,
+    remoteMessageId: null,
     senderUserId: Number(senderUserId),
     senderDeviceId: userState.device.deviceId,
     ciphertext: envelope.ciphertext,
@@ -245,7 +462,8 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
     aad: envelope.aad,
     tag: envelope.tag,
     createdAt,
-    direction: "outgoing"
+    direction: "outgoing",
+    control
   };
 
   conversation.messages.push(storedMessage);
@@ -268,6 +486,7 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
 export function receiveEncryptedMessage({ userId, username, conversationId, relayItem }) {
   const { store, userState } = ensureDevice(userId, username);
   const conversation = getConversationOrThrow(userState, conversationId);
+  const prunedBeforeReceive = pruneExpiredMessagesInConversation(conversation);
   const plaintext = decryptPayload({
     conversationKey: conversation.conversationKey,
     ciphertext: relayItem.ciphertext,
@@ -275,15 +494,18 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
     aad: relayItem.aad,
     tag: relayItem.tag
   });
+  const control = buildControlMetadata(plaintext);
 
   const alreadyExists = conversation.messages.find((message) => (
     message.messageId === plaintext.id
+    || message.remoteMessageId === plaintext.id
     || message.id === plaintext.id
   ));
 
   if (!alreadyExists) {
     conversation.messages.push({
       messageId: plaintext.id,
+      remoteMessageId: relayItem.messageId ?? null,
       senderUserId: relayItem.senderUserId ?? null,
       senderDeviceId: relayItem.senderDeviceId,
       ciphertext: relayItem.ciphertext,
@@ -291,8 +513,11 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
       aad: relayItem.aad,
       tag: relayItem.tag,
       createdAt: plaintext.createdAt,
-      direction: "incoming"
+      direction: "incoming",
+      control
     });
+    writeSecureDmStore(store);
+  } else if (prunedBeforeReceive) {
     writeSecureDmStore(store);
   }
 
@@ -315,14 +540,44 @@ function buildVisibleMessages({ conversation, userId }) {
       aad: message.aad,
       tag: message.tag
     });
-    const kind = plaintext.kind || "message";
+    const control = message.control || buildControlMetadata(plaintext);
+    const visibleMessageId = plaintext.id || message.messageId;
+    const storageMessageId = message.messageId;
+    const remoteMessageId = message.remoteMessageId ?? null;
+    const kind = control?.kind || inferMessageKind(plaintext);
     const senderUserId = message.senderUserId;
+    const targetMessageId = control?.targetMessageId ?? plaintext.targetMessageId;
+    const hasControlTarget = Boolean(targetMessageId);
+    const normalizedBody = normalizePlaintextBody(plaintext.body);
+    const isBlankArtifact = (
+      normalizedBody.trim() === ""
+      && !plaintext.replyTo
+      && !plaintext.editedAt
+      && !plaintext.deletedAt
+      && !plaintext.reactions
+      && normalizeAttachments(plaintext.attachments).length === 0
+    );
 
-    if (kind === "edit" || kind === "delete") {
-      const targetMessageId = plaintext.targetMessageId;
-      const targetMessage = targetMessageId ? visibleMessageMap.get(String(targetMessageId)) : null;
+    if (control || hasControlTarget || kind === "edit" || kind === "delete" || kind === "reaction") {
+      const targetKey = targetMessageId ? String(targetMessageId) : "";
+      const targetMessage = targetKey
+        ? (
+          visibleMessageMap.get(targetKey)
+          || visibleMessageMap.get(`storage:${targetKey}`)
+          || visibleMessageMap.get(`remote:${targetKey}`)
+        )
+        : null;
 
-      if (!targetMessage || String(targetMessage.senderUserId) !== String(senderUserId)) {
+      if (!targetMessage) {
+        return;
+      }
+
+      if (control?.emoji || plaintext.emoji || kind === "reaction") {
+        toggleReactionOnMessage(targetMessage, senderUserId, control?.emoji ?? plaintext.emoji);
+        return;
+      }
+
+      if (String(targetMessage.senderUserId) !== String(senderUserId)) {
         return;
       }
 
@@ -338,27 +593,50 @@ function buildVisibleMessages({ conversation, userId }) {
       return;
     }
 
+    if (isBlankArtifact) {
+      return;
+    }
+
     const visibleMessage = {
-      messageId: message.messageId,
+      messageId: visibleMessageId,
+      storageMessageId,
+      remoteMessageId,
       senderUserId: message.senderUserId,
       senderDeviceId: message.senderDeviceId,
       direction: message.direction,
-      body: normalizePlaintextBody(plaintext.body),
+      body: normalizedBody,
       createdAt: plaintext.createdAt,
       replyTo: normalizeReplyTo(plaintext.replyTo),
+      attachments: normalizeAttachments(plaintext.attachments),
+      reactions: normalizeReactions(plaintext.reactions),
       editedAt: plaintext.editedAt || null,
       isDeleted: false
     };
 
     visibleMessages.push(visibleMessage);
     visibleMessageMap.set(String(visibleMessage.messageId), visibleMessage);
+    visibleMessageMap.set(`storage:${String(storageMessageId)}`, visibleMessage);
+    if (remoteMessageId != null) {
+      visibleMessageMap.set(`remote:${String(remoteMessageId)}`, visibleMessage);
+    }
   });
 
   return visibleMessages;
 }
 
 export function listConversations({ userId, username }) {
-  const { userState } = ensureDevice(userId, username);
+  const { store, userState } = ensureDevice(userId, username);
+  let didPrune = false;
+
+  Object.values(userState.conversations).forEach((conversation) => {
+    if (pruneExpiredMessagesInConversation(conversation)) {
+      didPrune = true;
+    }
+  });
+
+  if (didPrune) {
+    writeSecureDmStore(store);
+  }
 
   return Object.values(userState.conversations).map((conversation) => ({
     conversationId: conversation.conversationId,
@@ -374,6 +652,11 @@ export function listMessages({ userId, conversationId }) {
   const store = readSecureDmStore();
   const userState = getUserState(store, userId);
   const conversation = getConversationOrThrow(userState, conversationId);
+  const didPrune = pruneExpiredMessagesInConversation(conversation);
+
+  if (didPrune) {
+    writeSecureDmStore(store);
+  }
 
   return buildVisibleMessages({ conversation, userId });
 }
@@ -443,35 +726,81 @@ export function importConversationPackage({ userId, username, conversation, wrap
   });
 
   userState.conversations[String(conversation.conversationId)] = {
-    conversationId: conversation.conversationId,
-    title: conversation.title ?? existingConversation?.title ?? "Direct Message",
-    participantUserIds: Array.isArray(conversation.participantUserIds)
-      ? conversation.participantUserIds.map(Number)
-      : existingConversation?.participantUserIds || [],
+    ...syncConversationRecord(existingConversation, conversation),
     conversationKey,
     wrappedKeys: [
       ...(existingConversation?.wrappedKeys || []).filter((entry) => entry.deviceId !== wrappedKey.deviceId),
       wrappedKey
     ],
     messages: Array.isArray(conversation.messages)
-      ? conversation.messages.map((message) => ({
-          messageId: message.id,
-          senderUserId: message.senderUserId,
-          senderDeviceId: message.senderDeviceId,
-          ciphertext: message.ciphertext,
-          nonce: message.nonce,
-          aad: message.aad,
-          tag: message.tag,
-          createdAt: message.createdAt,
-          direction: Number(message.senderUserId) === Number(userId) ? "outgoing" : "incoming"
+      ? mergeStoredMessages(existingConversation?.messages || [], conversation.messages.map((message) => {
+          let plaintext = null;
+          let control = null;
+
+          try {
+            plaintext = decryptPayload({
+              conversationKey,
+              ciphertext: message.ciphertext,
+              nonce: message.nonce,
+              aad: message.aad,
+              tag: message.tag
+            });
+            control = buildControlMetadata(plaintext);
+          } catch {
+            control = null;
+          }
+
+          return {
+            messageId: plaintext?.id || message.id,
+            remoteMessageId: message.id,
+            senderUserId: message.senderUserId,
+            senderDeviceId: message.senderDeviceId,
+            ciphertext: message.ciphertext,
+            nonce: message.nonce,
+            aad: message.aad,
+            tag: message.tag,
+            createdAt: message.createdAt,
+            direction: Number(message.senderUserId) === Number(userId) ? "outgoing" : "incoming",
+            control
+          };
         }))
-      : existingConversation?.messages || [],
-    createdAt: conversation.createdAt,
-    updatedAt: conversation.updatedAt ?? conversation.createdAt
+      : existingConversation?.messages || []
   };
+
+  pruneExpiredMessagesInConversation(userState.conversations[String(conversation.conversationId)]);
 
   writeSecureDmStore(store);
   return listMessages({ userId, conversationId: conversation.conversationId });
+}
+
+export function syncConversationMetadata({ userId, username, conversation }) {
+  const { store, userState } = ensureDevice(userId, username);
+  const conversationId = conversation?.id ?? conversation?.conversationId;
+
+  if (!conversationId) {
+    return { ok: false };
+  }
+
+  const existingConversation = userState.conversations[String(conversationId)];
+
+  if (!existingConversation) {
+    return { ok: false, missing: true };
+  }
+
+  userState.conversations[String(conversationId)] = {
+    ...syncConversationRecord(existingConversation, conversation),
+    conversationKey: existingConversation.conversationKey,
+    messages: existingConversation.messages || []
+  };
+
+  pruneExpiredMessagesInConversation(userState.conversations[String(conversationId)]);
+  writeSecureDmStore(store);
+
+  return {
+    ok: true,
+    conversationId,
+    disappearingMessageSeconds: userState.conversations[String(conversationId)].disappearingMessageSeconds
+  };
 }
 
 export function deleteConversation({ userId, conversationId }) {

@@ -1,0 +1,155 @@
+## Core Text And Content
+- Added real `Pretext.js` support for text-like builder blocks, so text and heading nodes can use an arithmetic text layout engine instead of always depending on browser DOM measurement.
+- Added broad Markdown support across builder content, chat messages, DMs, and related text surfaces.
+- Added Markdown preview while typing, so likely Markdown shows a live rendered preview before sending.
+- Expanded Markdown features to include headings, emphasis, code blocks, blockquotes, lists, task lists, tables, horizontal rules, links, and images.
+- Added Mermaid diagram rendering in Markdown.
+- Added simple chart rendering from Markdown code fences.
+- Kept Markdown rendering sanitized rather than allowing arbitrary raw HTML/script embeds.
+
+## Reactions And Message UX
+- Added Discord-style reactions with quick emoji options and a fuller emoji picker.
+- Moved reactions so they belong under the target message rather than acting like standalone visible messages.
+- Reworked the reaction controls so message actions and reaction controls live under the message instead of stretching the message bubble awkwardly.
+- Fixed multiple reaction-picker issues: sticky open state, outside-click close, picker centering, backdrop styling, and multi-click behavior.
+- Fixed the deeper DM reaction pipeline so reactions rebuild into the target message after conversation reload instead of becoming blank “ghost” messages.
+- Changed reaction chips to render under the actual message, while the footer holds controls.
+- Added a centered overlay picker for reactions and later fixed its selection wiring so choosing emoji actually worked.
+- Restored the picker and tightened its open/close logic after regressions.
+
+## Message Composer
+- Added normal emoji insertion into the composer, separate from reactions.
+- Added basic file sending from the composer.
+- Redesigned the composer layout so tools are smaller and better placed:
+  - file button on the left
+  - emoji trigger inside the field
+  - smaller send button on the right
+- Made the text area non-resizable so it stopped stretching the whole composer strangely.
+- Restored the animated “dancing emoji” trigger and made it rotate to a different emoji every 20 seconds.
+- Fixed the emoji trigger centering by reusing the same centering logic as the paperclip button.
+- Fixed the composer emoji picker backdrop so it no longer turned the whole screen into a giant blue button.
+- Changed the composer emoji picker so it stays open after selecting an emoji, making it easier to choose several in a row.
+
+## File Sharing And Attachments
+- First added lightweight file sharing by embedding small files into message text as Markdown/data URLs.
+- Then replaced that for secure DMs/groups with a more real no-storage attachment flow:
+  - sender sends attachment metadata, not a giant embedded message blob
+  - recipient sees a download button
+  - file transfer streams live
+  - both sides can show progress
+  - no long-term server storage is required
+- Polished attachment cards with better file metadata, status pills, progress display, remove button alignment, and cleaner layout.
+- Improved long filename handling and centered the remove `x`.
+- Clarified that current attachment sharing is good for smaller files, while large mods/modpacks would need a more advanced hosted or peer-to-peer solution later.
+
+## DM And Group Chat Systems
+- Added disappearing messages as a separate DM setting from relay retention.
+- Added agreement flow so both people must accept disappearing-message policy changes.
+- Added more disappearing-message time options, including `2 months`, `4 months`, and `6 months`.
+- Added a wheel-style picker for relay retention and disappearing-message settings instead of plain dropdowns.
+- Fixed a DM sync issue where imported/opened conversations could overwrite local history instead of merging.
+- Improved DM message rebuilding logic so control events like reactions are folded into target messages instead of showing as visible messages.
+- Added first-pass no-storage live attachment transfer support for secure DMs/groups.
+
+## Chat Mentions, Links, And Suggestions
+- Added internal app links for user mentions, channel references, and direct message links.
+- Added internal deep links to specific server/channel/message targets.
+- Added copy-link support for server messages.
+- Added autocomplete for `@` mentions and `#` channel references in composers.
+- Made plain `@` show relevant people for the current context:
+  - DM recipient in DMs
+  - all participants in groups
+  - known current-chat users in servers
+- Pinned `@everyone` in server contexts.
+- Sorted server suggestions alphabetically and later limited visible suggestions to 5.
+- Changed suggestion hover styling so the whole option row glows instead of just the name.
+- Added a keyboard shortcut to open the composer emoji picker.
+
+## Policy / Terms Reader
+- Replaced older hardcoded policy content with your Markdown policy assets.
+- Turned the tiny embedded policy panels into dedicated reading pages.
+- Added a proper policy reader with:
+  - larger reading layout
+  - font size slider
+  - its own color mode
+  - chapter/contents navigation
+- Made internal heading links in the Markdown behave like proper section jumps.
+- Changed the policy reader backdrop several times to improve readability:
+  - reduced overly harsh black
+  - scoped scrollbar styling
+  - added blur/frosted overlay behavior
+  - then reduced nested blur so opening it from settings did not become blur-on-blur
+- Reworked the color mode from awkward separate buttons into a cleaner toggle.
+- Adjusted labels and sizing when the old extra mode label was removed.
+
+## Client Settings And “More”
+- Added a `More` page for things like shortcuts, policies, and future utility/help additions.
+- Later reverted an experiment that moved `More` into the top row, keeping it in the left-side tab structure.
+- Added a shortcut guide section there.
+- Reworked settings reset behavior so generic reset no longer wiped unrelated things like friend tags.
+- Then refined reset behavior again to work per major settings tab, like `General`, `Profile`, and `Advanced`, instead of over-broad resets.
+
+## Shortcuts
+- Added a first shortcut set across the app, including:
+  - `Ctrl + Enter` send message
+  - `Esc` close overlays
+  - `Alt + S` open conversation settings
+  - `Ctrl + ,` open client settings
+  - `Ctrl + K` quick switcher
+  - `Ctrl + Shift + E` focus composer
+  - `Ctrl + Shift + F` attach file
+  - `Ctrl + Shift + R` reaction picker
+  - `Alt + Enter` / `Ctrl + Shift + S` server settings
+  - `Ctrl + Shift + .` composer emoji picker
+  - `Up` edit last message when composer is empty
+- Added a quick switcher for friends, groups, servers, and channels.
+- Fixed a crash in global shortcut handling caused by a server selection value being referenced before it was initialized.
+
+## Friends / Sidebar / Social UX
+- Added and refined friend tagging UI.
+- Tried placing tags under avatars, then reverted because it squeezed and wrapped badly.
+- Moved tags under the username and above the preview/status line.
+- Added truncation logic to reduce tag layout breakage.
+- Adjusted friend add button glow so it only lights up when there are incoming friend requests you need to accept or decline, instead of always looking urgent.
+
+## Registration / Auth
+- Disabled email and phone fields in registration for now and replaced them with a simpler unavailable state.
+
+## Server / Channel Management
+- Added real self-hosted channel creation support:
+  - create `chat` or `page` channels
+  - persist them into server data
+  - initialize their message storage
+  - refresh and auto-select them after creation
+- Corrected the visible channel list so the hidden customization channel no longer counts as a normal channel.
+- Added an easter egg for the hidden customization page:
+  - “you are not supposed to see this”
+  - little hello note
+  - your bear image
+
+## Visual And Interaction Polish
+- Reworked message footer overlays so reactions/actions could float without shifting layout.
+- Improved z-index and hover handoff behavior so message action footers stayed usable.
+- Fixed picker centering, icon centering, and several small alignment issues across composer tools and reaction popouts.
+- Softened policy-reader dark mode away from pure black and reduced nested blur problems.
+- Cleaned attachment visuals and the hidden customization-page presentation.
+
+## Backend / Data Work
+- Added backend support and DB metadata for DM disappearing-message policy.
+- Walked through MySQL migration adjustments because your server did not support `ADD COLUMN IF NOT EXISTS`.
+- Added self-host backend route support for channel creation.
+- Helped with deployment/restart flow for the realtime and self-host services when renderer/main/server changes needed reloads.
+
+## Overall
+By the end of this chat, the app gained:
+- much richer text/Markdown handling
+- real reactions and better message controls
+- better composer UX
+- lightweight file sharing plus live DM attachments
+- DM disappearing messages
+- internal links, mentions, and shortcuts
+- a better policy reader
+- safer settings reset behavior
+- self-host channel creation
+- a hidden customization-page easter egg
+- cleaner friend-request glow behavior

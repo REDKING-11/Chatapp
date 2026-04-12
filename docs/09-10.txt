@@ -1,0 +1,33 @@
+**Changelog Draft**
+- Added username tags/handles support like `REDKING_11#0011`, `MrHaamu11#6969`, `JohnDoe#0001`, and `JaneDoe#0002`.
+- Added profile display-name support to the core auth/user profile flow.
+- Added profile editing API support with new profile update endpoint.
+- Added profile media settings for avatar and background uploads.
+- Moved avatar/background upload controls into Profile settings instead of the small profile dock.
+- Added media limits and crop output rules: avatars output as 512 x 512, banners output as 1200 x 400, with file-size checks and user-facing help text.
+- Added profile media manifest support through the self-host server, with public read support for shared profile assets.
+- Added DM/group chat avatar display support, with fallback initials.
+- Added minimal chat identity mode with smart initials fallback for group chats when multiple users share the same first letter.
+- Added chat name display setting so messages can use either display names or username tags, not both.
+- Added message alignment settings: normal “others left / you right”, everyone left, everyone right, and reversed layout.
+- Made chat timestamps and names visually smaller/cleaner for the newer minimalist chat style.
+- Added profile media auto-load settings for avatars/backgrounds and “shared servers only” behavior.
+- Added default offline relay window to 24 hours.
+- Fixed conversation settings relay-change request flow.
+- Fixed old-chat download request prompt showing when there is no old chat/local access case.
+- Fixed stale “Loaded X encrypted messages while you were away” banner by only counting messages that are actually newly imported.
+- Fixed stale desktop notifications firing for already-read/old relay messages after refresh/reconnect.
+- Fixed Friends glow/unread state not clearing when the conversation is visibly open but Electron focus is weird, like with DevTools open.
+- Added seen/read timestamp baseline for existing conversations so old messages do not immediately count as unread on login.
+- Added server online/offline health checking through Electron IPC.
+- Added periodic server recheck so offline servers can come back online without refreshing the client.
+- Added mid-session offline handling to avoid hammering dead servers with repeated channel/profile asset requests.
+- Fixed profile asset manifest requests spamming/401ing when server auth/offline state is not valid.
+- Fixed React “setState while rendering” issue in client settings by deferring settings-change broadcasts.
+- Added installer wizard config changes for Windows/MSI, including directory picker behavior and install folder naming under `RedFolder/LibreChat`.
+- Added docs file `09-100401.md`.
+- Rebuilt frontend production assets in `Application/dist`.
+
+**Verification**
+- `npm exec vite build` passes after the latest fixes.
+- MSI packaging was attempted earlier, but the MSI build still needs WiX tooling installed/configured before that part can finish.

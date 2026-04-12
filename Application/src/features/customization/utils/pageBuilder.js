@@ -37,6 +37,12 @@ export function createNode(type) {
             type: "text",
             props: {
                 text: "New text",
+                markdown: true,
+                layoutEngine: "browser",
+                font: '400 16px "Segoe UI"',
+                lineHeight: 24,
+                whiteSpace: "normal",
+                wordBreak: "normal",
                 style: ""
             }
         };
@@ -49,6 +55,12 @@ export function createNode(type) {
             props: {
                 text: "New heading",
                 level: 2,
+                markdown: true,
+                layoutEngine: "browser",
+                font: '700 32px "Segoe UI"',
+                lineHeight: 40,
+                whiteSpace: "normal",
+                wordBreak: "normal",
                 style: ""
             }
         };
@@ -60,6 +72,7 @@ export function createNode(type) {
             type: "button",
             props: {
                 text: "Button",
+                markdown: true,
                 style: ""
             }
         };

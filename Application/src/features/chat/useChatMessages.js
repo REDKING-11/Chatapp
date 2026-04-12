@@ -3,7 +3,8 @@ import {
     fetchChannelMessages,
     createMessage,
     updateMessage,
-    removeMessage
+    removeMessage,
+    toggleMessageReaction
 } from "./actions";
 
 function isExpectedOfflineMessageError(error) {
@@ -107,12 +108,37 @@ export default function useChatMessages({ channelId, currentUser, backendUrl, on
         }
     }
 
+    async function toggleReaction({ messageId, emoji }) {
+        try {
+            const updatedMessage = await toggleMessageReaction({
+                backendUrl,
+                messageId,
+                emoji
+            });
+
+            setMessages((prev) =>
+                prev.map((msg) =>
+                    msg.id === updatedMessage.id ? updatedMessage : msg
+                )
+            );
+
+            return updatedMessage;
+        } catch (err) {
+            if (isExpectedOfflineMessageError(err)) {
+                onServerOffline?.();
+            }
+            console.error("Failed to toggle reaction:", err);
+            throw err;
+        }
+    }
+
     return {
         messages,
         loading,
         sending,
         sendNewMessage,
         editExistingMessage,
-        deleteExistingMessage
+        deleteExistingMessage,
+        toggleReaction
     };
 }

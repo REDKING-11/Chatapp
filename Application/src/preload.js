@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("secureDm", {
   importConversation: (payload) => ipcRenderer.invoke("secure-dm:import-conversation", payload),
   createMessage: (payload) => ipcRenderer.invoke("secure-dm:create-message", payload),
   receiveMessage: (payload) => ipcRenderer.invoke("secure-dm:receive-message", payload),
+  syncConversationMetadata: (payload) => ipcRenderer.invoke("secure-dm:sync-conversation-metadata", payload),
   listConversations: (payload) => ipcRenderer.invoke("secure-dm:list-conversations", payload),
   listMessages: (payload) => ipcRenderer.invoke("secure-dm:list-messages", payload),
   exportConversationPackage: (payload) => ipcRenderer.invoke("secure-dm:export-conversation-package", payload),
@@ -22,4 +23,15 @@ contextBridge.exposeInMainWorld("desktopNotifications", {
 
 contextBridge.exposeInMainWorld("serverHealth", {
   check: (backendUrl) => ipcRenderer.invoke("server-health:check", backendUrl)
+});
+
+contextBridge.exposeInMainWorld("attachmentTransfers", {
+  registerOutgoing: (payload) => ipcRenderer.invoke("attachment-transfers:register-outgoing", payload),
+  getOutgoingInfo: (payload) => ipcRenderer.invoke("attachment-transfers:get-outgoing-info", payload),
+  readOutgoingChunk: (payload) => ipcRenderer.invoke("attachment-transfers:read-outgoing-chunk", payload),
+  chooseSavePath: (payload) => ipcRenderer.invoke("attachment-transfers:choose-save-path", payload),
+  beginIncomingDownload: (payload) => ipcRenderer.invoke("attachment-transfers:begin-incoming-download", payload),
+  appendIncomingChunk: (payload) => ipcRenderer.invoke("attachment-transfers:append-incoming-chunk", payload),
+  finishIncomingDownload: (payload) => ipcRenderer.invoke("attachment-transfers:finish-incoming-download", payload),
+  cancelIncomingDownload: (payload) => ipcRenderer.invoke("attachment-transfers:cancel-incoming-download", payload)
 });

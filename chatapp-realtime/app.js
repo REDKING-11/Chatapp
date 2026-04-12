@@ -38,6 +38,35 @@ function sendJson(ws, payload) {
   }
 }
 
+function forwardDmFileSignal({ ws, authedDeviceId, data }) {
+  const targetDeviceId = String(data.targetDeviceId || "");
+  const transferId = String(data.transferId || "");
+
+  if (!targetDeviceId || !transferId) {
+    sendJson(ws, { type: "dm:file:error", transferId, error: "targetDeviceId and transferId are required" });
+    return true;
+  }
+
+  const onlineTarget = onlineDevices.get(targetDeviceId);
+
+  if (!onlineTarget) {
+    sendJson(ws, {
+      type: "dm:file:error",
+      transferId,
+      targetDeviceId,
+      error: "That device is currently offline"
+    });
+    return true;
+  }
+
+  sendJson(onlineTarget.ws, {
+    ...data,
+    senderDeviceId: authedDeviceId
+  });
+
+  return true;
+}
+
 async function getConversationRelayTtlSeconds(conversationId) {
   const [rows] = await pool.query(
     `
@@ -195,6 +224,15 @@ wss.on("connection", (ws) => {
             createdAt: row.created_at,
             expiresAt: row.expires_at
           }))
+        });
+        return;
+      }
+
+      if (String(data.type || "").startsWith("dm:file:")) {
+        forwardDmFileSignal({
+          ws,
+          authedDeviceId,
+          data
         });
         return;
       }

@@ -194,12 +194,34 @@
         "type": "row",
         "children": [
           {
+            "id": "column_1776010358182_omy90j",
             "type": "column",
+            "props": {
+              "gap": 16,
+              "padding": 0,
+              "style": ""
+            },
             "children": [
               {
-                "type": "text",
+                "type": "column",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "Left side content"
+                    },
+                    "id": "text_1776010336038_9quplh"
+                  }
+                ],
+                "id": "column_1776010336038_19v5nv"
+              },
+              {
+                "id": "chat_1776010358182_3r2yjh",
+                "type": "chat",
                 "props": {
-                  "text": "Left side content"
+                  "channelId": "",
+                  "title": "Chat",
+                  "style": ""
                 }
               }
             ]
@@ -211,11 +233,14 @@
                 "type": "text",
                 "props": {
                   "text": "Right side content"
-                }
+                },
+                "id": "text_1776010336038_4vvs4c"
               }
-            ]
+            ],
+            "id": "column_1776010336038_pec27a"
           }
-        ]
+        ],
+        "id": "row_1776010336038_k13nij"
       }
     }
   }

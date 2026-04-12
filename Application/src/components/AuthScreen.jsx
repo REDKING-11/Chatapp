@@ -6,8 +6,6 @@ export default function AuthScreen({ onAuthSuccess }) {
     const [mode, setMode] = useState("login");
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
-    const [email, setEmail] = useState("");
-    const [phone, setPhone] = useState("");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
 
@@ -21,8 +19,8 @@ export default function AuthScreen({ onAuthSuccess }) {
                 mode,
                 username,
                 password,
-                email,
-                phone
+                email: "",
+                phone: ""
             });
 
             onAuthSuccess(data.user, data.token);
@@ -51,20 +49,9 @@ export default function AuthScreen({ onAuthSuccess }) {
                     />
 
                     {mode === "register" && (
-                        <>
-                            <input
-                                type="email"
-                                placeholder="Email (optional)"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                            />
-                            <input
-                                type="text"
-                                placeholder="Phone (optional)"
-                                value={phone}
-                                onChange={(e) => setPhone(e.target.value)}
-                            />
-                        </>
+                        <p className="auth-muted-note">
+                            Email and phone registration are temporarily disabled.
+                        </p>
                     )}
 
                     <input

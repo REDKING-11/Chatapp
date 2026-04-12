@@ -13,6 +13,17 @@ export const RELAY_RETENTION_OPTIONS = [
   { seconds: 259200, label: "72 hours" },
   { seconds: 345600, label: "96 hours" }
 ];
+export const DISAPPEARING_MESSAGE_OPTIONS = [
+  { seconds: 0, label: "Off" },
+  { seconds: 86400, label: "24 hours" },
+  { seconds: 259200, label: "3 days" },
+  { seconds: 604800, label: "7 days" },
+  { seconds: 1209600, label: "14 days" },
+  { seconds: 2592000, label: "30 days" },
+  { seconds: 5184000, label: "2 months" },
+  { seconds: 10368000, label: "4 months" },
+  { seconds: 15552000, label: "6 months" }
+];
 
 let realtimeSocket = null;
 let realtimeSocketKey = null;
@@ -195,6 +206,11 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
 
         if (payload.type === "dm:queued") {
           dispatchRealtimeEvent("secureDmRelayQueueState", payload);
+          return;
+        }
+
+        if (String(payload.type || "").startsWith("dm:file:")) {
+          dispatchRealtimeEvent("secureDmFileSignal", payload);
         }
       } catch (error) {
         console.error("Realtime message handling failed:", error);
@@ -262,7 +278,8 @@ export async function createDirectConversation({
   token,
   currentUser,
   recipientUser,
-  relayTtlSeconds
+  relayTtlSeconds,
+  messageTtlSeconds = 0
 }) {
   const currentDevice = await window.secureDm.getDeviceBundle({
     userId: currentUser.id,
@@ -303,7 +320,8 @@ export async function createDirectConversation({
     body: JSON.stringify({
       participantUserIds: [recipientUser.id],
       wrappedKeys: localConversation.wrappedKeys,
-      relayTtlSeconds
+      relayTtlSeconds,
+      messageTtlSeconds
     })
   });
 
@@ -364,7 +382,9 @@ export async function sendDirectMessage({
       kind: messageOptions.kind || "message",
       body,
       replyTo: messageOptions.replyTo || null,
-      targetMessageId: messageOptions.targetMessageId || null
+      targetMessageId: messageOptions.targetMessageId || null,
+      emoji: messageOptions.emoji || null,
+      attachments: Array.isArray(messageOptions.attachments) ? messageOptions.attachments : []
     }
   });
 
@@ -399,6 +419,21 @@ export async function sendDirectMessage({
   });
 
   return parseJsonResponse(res, "Failed to send DM");
+}
+
+export async function sendSecureDmRealtimeEvent({ token, currentUser, payload }) {
+  const socket = await ensureRealtimeConnection({
+    token,
+    currentUser
+  });
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw new Error("Realtime connection is not available");
+  }
+
+  socket.send(JSON.stringify(payload));
+
+  return { ok: true };
 }
 
 export async function pullRelayMessages({ token, currentUser }) {
@@ -495,4 +530,23 @@ export async function updateRelayRetention({
   });
 
   return parseJsonResponse(res, "Failed to update relay retention");
+}
+
+export async function updateDisappearingMessages({
+  token,
+  conversationId,
+  messageTtlSeconds,
+  mode = "request"
+}) {
+  const res = await fetch(`${CORE_API_BASE}/dm/conversations/disappearing.php`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      conversationId,
+      messageTtlSeconds,
+      mode
+    })
+  });
+
+  return parseJsonResponse(res, "Failed to update disappearing messages");
 }

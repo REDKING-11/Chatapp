@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     fetchProfileAssetBlobUrl,
     fetchProfileAssetManifest
 } from "../../profile/actions";
+import ComposerTools from "../../../components/ComposerTools";
+import ComposerEntitySuggestions from "../../../components/ComposerEntitySuggestions";
+import MarkdownContent from "../../../components/MarkdownContent";
+import MarkdownPreview from "../../../components/MarkdownPreview";
+import MessageReactions from "../../../components/MessageReactions";
+import { buildAppLinkContext } from "../../../lib/appLinks";
+import { applyComposerEntitySuggestion, getComposerEntitySuggestions } from "../../../lib/composerEntities";
 
 function EmptyState({ title, description }) {
     return (
@@ -145,6 +152,161 @@ function getReplyPreviewBody(text) {
     return trimmed.length > 72 ? `${trimmed.slice(0, 69).trimEnd()}...` : trimmed;
 }
 
+function getMessageBody(text) {
+    const normalizedText = text && typeof text === "object" ? text.body : text;
+    return String(normalizedText || "").trim();
+}
+
+function buildConversationLinkContext({ currentUser, participantsById = {}, directFriend = null }) {
+    const users = [
+        ...Object.values(participantsById || {}).map((participant) => ({
+            id: participant.userId,
+            targetId: participant.userId,
+            scope: String(participant.userId) === String(currentUser?.id) ? "self" : "friend",
+            username: participant.username,
+            usernameBase: participant.usernameBase,
+            handle: participant.handle,
+            displayName: participant.displayName || participant.displayLabel,
+            label: participant.username
+        })),
+        directFriend ? {
+            id: directFriend.friendUserId,
+            targetId: directFriend.friendUserId,
+            scope: "friend",
+            username: directFriend.friendUsername,
+            usernameBase: directFriend.friendUsernameBase,
+            handle: directFriend.friendHandle,
+            displayName: directFriend.friendDisplayName,
+            label: directFriend.friendUsername
+        } : null
+    ].filter(Boolean);
+
+    return buildAppLinkContext({
+        currentUser,
+        users
+    });
+}
+
+function formatFileSize(bytes) {
+    const value = Math.max(0, Number(bytes) || 0);
+
+    if (value >= 1024 * 1024) {
+        return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    if (value >= 1024) {
+        return `${Math.round(value / 1024)} KB`;
+    }
+
+    return `${value} B`;
+}
+
+function getAttachmentStatusLabel(transferState, progress, isOutgoing) {
+    if (!transferState || transferState.status === "idle") {
+        return isOutgoing ? "Ready to share" : "Available";
+    }
+
+    if (transferState.status === "requesting") {
+        return "Waiting for sender";
+    }
+
+    if (transferState.status === "uploading") {
+        return `Uploading ${progress}%`;
+    }
+
+    if (transferState.status === "downloading") {
+        return `Downloading ${progress}%`;
+    }
+
+    if (transferState.status === "complete") {
+        return "Complete";
+    }
+
+    return transferState.error || "Transfer failed";
+}
+
+function MessageAttachmentList({
+    attachments,
+    transferStates,
+    isOutgoing,
+    onDownloadAttachment
+}) {
+    if (!Array.isArray(attachments) || attachments.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="message-attachment-list">
+            {attachments.map((attachment) => {
+                const transferState = transferStates?.[String(attachment.transferId)] || null;
+                const progress = Math.max(0, Math.min(100, Math.round(Number(transferState?.progress ?? 0))));
+                const canDownload = !isOutgoing && (!transferState || ["idle", "error", "complete"].includes(transferState.status));
+                const statusLabel = getAttachmentStatusLabel(transferState, progress, isOutgoing);
+                const statusTone = transferState?.status === "error"
+                    ? "is-error"
+                    : transferState?.status === "complete"
+                        ? "is-complete"
+                        : transferState?.status && transferState.status !== "idle"
+                            ? "is-active"
+                            : "";
+
+                return (
+                    <div key={attachment.transferId} className="message-attachment-card">
+                        <div className="message-attachment-header">
+                            <div className="message-attachment-badge" aria-hidden="true">FILE</div>
+                            <div className="message-attachment-meta">
+                                <strong title={attachment.fileName}>{attachment.fileName}</strong>
+                                <div className="message-attachment-details">
+                                    <span>{formatFileSize(attachment.fileSize)}</span>
+                                    {attachment.mimeType ? (
+                                        <small>{attachment.mimeType}</small>
+                                    ) : null}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="message-attachment-footer">
+                            <span className={`message-attachment-status ${statusTone}`.trim()}>{statusLabel}</span>
+                            {canDownload ? (
+                                <button type="button" className="message-attachment-button" onClick={() => onDownloadAttachment?.(attachment)}>
+                                    Download
+                                </button>
+                            ) : null}
+                        </div>
+                        {transferState && transferState.status !== "idle" && transferState.status !== "error" ? (
+                            <div className="message-attachment-progress">
+                                <div className="message-attachment-progress-bar">
+                                    <span style={{ width: `${progress}%` }} />
+                                </div>
+                                <small>{statusLabel}</small>
+                            </div>
+                        ) : null}
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+function PendingAttachmentList({ attachments, onRemove }) {
+    if (!Array.isArray(attachments) || attachments.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="composer-attachment-list">
+            {attachments.map((attachment) => (
+                <div key={attachment.transferId} className="composer-attachment-chip">
+                    <span title={attachment.fileName}>{attachment.fileName}</span>
+                    <small>{formatFileSize(attachment.fileSize)}</small>
+                    <button type="button" onClick={() => onRemove?.(attachment.transferId)} aria-label={`Remove ${attachment.fileName}`}>
+                        x
+                    </button>
+                </div>
+            ))}
+        </div>
+    );
+}
+
 function useFriendMessageAvatarUrls({ userIds, profileMediaHostUrl, enabled }) {
     const [avatarUrls, setAvatarUrls] = useState({});
     const userIdKey = useMemo(
@@ -221,7 +383,14 @@ function MessageList({
     messageAlignment = "split",
     onReply = null,
     onEdit = null,
-    onDelete = null
+    onDelete = null,
+    onToggleReaction = null,
+    onDownloadAttachment = null,
+    transferStates = {},
+    selectedMessageId = null,
+    onSelectMessage = null,
+    reactionPickerRequest = null,
+    markdownLinkContext = null
 }) {
     const messageMap = useMemo(
         () => Object.fromEntries(messages.map((message) => [String(message.messageId), message])),
@@ -249,7 +418,8 @@ function MessageList({
                     });
                     const avatarUrl = identityStyle === "profileMedia" ? avatarUrls[senderUserId] : null;
                     const compactLabel = groupInitialsByUserId[senderUserId] || getInitials(displayName);
-                    const messageBody = getReplyPreviewBody(message.body);
+                    const messageBody = getMessageBody(message.body);
+                    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
                     const repliedMessage = message.replyTo?.messageId
                         ? messageMap[String(message.replyTo.messageId)]
                         : null;
@@ -267,7 +437,8 @@ function MessageList({
                     return (
                         <div
                             key={message.messageId}
-                            className={`friend-message-row ${identityStyle === "minimal" ? "is-minimal" : ""} ${isOutgoing ? "outgoing-friend-row" : "incoming-friend-row"}`}
+                            className={`friend-message-row ${identityStyle === "minimal" ? "is-minimal" : ""} ${isOutgoing ? "outgoing-friend-row" : "incoming-friend-row"} ${String(selectedMessageId || "") === String(message.messageId) ? "is-selected" : ""}`}
+                            onClick={() => onSelectMessage?.({ ...message, author: displayName })}
                         >
                             <div className="friend-message-avatar">
                                 {avatarUrl ? (
@@ -276,36 +447,83 @@ function MessageList({
                                     compactLabel
                                 )}
                             </div>
-                            <div className={`friend-message-bubble ${isOutgoing ? "outgoing-friend-message" : "incoming-friend-message"}`}>
-                                <div className="friend-message-meta">
-                                    <strong>{displayName}</strong>
-                                    <time>{new Date(message.createdAt).toLocaleString()}</time>
-                                    {message.editedAt ? <small>edited</small> : null}
+                            <div className="friend-message-stack">
+                                <div className={`friend-message-bubble ${isOutgoing ? "outgoing-friend-message" : "incoming-friend-message"}`}>
+                                    <div className="friend-message-meta">
+                                        <strong>{displayName}</strong>
+                                        <time>{new Date(message.createdAt).toLocaleString()}</time>
+                                        {message.editedAt ? <small>edited</small> : null}
+                                    </div>
+                                    {message.replyTo ? (
+                                        <div className="friend-message-reply-preview">
+                                            <strong>{replyAuthor}</strong>
+                                            <MarkdownContent
+                                                as="span"
+                                                className="markdown-inline"
+                                                inline
+                                                value={getReplyPreviewBody(message.replyTo.body || repliedMessage?.body)}
+                                                linkContext={markdownLinkContext}
+                                            />
+                                        </div>
+                                    ) : null}
+                                    {messageBody || message.isDeleted ? (
+                                        <MarkdownContent
+                                            as="div"
+                                            className={`${message.isDeleted ? "friend-message-deleted" : ""} markdown-body`.trim()}
+                                            value={messageBody}
+                                            linkContext={markdownLinkContext}
+                                        />
+                                    ) : null}
+                                    <MessageAttachmentList
+                                        attachments={attachments}
+                                        transferStates={transferStates}
+                                        isOutgoing={isOutgoing}
+                                        onDownloadAttachment={(attachment) => onDownloadAttachment?.(message, attachment)}
+                                    />
+                                    {!message.isDeleted ? (
+                                        <MessageReactions
+                                            reactions={message.reactions}
+                                            currentUserId={currentUser?.id}
+                                            onToggleReaction={(emoji) => onToggleReaction?.(message, emoji)}
+                                            showAddButton={false}
+                                            className="message-reactions-inline"
+                                        />
+                                    ) : null}
                                 </div>
-                                {message.replyTo ? (
-                                    <div className="friend-message-reply-preview">
-                                        <strong>{replyAuthor}</strong>
-                                        <span>{getReplyPreviewBody(message.replyTo.body || repliedMessage?.body)}</span>
+                                {!message.isDeleted ? (
+                                    <div className={`friend-message-footer ${isOutgoing ? "outgoing-friend-message" : "incoming-friend-message"}`}>
+                                        <div className="friend-message-actions">
+                                            {onReply ? (
+                                                <button type="button" onClick={() => onReply({ ...message, author: displayName })}>
+                                                    Reply
+                                                </button>
+                                            ) : null}
+                                            {isOutgoing && onEdit ? (
+                                                <button type="button" onClick={() => onEdit({ ...message, author: displayName })}>
+                                                    Edit
+                                                </button>
+                                            ) : null}
+                                            {isOutgoing && onDelete ? (
+                                                <button type="button" onClick={() => onDelete(message)}>
+                                                    Delete
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                        <MessageReactions
+                                            reactions={message.reactions}
+                                            currentUserId={currentUser?.id}
+                                            onToggleReaction={(emoji) => onToggleReaction?.(message, emoji)}
+                                            showEntries={false}
+                                            className="message-reactions-controls"
+                                            openPickerSignal={
+                                                reactionPickerRequest?.messageId != null
+                                                && String(reactionPickerRequest.messageId) === String(message.messageId)
+                                                    ? reactionPickerRequest.token
+                                                    : 0
+                                            }
+                                        />
                                     </div>
                                 ) : null}
-                                <span className={message.isDeleted ? "friend-message-deleted" : ""}>{messageBody}</span>
-                                <div className="friend-message-actions">
-                                    {!message.isDeleted && onReply ? (
-                                        <button type="button" onClick={() => onReply({ ...message, author: displayName })}>
-                                            Reply
-                                        </button>
-                                    ) : null}
-                                    {!message.isDeleted && isOutgoing && onEdit ? (
-                                        <button type="button" onClick={() => onEdit({ ...message, author: displayName })}>
-                                            Edit
-                                        </button>
-                                    ) : null}
-                                    {!message.isDeleted && isOutgoing && onDelete ? (
-                                        <button type="button" onClick={() => onDelete(message)}>
-                                            Delete
-                                        </button>
-                                    ) : null}
-                                </div>
                             </div>
                         </div>
                     );
@@ -407,8 +625,20 @@ function GroupConversationView({
     onGroupReply,
     onGroupEdit,
     onGroupDelete,
+    onGroupToggleReaction,
+    onGroupPickAttachment,
+    onGroupRemoveAttachment,
+    onGroupDownloadAttachment,
+    groupAttachments,
+    transferStates,
     onCancelGroupAction
 }) {
+    const composerRef = useRef(null);
+    const [selectedMessageId, setSelectedMessageId] = useState(null);
+    const [reactionPickerRequest, setReactionPickerRequest] = useState(null);
+    const [fileShortcutSignal, setFileShortcutSignal] = useState(0);
+    const [cursorPosition, setCursorPosition] = useState(0);
+    const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
     const participantsById = Object.fromEntries(
         (selectedGroupConversation?.participants || []).map((participant) => [
             String(participant.userId),
@@ -433,6 +663,74 @@ function GroupConversationView({
         profileMediaHostUrl,
         enabled: identityStyle === "profileMedia" && clientSettings?.autoLoadProfileAvatars !== false
     });
+    const markdownLinkContext = useMemo(
+        () => buildConversationLinkContext({
+            currentUser,
+            participantsById
+        }),
+        [currentUser, participantsById]
+    );
+    const entitySuggestions = useMemo(
+        () => getComposerEntitySuggestions(groupComposer, cursorPosition, markdownLinkContext),
+        [cursorPosition, groupComposer, markdownLinkContext]
+    );
+
+    useEffect(() => {
+        setActiveSuggestionIndex(0);
+    }, [entitySuggestions?.token, entitySuggestions?.items?.length]);
+
+    useEffect(() => {
+        function handleShortcut(event) {
+            const { action, scope } = event.detail || {};
+
+            if (scope && scope !== "group") {
+                return;
+            }
+
+            if (action === "focusComposer") {
+                composerRef.current?.focus();
+                return;
+            }
+
+            if (action === "attachFile") {
+                setFileShortcutSignal(Date.now());
+                return;
+            }
+
+            if (action === "openReactionPicker") {
+                const targetMessage = groupMessages.find((message) => String(message.messageId) === String(selectedMessageId))
+                    || [...groupMessages].reverse().find((message) => !message.isDeleted);
+
+                if (targetMessage) {
+                    setSelectedMessageId(targetMessage.messageId);
+                    setReactionPickerRequest({
+                        messageId: targetMessage.messageId,
+                        token: Date.now()
+                    });
+                }
+                return;
+            }
+
+            if (action === "editLastMessage" && !groupComposer.trim()) {
+                const lastOwnMessage = [...groupMessages].reverse().find((message) => (
+                    !message.isDeleted
+                    && (
+                        message.senderUserId != null
+                            ? String(message.senderUserId) === String(currentUser?.id)
+                            : message.direction === "outgoing"
+                    )
+                ));
+
+                if (lastOwnMessage && onGroupEdit) {
+                    onGroupEdit(lastOwnMessage);
+                    setSelectedMessageId(lastOwnMessage.messageId);
+                }
+            }
+        }
+
+        window.addEventListener("chatapp-shortcut", handleShortcut);
+        return () => window.removeEventListener("chatapp-shortcut", handleShortcut);
+    }, [currentUser?.id, groupComposer, groupMessages, onGroupEdit, selectedMessageId]);
 
     if (!selectedGroupConversation) {
         return (
@@ -477,6 +775,13 @@ function GroupConversationView({
                 onReply={onGroupReply}
                 onEdit={onGroupEdit}
                 onDelete={onGroupDelete}
+                onToggleReaction={onGroupToggleReaction}
+                onDownloadAttachment={onGroupDownloadAttachment}
+                transferStates={transferStates}
+                selectedMessageId={selectedMessageId}
+                onSelectMessage={(message) => setSelectedMessageId(message.messageId)}
+                reactionPickerRequest={reactionPickerRequest}
+                markdownLinkContext={markdownLinkContext}
             />
 
             <MessageActionBanner
@@ -486,15 +791,120 @@ function GroupConversationView({
             />
 
             <form className="friend-composer" onSubmit={onSendGroupMessage}>
-                <textarea
-                    value={groupComposer}
-                    onChange={(event) => onGroupComposerChange(event.target.value)}
-                    placeholder={groupEditingMessage ? "Update message..." : groupReplyTo ? "Write reply..." : `Message ${selectedGroupConversation.title}`}
-                    rows={3}
-                />
-                <button type="submit" disabled={submitting || !groupComposer.trim()}>
-                    {groupEditingMessage ? "Save edit" : "Send group message"}
-                </button>
+                <MarkdownPreview value={groupComposer} label="Message preview" linkContext={markdownLinkContext} />
+                <PendingAttachmentList attachments={groupAttachments} onRemove={onGroupRemoveAttachment} />
+                <div className="friend-compose-row">
+                    <ComposerTools
+                        value={groupComposer}
+                        onChange={onGroupComposerChange}
+                        inputRef={composerRef}
+                        disabled={submitting}
+                        tools={groupEditingMessage ? [] : ["file"]}
+                        iconOnly
+                        className="composer-tools-left"
+                        onPickFile={onGroupPickAttachment}
+                        shortcutScope="group"
+                        openFileSignal={fileShortcutSignal}
+                    />
+                    <div className="friend-textarea-shell">
+                        <ComposerEntitySuggestions
+                            suggestions={entitySuggestions}
+                            activeIndex={activeSuggestionIndex}
+                            onSelect={(item) => {
+                                const next = applyComposerEntitySuggestion({
+                                    value: groupComposer,
+                                    selectionStart: composerRef.current?.selectionStart ?? cursorPosition,
+                                    selectionEnd: composerRef.current?.selectionEnd ?? cursorPosition,
+                                    suggestion: item,
+                                    tokenRange: entitySuggestions
+                                });
+                                onGroupComposerChange(next.value);
+                                window.requestAnimationFrame(() => {
+                                    composerRef.current?.focus();
+                                    composerRef.current?.setSelectionRange(next.cursorPosition, next.cursorPosition);
+                                    setCursorPosition(next.cursorPosition);
+                                });
+                            }}
+                        />
+                        <textarea
+                            ref={composerRef}
+                            value={groupComposer}
+                            onChange={(event) => {
+                                onGroupComposerChange(event.target.value);
+                                setCursorPosition(event.target.selectionStart ?? event.target.value.length);
+                            }}
+                            onClick={(event) => setCursorPosition(event.currentTarget.selectionStart ?? 0)}
+                            onKeyUp={(event) => setCursorPosition(event.currentTarget.selectionStart ?? 0)}
+                            onKeyDown={(event) => {
+                                if (entitySuggestions?.items?.length) {
+                                    if (event.key === "ArrowDown") {
+                                        event.preventDefault();
+                                        setActiveSuggestionIndex((prev) => (prev + 1) % entitySuggestions.items.length);
+                                        return;
+                                    }
+
+                                    if (event.key === "ArrowUp") {
+                                        event.preventDefault();
+                                        setActiveSuggestionIndex((prev) => (prev - 1 + entitySuggestions.items.length) % entitySuggestions.items.length);
+                                        return;
+                                    }
+
+                                    if (event.key === "Tab" || event.key === "Enter") {
+                                        event.preventDefault();
+                                        const item = entitySuggestions.items[activeSuggestionIndex] || entitySuggestions.items[0];
+                                        if (item) {
+                                            const next = applyComposerEntitySuggestion({
+                                                value: groupComposer,
+                                                selectionStart: event.currentTarget.selectionStart ?? cursorPosition,
+                                                selectionEnd: event.currentTarget.selectionEnd ?? cursorPosition,
+                                                suggestion: item,
+                                                tokenRange: entitySuggestions
+                                            });
+                                            onGroupComposerChange(next.value);
+                                            window.requestAnimationFrame(() => {
+                                                composerRef.current?.focus();
+                                                composerRef.current?.setSelectionRange(next.cursorPosition, next.cursorPosition);
+                                                setCursorPosition(next.cursorPosition);
+                                            });
+                                        }
+                                        return;
+                                    }
+                                }
+
+                                if (event.key === "ArrowUp" && !groupComposer.trim()) {
+                                    event.preventDefault();
+                                    window.dispatchEvent(new CustomEvent("chatapp-shortcut", {
+                                        detail: {
+                                            action: "editLastMessage",
+                                            scope: "group"
+                                        }
+                                    }));
+                                    return;
+                                }
+
+                                if (event.ctrlKey && event.key === "Enter" && groupComposer.trim()) {
+                                    event.preventDefault();
+                                    onSendGroupMessage?.(event);
+                                }
+                            }}
+                            placeholder={groupEditingMessage ? "Update message..." : groupReplyTo ? "Write reply..." : `Message ${selectedGroupConversation.title}`}
+                            rows={3}
+                        />
+                        <ComposerTools
+                            value={groupComposer}
+                            onChange={onGroupComposerChange}
+                            inputRef={composerRef}
+                            disabled={submitting}
+                            tools={["emoji"]}
+                            iconOnly
+                            className="composer-tools-inline"
+                            shortcutScope="group"
+                        />
+                    </div>
+                    <button type="submit" className="friend-send-button" disabled={submitting || !groupComposer.trim()}>
+                        {groupEditingMessage ? "Save" : "Send"}
+                    </button>
+                </div>
             </form>
         </>
     );
@@ -514,8 +924,10 @@ function DirectConversationView({
     incomingHistoryRequest,
     outgoingHistoryRequest,
     pendingRequestedByFriend,
+    pendingDisappearingRequestedByFriend,
     historyAccessRequest,
     pendingRelayLabel,
+    pendingDisappearingLabel,
     submitting,
     showEncryptionStage,
     lockPhase,
@@ -532,14 +944,27 @@ function DirectConversationView({
     onHistoryDecline,
     onHistoryApprove,
     onRetentionAccept,
+    onDisappearingAccept,
     onEncryptChat,
     onComposerChange,
     onSendMessage,
     onDirectReply,
     onDirectEdit,
     onDirectDelete,
+    onDirectToggleReaction,
+    onDirectPickAttachment,
+    onDirectRemoveAttachment,
+    onDirectDownloadAttachment,
+    directAttachments,
+    transferStates,
     onCancelDirectAction
 }) {
+    const composerRef = useRef(null);
+    const [selectedMessageId, setSelectedMessageId] = useState(null);
+    const [reactionPickerRequest, setReactionPickerRequest] = useState(null);
+    const [fileShortcutSignal, setFileShortcutSignal] = useState(0);
+    const [cursorPosition, setCursorPosition] = useState(0);
+    const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
     const avatarUserIds = useMemo(
         () => [
             currentUser?.id,
@@ -555,6 +980,74 @@ function DirectConversationView({
         profileMediaHostUrl,
         enabled: identityStyle === "profileMedia" && clientSettings?.autoLoadProfileAvatars !== false
     });
+    const markdownLinkContext = useMemo(
+        () => buildConversationLinkContext({
+            currentUser,
+            directFriend: selectedFriend
+        }),
+        [currentUser, selectedFriend]
+    );
+    const entitySuggestions = useMemo(
+        () => getComposerEntitySuggestions(composer, cursorPosition, markdownLinkContext),
+        [composer, cursorPosition, markdownLinkContext]
+    );
+
+    useEffect(() => {
+        setActiveSuggestionIndex(0);
+    }, [entitySuggestions?.token, entitySuggestions?.items?.length]);
+
+    useEffect(() => {
+        function handleShortcut(event) {
+            const { action, scope } = event.detail || {};
+
+            if (scope && scope !== "direct") {
+                return;
+            }
+
+            if (action === "focusComposer") {
+                composerRef.current?.focus();
+                return;
+            }
+
+            if (action === "attachFile") {
+                setFileShortcutSignal(Date.now());
+                return;
+            }
+
+            if (action === "openReactionPicker") {
+                const targetMessage = messages.find((message) => String(message.messageId) === String(selectedMessageId))
+                    || [...messages].reverse().find((message) => !message.isDeleted);
+
+                if (targetMessage) {
+                    setSelectedMessageId(targetMessage.messageId);
+                    setReactionPickerRequest({
+                        messageId: targetMessage.messageId,
+                        token: Date.now()
+                    });
+                }
+                return;
+            }
+
+            if (action === "editLastMessage" && !composer.trim()) {
+                const lastOwnMessage = [...messages].reverse().find((message) => (
+                    !message.isDeleted
+                    && (
+                        message.senderUserId != null
+                            ? String(message.senderUserId) === String(currentUser?.id)
+                            : message.direction === "outgoing"
+                    )
+                ));
+
+                if (lastOwnMessage && onDirectEdit) {
+                    onDirectEdit(lastOwnMessage);
+                    setSelectedMessageId(lastOwnMessage.messageId);
+                }
+            }
+        }
+
+        window.addEventListener("chatapp-shortcut", handleShortcut);
+        return () => window.removeEventListener("chatapp-shortcut", handleShortcut);
+    }, [composer, currentUser?.id, messages, onDirectEdit, selectedMessageId]);
 
     if (!selectedFriend) {
         return (
@@ -704,6 +1197,32 @@ function DirectConversationView({
                 </InlineNotice>
             ) : null}
 
+            {pendingDisappearingRequestedByFriend ? (
+                <InlineNotice
+                    actions={
+                        <>
+                            <button
+                                type="button"
+                                className="friends-secondary-button"
+                                onClick={onOpenConversationSettings}
+                            >
+                                Open settings
+                            </button>
+                            <button
+                                type="button"
+                                className="friends-accept-button"
+                                onClick={onDisappearingAccept}
+                                disabled={submitting}
+                            >
+                                Accept
+                            </button>
+                        </>
+                    }
+                >
+                    {selectedFriend.friendUsername} wants to turn on disappearing messages: {pendingDisappearingLabel}.
+                </InlineNotice>
+            ) : null}
+
             {showEncryptionStage ? (
                 <div className="friends-message-list" ref={messageListRef}>
                     <DirectEncryptionStage
@@ -727,6 +1246,13 @@ function DirectConversationView({
                     onReply={onDirectReply}
                     onEdit={onDirectEdit}
                     onDelete={onDirectDelete}
+                    onToggleReaction={onDirectToggleReaction}
+                    onDownloadAttachment={onDirectDownloadAttachment}
+                    transferStates={transferStates}
+                    selectedMessageId={selectedMessageId}
+                    onSelectMessage={(message) => setSelectedMessageId(message.messageId)}
+                    reactionPickerRequest={reactionPickerRequest}
+                    markdownLinkContext={markdownLinkContext}
                 />
             )}
 
@@ -739,16 +1265,121 @@ function DirectConversationView({
                     />
 
                     <form className="friend-composer" onSubmit={onSendMessage}>
-                        <textarea
-                            value={composer}
-                            onChange={(event) => onComposerChange(event.target.value)}
-                            placeholder={directEditingMessage ? "Update message..." : directReplyTo ? "Write reply..." : `Message ${selectedFriend.friendUsername}`}
-                            rows={3}
-                            disabled={submitting}
-                        />
-                        <button type="submit" disabled={!canComposeDirectMessage || !composer.trim()}>
-                            {directEditingMessage ? "Save edit" : "Send DM"}
-                        </button>
+                        <MarkdownPreview value={composer} label="Message preview" linkContext={markdownLinkContext} />
+                        <PendingAttachmentList attachments={directAttachments} onRemove={onDirectRemoveAttachment} />
+                        <div className="friend-compose-row">
+                            <ComposerTools
+                                value={composer}
+                                onChange={onComposerChange}
+                                inputRef={composerRef}
+                                disabled={submitting}
+                                tools={directEditingMessage ? [] : ["file"]}
+                                iconOnly
+                                className="composer-tools-left"
+                                onPickFile={onDirectPickAttachment}
+                                shortcutScope="direct"
+                                openFileSignal={fileShortcutSignal}
+                            />
+                            <div className="friend-textarea-shell">
+                                <ComposerEntitySuggestions
+                                    suggestions={entitySuggestions}
+                                    activeIndex={activeSuggestionIndex}
+                                    onSelect={(item) => {
+                                        const next = applyComposerEntitySuggestion({
+                                            value: composer,
+                                            selectionStart: composerRef.current?.selectionStart ?? cursorPosition,
+                                            selectionEnd: composerRef.current?.selectionEnd ?? cursorPosition,
+                                            suggestion: item,
+                                            tokenRange: entitySuggestions
+                                        });
+                                        onComposerChange(next.value);
+                                        window.requestAnimationFrame(() => {
+                                            composerRef.current?.focus();
+                                            composerRef.current?.setSelectionRange(next.cursorPosition, next.cursorPosition);
+                                            setCursorPosition(next.cursorPosition);
+                                        });
+                                    }}
+                                />
+                                <textarea
+                                    ref={composerRef}
+                                    value={composer}
+                                    onChange={(event) => {
+                                        onComposerChange(event.target.value);
+                                        setCursorPosition(event.target.selectionStart ?? event.target.value.length);
+                                    }}
+                                    onClick={(event) => setCursorPosition(event.currentTarget.selectionStart ?? 0)}
+                                    onKeyUp={(event) => setCursorPosition(event.currentTarget.selectionStart ?? 0)}
+                                    onKeyDown={(event) => {
+                                        if (entitySuggestions?.items?.length) {
+                                            if (event.key === "ArrowDown") {
+                                                event.preventDefault();
+                                                setActiveSuggestionIndex((prev) => (prev + 1) % entitySuggestions.items.length);
+                                                return;
+                                            }
+
+                                            if (event.key === "ArrowUp") {
+                                                event.preventDefault();
+                                                setActiveSuggestionIndex((prev) => (prev - 1 + entitySuggestions.items.length) % entitySuggestions.items.length);
+                                                return;
+                                            }
+
+                                            if (event.key === "Tab" || event.key === "Enter") {
+                                                event.preventDefault();
+                                                const item = entitySuggestions.items[activeSuggestionIndex] || entitySuggestions.items[0];
+                                                if (item) {
+                                                    const next = applyComposerEntitySuggestion({
+                                                        value: composer,
+                                                        selectionStart: event.currentTarget.selectionStart ?? cursorPosition,
+                                                        selectionEnd: event.currentTarget.selectionEnd ?? cursorPosition,
+                                                        suggestion: item,
+                                                        tokenRange: entitySuggestions
+                                                    });
+                                                    onComposerChange(next.value);
+                                                    window.requestAnimationFrame(() => {
+                                                        composerRef.current?.focus();
+                                                        composerRef.current?.setSelectionRange(next.cursorPosition, next.cursorPosition);
+                                                        setCursorPosition(next.cursorPosition);
+                                                    });
+                                                }
+                                                return;
+                                            }
+                                        }
+
+                                        if (event.key === "ArrowUp" && !composer.trim()) {
+                                            event.preventDefault();
+                                            window.dispatchEvent(new CustomEvent("chatapp-shortcut", {
+                                                detail: {
+                                                    action: "editLastMessage",
+                                                    scope: "direct"
+                                                }
+                                            }));
+                                            return;
+                                        }
+
+                                        if (event.ctrlKey && event.key === "Enter" && composer.trim()) {
+                                            event.preventDefault();
+                                            onSendMessage?.(event);
+                                        }
+                                    }}
+                                    placeholder={directEditingMessage ? "Update message..." : directReplyTo ? "Write reply..." : `Message ${selectedFriend.friendUsername}`}
+                                    rows={3}
+                                    disabled={submitting}
+                                />
+                                <ComposerTools
+                                    value={composer}
+                                    onChange={onComposerChange}
+                                    inputRef={composerRef}
+                                    disabled={submitting}
+                                    tools={["emoji"]}
+                                    iconOnly
+                                    className="composer-tools-inline"
+                                    shortcutScope="direct"
+                                />
+                            </div>
+                            <button type="submit" className="friend-send-button" disabled={!canComposeDirectMessage || !composer.trim()}>
+                                {directEditingMessage ? "Save" : "Send"}
+                            </button>
+                        </div>
                     </form>
                 </>
             ) : null}

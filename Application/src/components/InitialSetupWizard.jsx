@@ -3,6 +3,9 @@ import {
     importClientSettingsFromFile
 } from "../features/clientSettings";
 import { formatAppError } from "../lib/debug";
+import PolicyDocumentModal from "./PolicyDocumentModal";
+import privacyPolicyMarkdown from "../assets/PP.md?raw";
+import termsOfServiceMarkdown from "../assets/TOS.md?raw";
 
 const SETUP_STEPS = [
     "Welcome",
@@ -21,6 +24,7 @@ export default function InitialSetupWizard({
     const [acceptedTos, setAcceptedTos] = useState(false);
     const [importStatus, setImportStatus] = useState("");
     const [importError, setImportError] = useState("");
+    const [openPolicy, setOpenPolicy] = useState("");
     const inputRef = useRef(null);
 
     async function handleImportFile(event) {
@@ -123,24 +127,23 @@ export default function InitialSetupWizard({
                     <div className="onboarding-panel">
                         <h1>Privacy And Terms</h1>
                         <p>
-                            This setup is stored locally on this device. You'll still want real policy text later,
-                            but this makes first-run consent explicit today.
+                            Review the current privacy policy and terms before finishing setup.
                         </p>
 
                         <div className="onboarding-policy-card">
-                            <strong>Privacy summary</strong>
-                            <p>
-                                Client settings and onboarding choices are stored locally on this device.
-                                Account, friends, and server connections use your configured backend services.
-                            </p>
+                            <strong>Privacy Policy</strong>
+                            <p>Open the full privacy policy in a dedicated reading view.</p>
+                            <button type="button" onClick={() => setOpenPolicy("privacy")}>
+                                Open Privacy Policy
+                            </button>
                         </div>
 
                         <div className="onboarding-policy-card">
-                            <strong>Terms summary</strong>
-                            <p>
-                                Use of the app means you're responsible for the servers and accounts you connect to,
-                                and you should only use services you trust.
-                            </p>
+                            <strong>Terms Of Service</strong>
+                            <p>Open the full terms document in a dedicated reading view.</p>
+                            <button type="button" onClick={() => setOpenPolicy("terms")}>
+                                Open Terms Of Service
+                            </button>
                         </div>
 
                         <label className="onboarding-check">
@@ -149,7 +152,7 @@ export default function InitialSetupWizard({
                                 checked={acceptedPrivacy}
                                 onChange={(event) => setAcceptedPrivacy(event.target.checked)}
                             />
-                            <span>I accept the privacy policy summary for this setup.</span>
+                            <span>I accept the privacy policy for this setup.</span>
                         </label>
 
                         <label className="onboarding-check">
@@ -158,7 +161,7 @@ export default function InitialSetupWizard({
                                 checked={acceptedTos}
                                 onChange={(event) => setAcceptedTos(event.target.checked)}
                             />
-                            <span>I accept the terms of service summary for this setup.</span>
+                            <span>I accept the terms of service for this setup.</span>
                         </label>
                     </div>
                 ) : null}
@@ -207,6 +210,22 @@ export default function InitialSetupWizard({
                         </button>
                     )}
                 </div>
+
+                {openPolicy === "privacy" ? (
+                    <PolicyDocumentModal
+                        title="Privacy Policy"
+                        markdown={privacyPolicyMarkdown}
+                        onClose={() => setOpenPolicy("")}
+                    />
+                ) : null}
+
+                {openPolicy === "terms" ? (
+                    <PolicyDocumentModal
+                        title="Terms Of Service"
+                        markdown={termsOfServiceMarkdown}
+                        onClose={() => setOpenPolicy("")}
+                    />
+                ) : null}
             </div>
         </div>
     );

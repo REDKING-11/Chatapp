@@ -70,6 +70,122 @@ export default function BuilderPropertiesPanel({
                         />
                     </label>
 
+                    <label className="settings-field">
+                        <span>Text Engine</span>
+                        <select
+                            value={selectedNode.props?.layoutEngine || "browser"}
+                            onChange={(e) =>
+                                patchSelectedNode((node) => ({
+                                    ...node,
+                                    props: {
+                                        ...(node.props || {}),
+                                        layoutEngine: e.target.value
+                                    }
+                                }))
+                            }
+                        >
+                            <option value="browser">Browser</option>
+                            <option value="pretext">Pretext.js</option>
+                        </select>
+                    </label>
+
+                    <label className="settings-field">
+                        <span>Markdown</span>
+                        <select
+                            value={selectedNode.props?.markdown === false ? "off" : "on"}
+                            onChange={(e) =>
+                                patchSelectedNode((node) => ({
+                                    ...node,
+                                    props: {
+                                        ...(node.props || {}),
+                                        markdown: e.target.value !== "off"
+                                    }
+                                }))
+                            }
+                        >
+                            <option value="on">Enabled</option>
+                            <option value="off">Disabled</option>
+                        </select>
+                    </label>
+
+                    {selectedNode.props?.layoutEngine === "pretext" && (
+                        <>
+                            <label className="settings-field">
+                                <span>Font Shorthand</span>
+                                <input
+                                    type="text"
+                                    value={selectedNode.props?.font || ""}
+                                    onChange={(e) =>
+                                        patchSelectedNode((node) => ({
+                                            ...node,
+                                            props: {
+                                                ...(node.props || {}),
+                                                font: e.target.value
+                                            }
+                                        }))
+                                    }
+                                    placeholder={'400 16px "Segoe UI"'}
+                                />
+                            </label>
+
+                            <label className="settings-field">
+                                <span>Line Height</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={selectedNode.props?.lineHeight || 24}
+                                    onChange={(e) =>
+                                        patchSelectedNode((node) => ({
+                                            ...node,
+                                            props: {
+                                                ...(node.props || {}),
+                                                lineHeight: Number(e.target.value)
+                                            }
+                                        }))
+                                    }
+                                />
+                            </label>
+
+                            <label className="settings-field">
+                                <span>White Space</span>
+                                <select
+                                    value={selectedNode.props?.whiteSpace || "normal"}
+                                    onChange={(e) =>
+                                        patchSelectedNode((node) => ({
+                                            ...node,
+                                            props: {
+                                                ...(node.props || {}),
+                                                whiteSpace: e.target.value
+                                            }
+                                        }))
+                                    }
+                                >
+                                    <option value="normal">Normal</option>
+                                    <option value="pre-wrap">Pre-wrap</option>
+                                </select>
+                            </label>
+
+                            <label className="settings-field">
+                                <span>Word Break</span>
+                                <select
+                                    value={selectedNode.props?.wordBreak || "normal"}
+                                    onChange={(e) =>
+                                        patchSelectedNode((node) => ({
+                                            ...node,
+                                            props: {
+                                                ...(node.props || {}),
+                                                wordBreak: e.target.value
+                                            }
+                                        }))
+                                    }
+                                >
+                                    <option value="normal">Normal</option>
+                                    <option value="keep-all">Keep all</option>
+                                </select>
+                            </label>
+                        </>
+                    )}
+
                     {selectedNode?.type === "heading" && (
                         <label className="settings-field">
                             <span>Heading Level</span>
@@ -142,22 +258,43 @@ export default function BuilderPropertiesPanel({
             )}
 
             {selectedNode?.type === "button" && (
-                <label className="settings-field">
-                    <span>Button Text</span>
-                    <input
-                        type="text"
-                        value={selectedNode.props?.text || ""}
-                        onChange={(e) =>
-                            patchSelectedNode((node) => ({
-                                ...node,
-                                props: {
-                                    ...(node.props || {}),
-                                    text: e.target.value
-                                }
-                            }))
-                        }
-                    />
-                </label>
+                <>
+                    <label className="settings-field">
+                        <span>Button Text</span>
+                        <input
+                            type="text"
+                            value={selectedNode.props?.text || ""}
+                            onChange={(e) =>
+                                patchSelectedNode((node) => ({
+                                    ...node,
+                                    props: {
+                                        ...(node.props || {}),
+                                        text: e.target.value
+                                    }
+                                }))
+                            }
+                        />
+                    </label>
+
+                    <label className="settings-field">
+                        <span>Markdown</span>
+                        <select
+                            value={selectedNode.props?.markdown === false ? "off" : "on"}
+                            onChange={(e) =>
+                                patchSelectedNode((node) => ({
+                                    ...node,
+                                    props: {
+                                        ...(node.props || {}),
+                                        markdown: e.target.value !== "off"
+                                    }
+                                }))
+                            }
+                        >
+                            <option value="on">Enabled</option>
+                            <option value="off">Disabled</option>
+                        </select>
+                    </label>
+                </>
             )}
 
             {(selectedNode?.type === "input" || selectedNode?.type === "textarea") && (

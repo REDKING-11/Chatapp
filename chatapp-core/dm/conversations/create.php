@@ -10,6 +10,7 @@ $participantUserIds = dmRequireArray($data, 'participantUserIds', 'participantUs
 $wrappedKeys = dmRequireArray($data, 'wrappedKeys', 'wrappedKeys is required');
 $initialMessage = is_array($data['initialMessage'] ?? null) ? $data['initialMessage'] : null;
 $relayTtlSeconds = dmNormalizeRelayTtlSeconds($data['relayTtlSeconds'] ?? DM_RELAY_TTL_SECONDS);
+$messageTtlSeconds = dmNormalizeMessageTtlSeconds($data['messageTtlSeconds'] ?? DM_MESSAGE_TTL_SECONDS);
 $kind = dmTrimmedString($data['kind'] ?? null) ?? 'direct';
 $title = dmTrimmedString($data['title'] ?? null);
 
@@ -44,6 +45,12 @@ try {
     $conversationFields = ['created_by_user_id', 'updated_at', 'relay_ttl_seconds'];
     $conversationValues = ['?', 'UTC_TIMESTAMP()', '?'];
     $conversationParams = [(int)$user['id'], $relayTtlSeconds];
+
+    if (dmColumnExists($db, 'dm_conversations', 'message_ttl_seconds')) {
+        $conversationFields[] = 'message_ttl_seconds';
+        $conversationValues[] = '?';
+        $conversationParams[] = $messageTtlSeconds;
+    }
 
     if (dmColumnExists($db, 'dm_conversations', 'kind')) {
         $conversationFields[] = 'kind';

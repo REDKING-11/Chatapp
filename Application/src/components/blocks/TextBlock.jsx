@@ -1,36 +1,51 @@
-function parseStyleString(styleText) {
-    if (!styleText || typeof styleText !== "string") return {};
-
-    return styleText
-        .split(";")
-        .map((rule) => rule.trim())
-        .filter(Boolean)
-        .reduce((acc, rule) => {
-            const colonIndex = rule.indexOf(":");
-            if (colonIndex === -1) return acc;
-
-            const rawKey = rule.slice(0, colonIndex).trim();
-            const rawValue = rule.slice(colonIndex + 1).trim();
-
-            if (!rawKey || !rawValue) return acc;
-
-            const jsKey = rawKey.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
-            acc[jsKey] = rawValue;
-            return acc;
-        }, {});
-}
+import PretextTextRenderer from "./PretextTextRenderer";
+import MarkdownContent from "../MarkdownContent";
+import { parseStyleString } from "../../lib/styleUtils";
 
 export default function TextBlock({ node }) {
     const inlineStyle = parseStyleString(node?.props?.style);
+    const isPretext = node?.props?.layoutEngine === "pretext";
+    const markdownEnabled = node?.props?.markdown !== false;
+    const className = `panel-card builder-node builder-node-text ${node.className || ""}`.trim();
+
+    if (isPretext && !markdownEnabled) {
+        return (
+            <PretextTextRenderer
+                as="div"
+                className={className}
+                text={node.props?.text || "Empty text block"}
+                style={inlineStyle}
+                font={node.props?.font}
+                lineHeight={node.props?.lineHeight}
+                whiteSpace={node.props?.whiteSpace || "normal"}
+                wordBreak={node.props?.wordBreak || "normal"}
+                data-node-id={node.id}
+                data-node-type={node.type}
+            />
+        );
+    }
+
+    if (!markdownEnabled) {
+        return (
+            <div
+                className={className}
+                data-node-id={node.id}
+                data-node-type={node.type}
+                style={inlineStyle}
+            >
+                <p>{node.props?.text || "Empty text block"}</p>
+            </div>
+        );
+    }
 
     return (
-        <div
-            className={`panel-card builder-node builder-node-text ${node.className || ""}`.trim()}
+        <MarkdownContent
+            as="div"
+            className={className}
             data-node-id={node.id}
             data-node-type={node.type}
+            value={node.props?.text || "Empty text block"}
             style={inlineStyle}
-        >
-            <p>{node.props?.text || "Empty text block"}</p>
-        </div>
+        />
     );
 }

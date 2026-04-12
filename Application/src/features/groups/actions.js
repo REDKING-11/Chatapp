@@ -177,7 +177,8 @@ export async function sendGroupConversationMessage({
     currentUser,
     conversationId,
     body,
-    replyTo = null
+    replyTo = null,
+    attachments = []
 }) {
     await sendDirectMessage({
         token: getStoredAuthToken(),
@@ -185,8 +186,9 @@ export async function sendGroupConversationMessage({
         conversationId,
         body,
         messageOptions: {
-            kind: "message",
-            replyTo
+          kind: "message",
+          replyTo,
+          attachments
         }
     });
 
@@ -232,6 +234,30 @@ export async function deleteGroupConversationMessage({
         messageOptions: {
             kind: "delete",
             targetMessageId: messageId
+        }
+    });
+
+    return openGroupConversation({
+        currentUser,
+        conversationId
+    });
+}
+
+export async function toggleGroupConversationReaction({
+    currentUser,
+    conversationId,
+    messageId,
+    emoji
+}) {
+    await sendDirectMessage({
+        token: getStoredAuthToken(),
+        currentUser,
+        conversationId,
+        body: "",
+        messageOptions: {
+            kind: "reaction",
+            targetMessageId: messageId,
+            emoji
         }
     });
 

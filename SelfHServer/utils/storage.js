@@ -25,6 +25,17 @@ function writeMessages(data) {
     writeJsonFile(messagesPath, data);
 }
 
+function ensureChannelMessages(channelId) {
+    const messages = readMessages();
+
+    if (!messages[channelId]) {
+        messages[channelId] = [];
+        writeMessages(messages);
+    }
+
+    return messages[channelId];
+}
+
 function readMessageLogs() {
     return readJsonFile(messageLogsPath, []);
 }
@@ -42,6 +53,7 @@ function addMessageLog(entry) {
 module.exports = {
     readMessages,
     writeMessages,
+    ensureChannelMessages,
     readMessageLogs,
     writeMessageLogs,
     addMessageLog
