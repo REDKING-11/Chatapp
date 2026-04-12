@@ -59,6 +59,28 @@
       "id": "c_settings",
       "name": "customize",
       "type": "customization"
+    },
+    {
+      "id": "c_1776015472461_1ngk5h",
+      "name": "test",
+      "type": "page",
+      "layout": {
+        "type": "column",
+        "children": [
+          {
+            "type": "heading",
+            "props": {
+              "text": "# test"
+            }
+          },
+          {
+            "type": "text",
+            "props": {
+              "text": "New page channel ready for customization."
+            }
+          }
+        ]
+      }
     }
   ]
 }

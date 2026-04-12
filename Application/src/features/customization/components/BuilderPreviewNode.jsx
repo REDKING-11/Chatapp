@@ -61,12 +61,20 @@ export default function BuilderPreviewNode({
                 );
 
             case "text":
-                return <div className="builder-preview-text">{node.props?.text || "Text"}</div>;
+                return (
+                    <div className="builder-preview-text">
+                        {node.props?.text || "Text"}
+                        {node.props?.layoutEngine === "pretext" ? " [Pretext]" : ""}
+                        {node.props?.markdown === false ? "" : " [MD]"}
+                    </div>
+                );
 
             case "heading":
                 return (
                     <div className="builder-preview-heading">
                         H{node.props?.level || 2}: {node.props?.text || "Heading"}
+                        {node.props?.layoutEngine === "pretext" ? " [Pretext]" : ""}
+                        {node.props?.markdown === false ? "" : " [MD]"}
                     </div>
                 );
 
@@ -74,6 +82,7 @@ export default function BuilderPreviewNode({
                 return (
                     <button type="button" className="builder-preview-button">
                         {node.props?.text || "Button"}
+                        {node.props?.markdown === false ? "" : " [MD]"}
                     </button>
                 );
 

@@ -11,10 +11,21 @@ import {
   listConversations,
   listMessages,
   receiveEncryptedMessage,
+  syncConversationMetadata,
   exportConversationPackage,
   deleteConversation,
   createWrappedKeyForConversation
 } from './main/dm/service';
+import {
+  appendIncomingDownloadChunk,
+  beginIncomingDownload,
+  cancelIncomingDownload,
+  chooseAttachmentSavePath,
+  finishIncomingDownload,
+  getOutgoingAttachmentInfo,
+  readOutgoingAttachmentChunk,
+  registerOutgoingAttachment
+} from './main/transfers/service';
 
 const createWindow = () => {
   // Create the browser window.
@@ -46,6 +57,7 @@ const registerSecureDmIpc = () => {
   ipcMain.handle('secure-dm:import-conversation', (_event, payload) => importConversation(payload));
   ipcMain.handle('secure-dm:create-message', (_event, payload) => createEncryptedMessage(payload));
   ipcMain.handle('secure-dm:receive-message', (_event, payload) => receiveEncryptedMessage(payload));
+  ipcMain.handle('secure-dm:sync-conversation-metadata', (_event, payload) => syncConversationMetadata(payload));
   ipcMain.handle('secure-dm:list-conversations', (_event, payload) => listConversations(payload));
   ipcMain.handle('secure-dm:list-messages', (_event, payload) => listMessages(payload));
   ipcMain.handle('secure-dm:export-conversation-package', (_event, payload) => exportConversationPackage(payload));
@@ -98,6 +110,17 @@ const registerServerHealthIpc = () => {
   });
 };
 
+const registerAttachmentTransferIpc = () => {
+  ipcMain.handle('attachment-transfers:register-outgoing', (_event, payload) => registerOutgoingAttachment(payload));
+  ipcMain.handle('attachment-transfers:get-outgoing-info', (_event, payload) => getOutgoingAttachmentInfo(payload));
+  ipcMain.handle('attachment-transfers:read-outgoing-chunk', (_event, payload) => readOutgoingAttachmentChunk(payload));
+  ipcMain.handle('attachment-transfers:choose-save-path', (_event, payload) => chooseAttachmentSavePath(payload));
+  ipcMain.handle('attachment-transfers:begin-incoming-download', (_event, payload) => beginIncomingDownload(payload));
+  ipcMain.handle('attachment-transfers:append-incoming-chunk', (_event, payload) => appendIncomingDownloadChunk(payload));
+  ipcMain.handle('attachment-transfers:finish-incoming-download', (_event, payload) => finishIncomingDownload(payload));
+  ipcMain.handle('attachment-transfers:cancel-incoming-download', (_event, payload) => cancelIncomingDownload(payload));
+};
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
@@ -105,6 +128,7 @@ app.whenReady().then(() => {
   registerSecureDmIpc();
   registerNotificationIpc();
   registerServerHealthIpc();
+  registerAttachmentTransferIpc();
   createWindow();
 
   // On OS X it's common to re-create a window in the app when the

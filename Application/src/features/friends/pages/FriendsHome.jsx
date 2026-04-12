@@ -10,6 +10,7 @@ import FriendsRail from "../components/FriendsRail";
 import { formatAppError, isDebugModeEnabled } from "../../../lib/debug";
 import { loadClientSettings, saveClientSettings } from "../../clientSettings";
 import {
+    acceptFriendDisappearingMessages,
     acceptFriendRequest,
     acceptFriendRelayRetention,
     approveFriendConversationHistory,
@@ -23,11 +24,13 @@ import {
     openFriendConversation,
     removeFriend,
     requestFriendConversationHistory,
+    requestFriendDisappearingMessages,
     requestFriendRelayRetention,
     sendFriendDirectMessage,
-    sendFriendRequest
+    sendFriendRequest,
+    toggleFriendDirectReaction
 } from "../actions";
-import { RELAY_RETENTION_OPTIONS } from "../../dm/actions";
+import { DISAPPEARING_MESSAGE_OPTIONS, RELAY_RETENTION_OPTIONS, sendSecureDmRealtimeEvent } from "../../dm/actions";
 import {
     createGroupConversation,
     fetchPendingGroupInvites,
@@ -36,6 +39,7 @@ import {
     sendGroupConversationMessage,
     editGroupConversationMessage,
     deleteGroupConversationMessage,
+    toggleGroupConversationReaction,
     acceptGroupInvite,
     declineGroupInvite
 } from "../../groups/actions";
@@ -57,6 +61,7 @@ export default function FriendsHome({
     onOpenClientSettings,
     onLogout
 }) {
+    const FILE_TRANSFER_CHUNK_BYTES = 64 * 1024;
     const [friendsState, setFriendsState] = useState({
         friends: [],
         incomingRequests: [],
@@ -84,6 +89,7 @@ export default function FriendsHome({
     const [error, setError] = useState("");
     const [errorDebugDetails, setErrorDebugDetails] = useState("");
     const [selectedRelayTtlSeconds, setSelectedRelayTtlSeconds] = useState(86400);
+    const [selectedDisappearingTtlSeconds, setSelectedDisappearingTtlSeconds] = useState(0);
     const [conversationMeta, setConversationMeta] = useState(null);
     const [hasLocalConversationAccess, setHasLocalConversationAccess] = useState(true);
     const [showConversationSettings, setShowConversationSettings] = useState(false);
@@ -109,6 +115,9 @@ export default function FriendsHome({
     const [hasLoadedConversationSeenTimestamps, setHasLoadedConversationSeenTimestamps] = useState(false);
     const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== "hidden");
     const [previewRefreshNonce, setPreviewRefreshNonce] = useState(0);
+    const [directAttachments, setDirectAttachments] = useState([]);
+    const [groupAttachments, setGroupAttachments] = useState([]);
+    const [attachmentTransferStates, setAttachmentTransferStates] = useState({});
     const messageListRef = useRef(null);
     const secureStatusRef = useRef(null);
     const lockCloseTimeoutRef = useRef(null);
@@ -118,6 +127,7 @@ export default function FriendsHome({
     const selectedGroupConversationIdRef = useRef(null);
     const hasInitializedSeenBaselineRef = useRef(false);
     const sessionStartedAtRef = useRef(Date.now());
+    const incomingDownloadTargetsRef = useRef({});
 
     const legacyFriendTagsStorageKey = `friendTags:${currentUser.id}`;
     const collapsedFriendFoldersStorageKey = `collapsedFriendFolders:${currentUser.id}`;
@@ -143,6 +153,25 @@ export default function FriendsHome({
     function showStaticError(message, debugDetails = "") {
         setError(message);
         setErrorDebugDetails(isDebugModeEnabled() ? debugDetails : "");
+    }
+
+    function updateAttachmentTransferState(transferId, patch) {
+        if (!transferId) {
+            return;
+        }
+
+        setAttachmentTransferStates((prev) => ({
+            ...prev,
+            [String(transferId)]: {
+                ...(prev[String(transferId)] || { status: "idle", progress: 0 }),
+                ...(patch || {})
+            }
+        }));
+    }
+
+    function clearComposerAttachments() {
+        setDirectAttachments([]);
+        setGroupAttachments([]);
     }
 
     async function maybeShowDesktopNotification({ conversationId, message }) {
@@ -287,6 +316,10 @@ export default function FriendsHome({
     useEffect(() => {
         loadGroupInvites();
     }, []);
+
+    useEffect(() => {
+        clearComposerAttachments();
+    }, [activeView, selectedFriendId, selectedGroupConversationId]);
 
     useEffect(() => {
         function handleClientSettingsChanged(event) {
@@ -497,6 +530,55 @@ export default function FriendsHome({
             (friend) => String(friend.friendUserId) === String(selectedFriendId)
         ) || null
     ), [friendsState.friends, selectedFriendId]);
+    useEffect(() => {
+        function handleShortcut(event) {
+            const action = event.detail?.action;
+
+            if (action === "openConversationSettings") {
+                if (activeView === "friend" && selectedFriend) {
+                    setShowConversationSettings(true);
+                }
+                return;
+            }
+
+            if (action === "closeOverlay") {
+                if (friendContextMenu) {
+                    setFriendContextMenu(null);
+                    return;
+                }
+
+                if (showConversationSettings) {
+                    setShowConversationSettings(false);
+                    return;
+                }
+
+                if (showAddFriendModal) {
+                    setShowAddFriendModal(false);
+                    return;
+                }
+
+                if (showCreateGroupModal) {
+                    setShowCreateGroupModal(false);
+                    return;
+                }
+
+                if (friendRemovalConfirm) {
+                    setFriendRemovalConfirm(null);
+                }
+            }
+        }
+
+        window.addEventListener("chatapp-shortcut", handleShortcut);
+        return () => window.removeEventListener("chatapp-shortcut", handleShortcut);
+    }, [
+        activeView,
+        friendContextMenu,
+        friendRemovalConfirm,
+        selectedFriend,
+        showAddFriendModal,
+        showConversationSettings,
+        showCreateGroupModal
+    ]);
     const selectedGroupConversation = useMemo(() => (
         groupConversations.find(
             (conversation) => String(conversation.id) === String(selectedGroupConversationId)
@@ -521,6 +603,31 @@ export default function FriendsHome({
     }, [selectedFriend, selectedFriendForgottenConversationId]);
 
     useEffect(() => {
+        const switcherItems = [
+            ...friendsState.friends.map((friend) => ({
+                id: `friend:${friend.friendUserId}`,
+                group: "friend",
+                scope: "friend",
+                targetId: friend.friendUserId,
+                label: friend.friendUsername,
+                subtitle: friend.friendDisplayName || "Direct message"
+            })),
+            ...groupConversations.map((conversation) => ({
+                id: `group:${conversation.id}`,
+                group: "group",
+                scope: "group",
+                targetId: conversation.id,
+                label: conversation.title || "Group chat",
+                subtitle: `${(conversation.participants || []).length} members`
+            }))
+        ];
+
+        window.dispatchEvent(new CustomEvent("chatapp-switcher-items", {
+            detail: switcherItems
+        }));
+    }, [friendsState.friends, groupConversations]);
+
+    useEffect(() => {
         async function loadConversation() {
             if (!effectiveSelectedFriend) {
                 setMessages([]);
@@ -541,6 +648,7 @@ export default function FriendsHome({
                 setConversationMeta(data.conversation);
                 setHasLocalConversationAccess(data.hasLocalAccess !== false);
                 setSelectedRelayTtlSeconds(data.conversation?.relayPolicy?.currentSeconds ?? 0);
+                setSelectedDisappearingTtlSeconds(data.conversation?.disappearingPolicy?.currentSeconds ?? 0);
 
                 if (effectiveSelectedFriend.conversationId) {
                     const historyStatus = await fetchHistoryAccessStatus({
@@ -652,6 +760,164 @@ export default function FriendsHome({
         window.addEventListener("secureDmMessage", handleSecureDmMessage);
         return () => window.removeEventListener("secureDmMessage", handleSecureDmMessage);
     }, [activeView, currentUser, effectiveSelectedFriend, friendsState.friends, groupConversations, selectedGroupConversationId]);
+
+    useEffect(() => {
+        async function handleSecureDmFileSignal(event) {
+            const detail = event.detail || {};
+            const transferId = String(detail.transferId || "");
+
+            if (!transferId) {
+                return;
+            }
+
+            try {
+                if (detail.type === "dm:file:request") {
+                    const attachmentInfo = await window.attachmentTransfers.getOutgoingInfo({ transferId });
+
+                    if (!attachmentInfo) {
+                        await sendSecureDmRealtimeEvent({
+                            token: localStorage.getItem("authToken"),
+                            currentUser,
+                            payload: {
+                                type: "dm:file:error",
+                                targetDeviceId: detail.senderDeviceId,
+                                transferId,
+                                error: "That file is no longer available on the sender device"
+                            }
+                        });
+                        return;
+                    }
+
+                    updateAttachmentTransferState(transferId, {
+                        status: "uploading",
+                        progress: 0,
+                        fileName: attachmentInfo.fileName
+                    });
+
+                    await sendSecureDmRealtimeEvent({
+                        token: localStorage.getItem("authToken"),
+                        currentUser,
+                        payload: {
+                            type: "dm:file:ready",
+                            targetDeviceId: detail.senderDeviceId,
+                            transferId,
+                            fileName: attachmentInfo.fileName,
+                            fileSize: attachmentInfo.fileSize,
+                            mimeType: attachmentInfo.mimeType
+                        }
+                    });
+
+                    let offset = 0;
+
+                    while (true) {
+                        const chunk = await window.attachmentTransfers.readOutgoingChunk({
+                            transferId,
+                            offset,
+                            length: FILE_TRANSFER_CHUNK_BYTES
+                        });
+
+                        await sendSecureDmRealtimeEvent({
+                            token: localStorage.getItem("authToken"),
+                            currentUser,
+                            payload: {
+                                type: "dm:file:chunk",
+                                targetDeviceId: detail.senderDeviceId,
+                                transferId,
+                                chunkBase64: chunk.chunkBase64,
+                                nextOffset: chunk.nextOffset,
+                                fileSize: chunk.fileSize
+                            }
+                        });
+
+                        updateAttachmentTransferState(transferId, {
+                            status: "uploading",
+                            progress: chunk.fileSize > 0 ? (chunk.nextOffset / chunk.fileSize) * 100 : 100
+                        });
+
+                        if (chunk.done) {
+                            break;
+                        }
+
+                        offset = chunk.nextOffset;
+                    }
+
+                    await sendSecureDmRealtimeEvent({
+                        token: localStorage.getItem("authToken"),
+                        currentUser,
+                        payload: {
+                            type: "dm:file:complete",
+                            targetDeviceId: detail.senderDeviceId,
+                            transferId
+                        }
+                    });
+
+                    updateAttachmentTransferState(transferId, {
+                        status: "complete",
+                        progress: 100
+                    });
+                    return;
+                }
+
+                if (detail.type === "dm:file:ready") {
+                    updateAttachmentTransferState(transferId, {
+                        status: "downloading",
+                        progress: 0,
+                        fileName: detail.fileName || attachmentTransferStates[String(transferId)]?.fileName || "file"
+                    });
+                    return;
+                }
+
+                if (detail.type === "dm:file:chunk") {
+                    await window.attachmentTransfers.appendIncomingChunk({
+                        transferId,
+                        chunkBase64: detail.chunkBase64
+                    });
+
+                    updateAttachmentTransferState(transferId, {
+                        status: "downloading",
+                        progress: Number(detail.fileSize) > 0
+                            ? (Number(detail.nextOffset || 0) / Number(detail.fileSize)) * 100
+                            : 0
+                    });
+                    return;
+                }
+
+                if (detail.type === "dm:file:complete") {
+                    await window.attachmentTransfers.finishIncomingDownload({ transferId });
+                    delete incomingDownloadTargetsRef.current[transferId];
+                    updateAttachmentTransferState(transferId, {
+                        status: "complete",
+                        progress: 100
+                    });
+                    return;
+                }
+
+                if (detail.type === "dm:file:error") {
+                    if (incomingDownloadTargetsRef.current[transferId]) {
+                        await window.attachmentTransfers.cancelIncomingDownload({
+                            transferId,
+                            removePartial: true
+                        });
+                        delete incomingDownloadTargetsRef.current[transferId];
+                    }
+
+                    updateAttachmentTransferState(transferId, {
+                        status: "error",
+                        error: detail.error || "Transfer failed"
+                    });
+                }
+            } catch (transferError) {
+                console.error("Attachment transfer failed:", transferError);
+                updateAttachmentTransferState(transferId, {
+                    status: "error",
+                    error: transferError?.message || "Transfer failed"
+                });
+            }
+        }
+
+        window.addEventListener("secureDmFileSignal", handleSecureDmFileSignal);
+        return () => window.removeEventListener("secureDmFileSignal", handleSecureDmFileSignal);
+    }, [FILE_TRANSFER_CHUNK_BYTES, attachmentTransferStates, currentUser]);
 
     useEffect(() => {
         function handleConversationAccessRequired(event) {
@@ -898,6 +1164,23 @@ export default function FriendsHome({
         setGroupEditingMessage(null);
     }
 
+    useEffect(() => {
+        function handleSwitcherSelect(event) {
+            const detail = event.detail || {};
+
+            if (detail.scope === "friend" && detail.targetId != null) {
+                handleSelectFriend(detail.targetId);
+            }
+
+            if (detail.scope === "group" && detail.targetId != null) {
+                handleSelectGroupConversation(detail.targetId);
+            }
+        }
+
+        window.addEventListener("chatapp-switcher-select", handleSwitcherSelect);
+        return () => window.removeEventListener("chatapp-switcher-select", handleSwitcherSelect);
+    }, []);
+
     async function handleAccept(friendshipId) {
         setSubmitting(true);
         clearErrorState();
@@ -915,7 +1198,7 @@ export default function FriendsHome({
     async function handleSendMessage(event) {
         event.preventDefault();
 
-        if (!effectiveSelectedFriend || !composer.trim()) {
+        if (!effectiveSelectedFriend || (!composer.trim() && directAttachments.length === 0)) {
             return;
         }
 
@@ -935,6 +1218,8 @@ export default function FriendsHome({
                     friend: effectiveSelectedFriend,
                     body: composer.trim(),
                     relayTtlSeconds: selectedRelayTtlSeconds,
+                    messageTtlSeconds: selectedDisappearingTtlSeconds,
+                    attachments: directAttachments,
                     replyTo: directReplyTo ? {
                         messageId: directReplyTo.messageId,
                         body: directReplyTo.body,
@@ -950,6 +1235,7 @@ export default function FriendsHome({
                 return next;
             });
             setComposer("");
+            setDirectAttachments([]);
             setDirectReplyTo(null);
             setDirectEditingMessage(null);
             setMessages(result.messages);
@@ -1043,7 +1329,8 @@ export default function FriendsHome({
             const result = await initializeFriendDirectConversation({
                 currentUser,
                 friend: effectiveSelectedFriend,
-                relayTtlSeconds: selectedRelayTtlSeconds
+                relayTtlSeconds: selectedRelayTtlSeconds,
+                messageTtlSeconds: selectedDisappearingTtlSeconds
             });
 
             setForgottenConversationIds((prev) => {
@@ -1138,7 +1425,7 @@ export default function FriendsHome({
     async function handleSendGroupMessage(event) {
         event.preventDefault();
 
-        if (!selectedGroupConversationId || !groupComposer.trim()) {
+        if (!selectedGroupConversationId || (!groupComposer.trim() && groupAttachments.length === 0)) {
             return;
         }
 
@@ -1157,6 +1444,7 @@ export default function FriendsHome({
                     currentUser,
                     conversationId: selectedGroupConversationId,
                     body: groupComposer.trim(),
+                    attachments: groupAttachments,
                     replyTo: groupReplyTo ? {
                         messageId: groupReplyTo.messageId,
                         body: groupReplyTo.body,
@@ -1165,6 +1453,7 @@ export default function FriendsHome({
                 });
 
             setGroupComposer("");
+            setGroupAttachments([]);
             setGroupReplyTo(null);
             setGroupEditingMessage(null);
             setGroupMessages(opened.messages);
@@ -1240,15 +1529,20 @@ export default function FriendsHome({
         clearErrorState();
 
         try {
-            const relayPolicy = await requestFriendRelayRetention({
+            const conversation = await requestFriendRelayRetention({
                 conversationId: effectiveSelectedFriend.conversationId,
                 relayTtlSeconds: selectedRelayTtlSeconds
             });
 
-            setConversationMeta((prev) => ({
-                ...(prev || {}),
-                relayPolicy
-            }));
+            setConversationMeta(conversation);
+            setSelectedRelayTtlSeconds(conversation?.relayPolicy?.currentSeconds ?? selectedRelayTtlSeconds);
+            if (window.secureDm?.syncConversationMetadata) {
+                await window.secureDm.syncConversationMetadata({
+                    userId: currentUser.id,
+                    username: currentUser.username,
+                    conversation
+                });
+            }
             setShowConversationSettings(false);
         } catch (err) {
             showError(err);
@@ -1266,15 +1560,92 @@ export default function FriendsHome({
         clearErrorState();
 
         try {
-            const relayPolicy = await acceptFriendRelayRetention({
+            const conversation = await acceptFriendRelayRetention({
                 conversationId: effectiveSelectedFriend.conversationId
             });
 
-            setConversationMeta((prev) => ({
-                ...(prev || {}),
-                relayPolicy
+            setConversationMeta(conversation);
+            setSelectedRelayTtlSeconds(conversation?.relayPolicy?.currentSeconds ?? 0);
+            setSelectedDisappearingTtlSeconds(conversation?.disappearingPolicy?.currentSeconds ?? selectedDisappearingTtlSeconds);
+            if (window.secureDm?.syncConversationMetadata) {
+                await window.secureDm.syncConversationMetadata({
+                    userId: currentUser.id,
+                    username: currentUser.username,
+                    conversation
+                });
+            }
+            setShowConversationSettings(false);
+        } catch (err) {
+            showError(err);
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
+    async function handleDisappearingRequest(event) {
+        event.preventDefault();
+
+        if (!effectiveSelectedFriend?.conversationId) {
+            setShowConversationSettings(false);
+            return;
+        }
+
+        setSubmitting(true);
+        clearErrorState();
+
+        try {
+            const conversation = await requestFriendDisappearingMessages({
+                conversationId: effectiveSelectedFriend.conversationId,
+                messageTtlSeconds: selectedDisappearingTtlSeconds
+            });
+
+            setConversationMeta(conversation);
+            setSelectedDisappearingTtlSeconds(conversation?.disappearingPolicy?.currentSeconds ?? selectedDisappearingTtlSeconds);
+            if (window.secureDm?.syncConversationMetadata) {
+                await window.secureDm.syncConversationMetadata({
+                    userId: currentUser.id,
+                    username: currentUser.username,
+                    conversation
+                });
+            }
+            setMessages(await window.secureDm.listMessages({
+                userId: currentUser.id,
+                conversationId: effectiveSelectedFriend.conversationId
             }));
-            setSelectedRelayTtlSeconds(relayPolicy?.currentSeconds ?? 0);
+            setShowConversationSettings(false);
+        } catch (err) {
+            showError(err);
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
+    async function handleDisappearingAccept() {
+        if (!effectiveSelectedFriend?.conversationId) {
+            return;
+        }
+
+        setSubmitting(true);
+        clearErrorState();
+
+        try {
+            const conversation = await acceptFriendDisappearingMessages({
+                conversationId: effectiveSelectedFriend.conversationId
+            });
+
+            setConversationMeta(conversation);
+            setSelectedDisappearingTtlSeconds(conversation?.disappearingPolicy?.currentSeconds ?? 0);
+            if (window.secureDm?.syncConversationMetadata) {
+                await window.secureDm.syncConversationMetadata({
+                    userId: currentUser.id,
+                    username: currentUser.username,
+                    conversation
+                });
+            }
+            setMessages(await window.secureDm.listMessages({
+                userId: currentUser.id,
+                conversationId: effectiveSelectedFriend.conversationId
+            }));
             setShowConversationSettings(false);
         } catch (err) {
             showError(err);
@@ -1475,6 +1846,134 @@ export default function FriendsHome({
         }
     }
 
+    async function registerComposerAttachment(file) {
+        const transferId = `file_${crypto.randomUUID()}`;
+        const registered = await window.attachmentTransfers.registerOutgoing({
+            transferId,
+            fileName: file.name,
+            mimeType: file.type || "application/octet-stream",
+            arrayBuffer: await file.arrayBuffer()
+        });
+
+        return {
+            transferId: registered.transferId,
+            fileName: registered.fileName,
+            mimeType: registered.mimeType,
+            fileSize: registered.fileSize
+        };
+    }
+
+    async function handlePickDirectAttachment(file) {
+        if (directEditingMessage) {
+            return;
+        }
+
+        const attachment = await registerComposerAttachment(file);
+        setDirectAttachments((prev) => [...prev, attachment]);
+    }
+
+    async function handlePickGroupAttachment(file) {
+        if (groupEditingMessage) {
+            return;
+        }
+
+        const attachment = await registerComposerAttachment(file);
+        setGroupAttachments((prev) => [...prev, attachment]);
+    }
+
+    function handleRemoveDirectAttachment(transferId) {
+        setDirectAttachments((prev) => prev.filter((entry) => String(entry.transferId) !== String(transferId)));
+    }
+
+    function handleRemoveGroupAttachment(transferId) {
+        setGroupAttachments((prev) => prev.filter((entry) => String(entry.transferId) !== String(transferId)));
+    }
+
+    async function requestAttachmentDownload({ conversationId, senderDeviceId, attachment }) {
+        if (!conversationId || !senderDeviceId || !attachment?.transferId) {
+            return;
+        }
+
+        const saveResult = await window.attachmentTransfers.chooseSavePath({
+            defaultName: attachment.fileName
+        });
+
+        if (saveResult?.canceled || !saveResult?.filePath) {
+            return;
+        }
+
+        await window.attachmentTransfers.beginIncomingDownload({
+            transferId: attachment.transferId,
+            filePath: saveResult.filePath
+        });
+
+        incomingDownloadTargetsRef.current[String(attachment.transferId)] = {
+            filePath: saveResult.filePath,
+            fileName: attachment.fileName,
+            expectedBytes: attachment.fileSize
+        };
+
+        updateAttachmentTransferState(attachment.transferId, {
+            status: "requesting",
+            progress: 0,
+            fileName: attachment.fileName
+        });
+
+        await sendSecureDmRealtimeEvent({
+            token: localStorage.getItem("authToken"),
+            currentUser,
+            payload: {
+                type: "dm:file:request",
+                conversationId,
+                targetDeviceId: senderDeviceId,
+                transferId: attachment.transferId,
+                fileName: attachment.fileName,
+                fileSize: attachment.fileSize,
+                mimeType: attachment.mimeType
+            }
+        });
+    }
+
+    async function handleDownloadDirectAttachment(message, attachment) {
+        await requestAttachmentDownload({
+            conversationId: effectiveSelectedFriend?.conversationId,
+            senderDeviceId: message?.senderDeviceId,
+            attachment
+        });
+    }
+
+    async function handleDownloadGroupAttachment(message, attachment) {
+        await requestAttachmentDownload({
+            conversationId: selectedGroupConversationId,
+            senderDeviceId: message?.senderDeviceId,
+            attachment
+        });
+    }
+
+    async function handleToggleDirectReaction(message, emoji) {
+        if (!effectiveSelectedFriend?.conversationId || !message?.messageId || !emoji || message.isDeleted) {
+            return;
+        }
+
+        setSubmitting(true);
+        clearErrorState();
+
+        try {
+            const opened = await toggleFriendDirectReaction({
+                currentUser,
+                friend: effectiveSelectedFriend,
+                messageId: message.messageId,
+                emoji
+            });
+            setMessages(opened.messages);
+            setConversationMeta(opened.conversation);
+        } catch (err) {
+            showError(err);
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
     async function handleDeleteGroupMessage(message) {
         if (!selectedGroupConversationId || !message?.messageId || message.isDeleted) {
             return;
@@ -1502,11 +2001,45 @@ export default function FriendsHome({
         }
     }
 
+    async function handleToggleGroupReaction(message, emoji) {
+        if (!selectedGroupConversationId || !message?.messageId || !emoji || message.isDeleted) {
+            return;
+        }
+
+        setSubmitting(true);
+        clearErrorState();
+
+        try {
+            const opened = await toggleGroupConversationReaction({
+                currentUser,
+                conversationId: selectedGroupConversationId,
+                messageId: message.messageId,
+                emoji
+            });
+            setGroupMessages(opened.messages);
+            setGroupConversationMeta((prev) => ({
+                ...(prev || {}),
+                ...(opened.conversation || {})
+            }));
+            await loadGroupConversationList(selectedGroupConversationId);
+        } catch (err) {
+            showError(err);
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
     const relayPolicy = conversationMeta?.relayPolicy || null;
+    const disappearingPolicy = conversationMeta?.disappearingPolicy || null;
     const pendingRelayRequest = relayPolicy?.pendingSeconds != null ? relayPolicy : null;
+    const pendingDisappearingRequest = disappearingPolicy?.pendingSeconds != null ? disappearingPolicy : null;
     const pendingRequestedByFriend = Boolean(
         pendingRelayRequest
         && pendingRelayRequest.pendingRequestedByUserId !== Number(currentUser.id)
+    );
+    const pendingDisappearingRequestedByFriend = Boolean(
+        pendingDisappearingRequest
+        && pendingDisappearingRequest.pendingRequestedByUserId !== Number(currentUser.id)
     );
     const currentRelayLabel = RELAY_RETENTION_OPTIONS.find(
         (option) => option.seconds === (relayPolicy?.currentSeconds ?? selectedRelayTtlSeconds)
@@ -1514,6 +2047,13 @@ export default function FriendsHome({
     const pendingRelayLabel = pendingRelayRequest
         ? RELAY_RETENTION_OPTIONS.find((option) => option.seconds === pendingRelayRequest.pendingSeconds)?.label
         || `${pendingRelayRequest.pendingHours} hours`
+        : null;
+    const currentDisappearingLabel = DISAPPEARING_MESSAGE_OPTIONS.find(
+        (option) => option.seconds === (disappearingPolicy?.currentSeconds ?? selectedDisappearingTtlSeconds)
+    )?.label || "Off";
+    const pendingDisappearingLabel = pendingDisappearingRequest
+        ? DISAPPEARING_MESSAGE_OPTIONS.find((option) => option.seconds === pendingDisappearingRequest.pendingSeconds)?.label
+            || `${pendingDisappearingRequest.pendingDays} days`
         : null;
     const isForgettingOldConversation = !isEncryptingChat && Boolean(
         selectedFriend
@@ -1664,6 +2204,7 @@ export default function FriendsHome({
                     clientSettings={clientSettings}
                     loading={loading}
                     friendsState={friendsState}
+                    hasPendingIncomingFriendRequests={(friendsState.incomingRequests || []).length > 0}
                     groupInvites={groupInvites}
                     groupConversations={groupConversations}
                     selectedFriendId={selectedFriendId}
@@ -1696,6 +2237,7 @@ export default function FriendsHome({
                     activeGroupParticipantNames={activeGroupParticipantNames}
                     groupMessages={groupMessages}
                     groupComposer={groupComposer}
+                    groupAttachments={groupAttachments}
                     groupReplyTo={groupReplyTo}
                     groupEditingMessage={groupEditingMessage}
                     selectedFriend={selectedFriend}
@@ -1708,20 +2250,27 @@ export default function FriendsHome({
                     incomingHistoryRequest={incomingHistoryRequest}
                     outgoingHistoryRequest={outgoingHistoryRequest}
                     pendingRequestedByFriend={pendingRequestedByFriend}
+                    pendingDisappearingRequestedByFriend={pendingDisappearingRequestedByFriend}
                     historyAccessRequest={historyAccessRequest}
                     pendingRelayLabel={pendingRelayLabel}
+                    pendingDisappearingLabel={pendingDisappearingLabel}
                     submitting={submitting}
                     showEncryptionStage={showEncryptionStage}
                     lockPhase={lockPhase}
                     messages={messages}
                     composer={composer}
+                    directAttachments={directAttachments}
                     directReplyTo={directReplyTo}
                     directEditingMessage={directEditingMessage}
                     isDirectConversationEncrypted={isDirectConversationEncrypted}
                     canComposeDirectMessage={canComposeDirectMessage}
+                    transferStates={attachmentTransferStates}
                     messageListRef={messageListRef}
                     onGroupComposerChange={setGroupComposer}
                     onSendGroupMessage={handleSendGroupMessage}
+                    onGroupPickAttachment={handlePickGroupAttachment}
+                    onGroupRemoveAttachment={handleRemoveGroupAttachment}
+                    onGroupDownloadAttachment={handleDownloadGroupAttachment}
                     onGroupReply={(message) => {
                         setGroupEditingMessage(null);
                         setGroupReplyTo(message);
@@ -1730,12 +2279,15 @@ export default function FriendsHome({
                         setGroupReplyTo(null);
                         setGroupEditingMessage(message);
                         setGroupComposer(message.body || "");
+                        setGroupAttachments([]);
                     }}
                     onGroupDelete={handleDeleteGroupMessage}
+                    onGroupToggleReaction={handleToggleGroupReaction}
                     onCancelGroupAction={() => {
                         setGroupReplyTo(null);
                         setGroupEditingMessage(null);
                         setGroupComposer("");
+                        setGroupAttachments([]);
                     }}
                     onOpenConversationSettings={() => setShowConversationSettings(true)}
                     onForgetOldConversation={handleForgetOldConversation}
@@ -1743,9 +2295,13 @@ export default function FriendsHome({
                     onHistoryDecline={handleHistoryDecline}
                     onHistoryApprove={handleHistoryApprove}
                     onRetentionAccept={handleRetentionAccept}
+                    onDisappearingAccept={handleDisappearingAccept}
                     onEncryptChat={handleEncryptChat}
                     onComposerChange={setComposer}
                     onSendMessage={handleSendMessage}
+                    onDirectPickAttachment={handlePickDirectAttachment}
+                    onDirectRemoveAttachment={handleRemoveDirectAttachment}
+                    onDirectDownloadAttachment={handleDownloadDirectAttachment}
                     onDirectReply={(message) => {
                         setDirectEditingMessage(null);
                         setDirectReplyTo(message);
@@ -1754,12 +2310,15 @@ export default function FriendsHome({
                         setDirectReplyTo(null);
                         setDirectEditingMessage(message);
                         setComposer(message.body || "");
+                        setDirectAttachments([]);
                     }}
                     onDirectDelete={handleDeleteDirectMessage}
+                    onDirectToggleReaction={handleToggleDirectReaction}
                     onCancelDirectAction={() => {
                         setDirectReplyTo(null);
                         setDirectEditingMessage(null);
                         setComposer("");
+                        setDirectAttachments([]);
                     }}
                 />
             </div>
@@ -1769,11 +2328,17 @@ export default function FriendsHome({
                     selectedFriend={selectedFriend}
                     effectiveSelectedFriend={effectiveSelectedFriend}
                     selectedRelayTtlSeconds={selectedRelayTtlSeconds}
+                    selectedDisappearingTtlSeconds={selectedDisappearingTtlSeconds}
                     relayPolicy={relayPolicy}
+                    disappearingPolicy={disappearingPolicy}
                     pendingRelayRequest={pendingRelayRequest}
+                    pendingDisappearingRequest={pendingDisappearingRequest}
                     pendingRequestedByFriend={pendingRequestedByFriend}
+                    pendingDisappearingRequestedByFriend={pendingDisappearingRequestedByFriend}
                     pendingRelayLabel={pendingRelayLabel}
+                    pendingDisappearingLabel={pendingDisappearingLabel}
                     currentRelayLabel={currentRelayLabel}
+                    currentDisappearingLabel={currentDisappearingLabel}
                     submitting={submitting}
                     onClose={() => setShowConversationSettings(false)}
                     onUndoForget={() => {
@@ -1785,8 +2350,11 @@ export default function FriendsHome({
                         setShowConversationSettings(false);
                     }}
                     onRelayTtlChange={setSelectedRelayTtlSeconds}
+                    onDisappearingTtlChange={setSelectedDisappearingTtlSeconds}
                     onRetentionRequest={handleRetentionRequest}
                     onRetentionAccept={handleRetentionAccept}
+                    onDisappearingRequest={handleDisappearingRequest}
+                    onDisappearingAccept={handleDisappearingAccept}
                 />
             ) : null}
 

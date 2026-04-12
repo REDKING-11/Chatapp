@@ -100,14 +100,11 @@ function FriendCard({
             <span className="friend-card-body">
                 <span className="friend-card-title-row">
                     <strong>{friend.friendUsername}</strong>
-                    {assignedTag ? (
-                        <small className="friend-tag-pill">{assignedTag.label}</small>
-                    ) : null}
                 </span>
-                <span className="friend-card-status">{previewText || displayStatus}</span>
-                {friend.conversationId && previewText ? (
-                    <small className="friend-card-preview">Latest message</small>
+                {assignedTag ? (
+                    <small className="friend-tag-pill" title={assignedTag.label}>{assignedTag.label}</small>
                 ) : null}
+                <span className="friend-card-status">{previewText || displayStatus}</span>
             </span>
         </button>
     );
@@ -170,6 +167,7 @@ export default function FriendsRail({
     clientSettings,
     loading,
     friendsState,
+    hasPendingIncomingFriendRequests,
     groupInvites,
     groupConversations,
     selectedFriendId,
@@ -262,7 +260,7 @@ export default function FriendsRail({
                             <h2>Friends</h2>
                             <button
                                 type="button"
-                                className="friends-add-icon-button"
+                                className={`friends-add-icon-button ${hasPendingIncomingFriendRequests ? "has-pending-friend-requests" : ""}`.trim()}
                                 onClick={onOpenAddFriend}
                                 aria-label="Add friend"
                                 title="Add friend"
@@ -276,7 +274,18 @@ export default function FriendsRail({
                 </div>
                 <div className="friends-rail-header-actions">
                     <label className="friends-search friends-rail-search">
-                        <span>Search friends</span>
+                        <div className="friends-search-header">
+                            <span>Search friends</span>
+                            <button
+                                type="button"
+                                className="menu-burger"
+                                onClick={() => setShowFriendBrowser(true)}
+                                aria-label="Browse friends"
+                                title="Browse friends"
+                            >
+                                <span aria-hidden="true">≡</span>
+                            </button>
+                        </div>
                         <input
                             type="search"
                             value={friendSearchQuery}
@@ -284,15 +293,6 @@ export default function FriendsRail({
                             onChange={(event) => setFriendSearchQuery(event.target.value)}
                         />
                     </label>
-                    <button
-                        type="button"
-                        className="menu-burger"
-                        onClick={() => setShowFriendBrowser(true)}
-                        aria-label="Browse friends"
-                        title="Browse friends"
-                    >
-                        <span aria-hidden="true">≡</span>
-                    </button>
                 </div>
 
 

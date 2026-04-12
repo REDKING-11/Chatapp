@@ -9,11 +9,12 @@ import ClientSettingsModal from "./components/ClientSettingsModal";
 import InitialSetupWizard from "./components/InitialSetupWizard";
 import JoinedServersSidebar from "./components/JoinedServerSidebar";
 import JoinServerModal from "./components/JoinServerModal";
+import QuickSwitcherModal from "./components/QuickSwitcherModal";
 import ServerSettingsPanel from "./components/ServerSettingsPanel";
 import {
     applyClientSettings,
-    CLIENT_SETTINGS_DEFAULTS,
     loadClientSettings,
+    resetClientSettingsTab,
     saveClientSettings
 } from "./features/clientSettings";
 import {
@@ -78,8 +79,11 @@ function App() {
     const [showServerTrustWarning, setShowServerTrustWarning] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [showClientSettings, setShowClientSettings] = useState(false);
+    const [showQuickSwitcher, setShowQuickSwitcher] = useState(false);
+    const [pendingMessageNavigation, setPendingMessageNavigation] = useState(null);
     const [customization, setCustomization] = useState(null);
     const [settingsServer, setSettingsServer] = useState(null);
+    const [friendsSwitcherItems, setFriendsSwitcherItems] = useState([]);
     const [clientSettings, setClientSettings] = useState(() => loadClientSettings());
     const [onboardingState, setOnboardingState] = useState(() => loadOnboardingState());
 
@@ -117,6 +121,185 @@ function App() {
 
         restoreSession();
     }, []);
+
+    useEffect(() => {
+        function handleSwitcherItems(event) {
+            setFriendsSwitcherItems(Array.isArray(event.detail) ? event.detail : []);
+        }
+
+        window.addEventListener("chatapp-switcher-items", handleSwitcherItems);
+        return () => window.removeEventListener("chatapp-switcher-items", handleSwitcherItems);
+    }, []);
+
+    useEffect(() => {
+        function isEditableTarget(target) {
+            if (!target || !(target instanceof HTMLElement)) {
+                return false;
+            }
+
+            return Boolean(
+                target.closest("input, textarea, select, [contenteditable='true'], [role='textbox']")
+            );
+        }
+
+        function emitShortcut(action, detail = {}) {
+            window.dispatchEvent(new CustomEvent("chatapp-shortcut", {
+                detail: { action, ...detail }
+            }));
+        }
+
+        function handleGlobalShortcut(event) {
+            const key = String(event.key || "").toLowerCase();
+            const shortcutSelectedServer = selectedJoinedServerId !== FRIENDS_TAB_ID
+                ? joinedServers.find((server) => server.id === selectedJoinedServerId) || null
+                : null;
+
+            if (event.ctrlKey && !event.shiftKey && !event.altKey && key === "k") {
+                event.preventDefault();
+                setShowQuickSwitcher((prev) => !prev);
+                return;
+            }
+
+            if (event.ctrlKey && !event.shiftKey && !event.altKey && key === ",") {
+                event.preventDefault();
+                setShowClientSettings(true);
+                return;
+            }
+
+            if ((event.altKey && key === "enter") || (event.ctrlKey && event.shiftKey && !event.altKey && key === "s")) {
+                if (selectedJoinedServerId !== FRIENDS_TAB_ID && shortcutSelectedServer) {
+                    event.preventDefault();
+                    setSettingsServer(shortcutSelectedServer);
+                    setShowSettings(true);
+                }
+                return;
+            }
+
+            if (key === "escape") {
+                if (showQuickSwitcher) {
+                    event.preventDefault();
+                    setShowQuickSwitcher(false);
+                    return;
+                }
+
+                if (showSettings) {
+                    event.preventDefault();
+                    setShowSettings(false);
+                    setSettingsServer(null);
+                    return;
+                }
+
+                if (showClientSettings) {
+                    event.preventDefault();
+                    setShowClientSettings(false);
+                    return;
+                }
+
+                emitShortcut("closeOverlay");
+                return;
+            }
+
+            if (isEditableTarget(event.target)) {
+                return;
+            }
+
+            if (event.ctrlKey && event.shiftKey && !event.altKey && key === "e") {
+                event.preventDefault();
+                emitShortcut("focusComposer");
+                return;
+            }
+
+            if (event.ctrlKey && event.shiftKey && !event.altKey && key === "f") {
+                event.preventDefault();
+                emitShortcut("attachFile");
+                return;
+            }
+
+            if (event.ctrlKey && event.shiftKey && !event.altKey && event.code === "Period") {
+                event.preventDefault();
+                emitShortcut("openEmojiPicker");
+                return;
+            }
+
+            if (event.ctrlKey && event.shiftKey && !event.altKey && key === "r") {
+                event.preventDefault();
+                emitShortcut("openReactionPicker");
+                return;
+            }
+
+            if (event.altKey && !event.ctrlKey && !event.shiftKey && key === "s") {
+                event.preventDefault();
+                emitShortcut("openConversationSettings");
+            }
+        }
+
+        window.addEventListener("keydown", handleGlobalShortcut);
+        return () => window.removeEventListener("keydown", handleGlobalShortcut);
+    }, [joinedServers, selectedJoinedServerId, showClientSettings, showQuickSwitcher, showSettings]);
+
+    useEffect(() => {
+        function handleNavigate(event) {
+            const detail = event.detail || {};
+
+            if (detail.scope === "friend" && detail.targetId != null) {
+                setSelectedJoinedServerId(FRIENDS_TAB_ID);
+                window.setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent("chatapp-switcher-select", {
+                        detail
+                    }));
+                }, 0);
+                return;
+            }
+
+            if ((detail.scope === "channel" || detail.scope === "message") && detail.serverId != null && detail.channelId != null) {
+                const joinedServer = joinedServers.find((server) => String(server.id) === String(detail.serverId));
+
+                if (!joinedServer) {
+                    return;
+                }
+
+                setSelectedJoinedServerId(joinedServer.id);
+                setSelectedChannelId(detail.channelId);
+
+                if (detail.scope === "message" && detail.messageId != null) {
+                    setPendingMessageNavigation({
+                        channelId: detail.channelId,
+                        messageId: detail.messageId,
+                        token: Date.now()
+                    });
+                }
+            }
+        }
+
+        window.addEventListener("chatapp-navigate", handleNavigate);
+        return () => window.removeEventListener("chatapp-navigate", handleNavigate);
+    }, [joinedServers]);
+
+    useEffect(() => {
+        if (!pendingMessageNavigation || selectedJoinedServerId === FRIENDS_TAB_ID || selectedChannelId == null) {
+            return;
+        }
+
+        if (String(pendingMessageNavigation.channelId) !== String(selectedChannelId)) {
+            return;
+        }
+
+        const loadedChannels = serverData?.channels || [];
+
+        if (!loadedChannels.some((channel) => String(channel.id) === String(pendingMessageNavigation.channelId))) {
+            return;
+        }
+
+        window.dispatchEvent(new CustomEvent("chatapp-focus-message", {
+            detail: {
+                scope: "chat",
+                channelId: pendingMessageNavigation.channelId,
+                messageId: pendingMessageNavigation.messageId,
+                token: pendingMessageNavigation.token
+            }
+        }));
+        setPendingMessageNavigation(null);
+    }, [pendingMessageNavigation, selectedChannelId, selectedJoinedServerId, serverData]);
 
     useEffect(() => {
         async function loadUserServers() {
@@ -305,10 +488,12 @@ function App() {
                 markSelectedServerOnline();
                 setServerData(data);
 
-                if (data.channels?.length > 0) {
+                const visibleChannels = (data.channels || []).filter((channel) => channel?.type !== "customization");
+
+                if (visibleChannels.length > 0) {
                     setSelectedChannelId((prev) => {
-                        const stillExists = data.channels.some((channel) => channel.id === prev);
-                        return stillExists ? prev : data.channels[0].id;
+                        const stillExists = visibleChannels.some((channel) => channel.id === prev);
+                        return stillExists ? prev : visibleChannels[0].id;
                     });
                 } else {
                     setSelectedChannelId(null);
@@ -589,8 +774,12 @@ function App() {
         }));
     }
 
-    function handleClientSettingsReset() {
-        setClientSettings(saveClientSettings(CLIENT_SETTINGS_DEFAULTS));
+    function handleClientSettingsTabReset(tabId) {
+        if (!tabId) {
+            return;
+        }
+
+        setClientSettings((prev) => resetClientSettingsTab(prev, tabId));
     }
 
     function handleClientSettingsImport(importedSettings) {
@@ -631,7 +820,8 @@ function App() {
     }
 
     const channels = serverData?.channels || [];
-    const selectedChannel = channels.find((channel) => channel.id === selectedChannelId) || null;
+    const visibleChannels = channels.filter((channel) => channel?.type !== "customization");
+    const selectedChannel = visibleChannels.find((channel) => channel.id === selectedChannelId) || null;
     const selectedJoinedServer =
         joinedServers.find((server) => server.id === selectedJoinedServerId) || null;
     const isFriendsView = selectedJoinedServerId === FRIENDS_TAB_ID;
@@ -644,6 +834,62 @@ function App() {
     const profileMediaHostUrl = selectedServerIsOnline
         ? selectedJoinedServer.backendUrl
         : fallbackProfileMediaServer?.backendUrl || null;
+    const quickSwitcherItems = [
+        {
+            id: "nav:friends",
+            group: "special",
+            scope: "special",
+            label: "Friends",
+            subtitle: "Direct messages and group chats"
+        },
+        ...joinedServers.map((server) => ({
+            id: `server:${server.id}`,
+            group: "server",
+            scope: "server",
+            targetId: server.id,
+            label: server.name,
+            subtitle: serverStatuses?.[server.id] === "offline" ? "Offline server" : "Joined server"
+        })),
+        ...visibleChannels.map((channel) => ({
+            id: `channel:${channel.id}`,
+            group: "channel",
+            scope: "channel",
+            targetId: channel.id,
+            label: `#${channel.name}`,
+            subtitle: selectedJoinedServer?.name || "Channel"
+        })),
+        ...friendsSwitcherItems
+    ];
+
+    function handleQuickSwitcherSelect(item) {
+        setShowQuickSwitcher(false);
+
+        if (item.scope === "special") {
+            setSelectedJoinedServerId(FRIENDS_TAB_ID);
+            return;
+        }
+
+        if (item.scope === "server" && item.targetId != null) {
+            setSelectedJoinedServerId(item.targetId);
+            return;
+        }
+
+        if (item.scope === "channel" && item.targetId != null) {
+            if (selectedJoinedServerId !== FRIENDS_TAB_ID && selectedJoinedServer) {
+                setSelectedChannelId(item.targetId);
+            }
+            return;
+        }
+
+        if ((item.scope === "friend" || item.scope === "group") && item.targetId != null) {
+            setSelectedJoinedServerId(FRIENDS_TAB_ID);
+            window.setTimeout(() => {
+                window.dispatchEvent(new CustomEvent("chatapp-switcher-select", {
+                    detail: item
+                }));
+            }, 0);
+        }
+    }
 
     return (
         <>
@@ -680,7 +926,7 @@ function App() {
                     <style ref={serverCustomCssRef} />
                     {!isFriendsView && (
                         <ChannelSidebar
-                            channels={channels}
+                            channels={visibleChannels}
                             selectedChannelId={selectedChannelId}
                             onSelectChannel={setSelectedChannelId}
                             currentUser={currentUser}
@@ -694,6 +940,7 @@ function App() {
 
                     <MainView
                         channel={selectedChannel}
+                        channels={visibleChannels}
                         currentUser={currentUser}
                         backendUrl={selectedJoinedServer?.backendUrl || null}
                         profileMediaHostUrl={profileMediaHostUrl}
@@ -704,6 +951,7 @@ function App() {
                         onLogout={handleLogout}
                         onServerOffline={markSelectedServerOffline}
                         serverName={selectedJoinedServer?.name || serverData?.name || null}
+                        serverId={selectedJoinedServer?.id || null}
                         serverStatus={selectedJoinedServer ? serverStatuses[selectedJoinedServer.id] : null}
                         isFriendsView={isFriendsView}
                     />
@@ -722,12 +970,26 @@ function App() {
                 <ServerSettingsPanel
                     backendUrl={settingsServer.backendUrl}
                     serverData={serverData}
+                    onServerDataChange={(nextServerData) => {
+                        setServerData(nextServerData);
+                    }}
+                    onSelectChannel={(channelId) => {
+                        setSelectedChannelId(channelId);
+                    }}
                     onClose={() => {
                         setShowSettings(false);
                         setSettingsServer(null);
                     }}
                 />
             )}
+
+            {showQuickSwitcher ? (
+                <QuickSwitcherModal
+                    items={quickSwitcherItems}
+                    onSelect={handleQuickSwitcherSelect}
+                    onClose={() => setShowQuickSwitcher(false)}
+                />
+            ) : null}
 
             {showClientSettings ? (
                 <ClientSettingsModal
@@ -740,7 +1002,7 @@ function App() {
                         setCurrentUser(user);
                         saveAuthUser(user);
                     }}
-                    onReset={handleClientSettingsReset}
+                    onTabReset={handleClientSettingsTabReset}
                     onClose={() => setShowClientSettings(false)}
                 />
             ) : null}

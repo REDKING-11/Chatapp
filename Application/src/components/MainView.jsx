@@ -4,6 +4,7 @@ import FriendsHome from "../features/friends/pages/FriendsHome";
 
 export default function MainView({
     channel,
+    channels,
     currentUser,
     backendUrl,
     profileMediaHostUrl,
@@ -14,6 +15,7 @@ export default function MainView({
     onLogout,
     onServerOffline,
     serverName,
+    serverId,
     serverStatus,
     isFriendsView
 }) {
@@ -79,8 +81,11 @@ export default function MainView({
                 <LayoutRenderer
                     layout={layout}
                     channelId={channel.id}
+                    channels={channels}
                     currentUser={currentUser}
                     backendUrl={backendUrl}
+                    currentServerId={serverId}
+                    currentServerName={serverName}
                     onServerOffline={onServerOffline}
                 />
             ) : (

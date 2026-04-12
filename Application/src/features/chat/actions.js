@@ -70,3 +70,17 @@ export async function removeMessage({ backendUrl, messageId }) {
         throw normalizeChatFetchError(error, "This server is offline, so messages cannot be deleted right now");
     }
 }
+
+export async function toggleMessageReaction({ backendUrl, messageId, emoji }) {
+    try {
+        const res = await fetch(`${backendUrl}/api/messages/${messageId}/reactions`, {
+            method: "POST",
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ emoji })
+        });
+
+        return parseJsonResponse(res, "Failed to update reaction");
+    } catch (error) {
+        throw normalizeChatFetchError(error, "This server is offline, so reactions cannot be updated right now");
+    }
+}

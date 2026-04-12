@@ -6,6 +6,8 @@ require_once __DIR__ . '/../user_profile.php';
 
 const DM_RELAY_TTL_SECONDS = 86400;
 const DM_ALLOWED_RELAY_TTLS = [0, 43200, 86400, 172800, 259200, 345600];
+const DM_MESSAGE_TTL_SECONDS = 0;
+const DM_ALLOWED_MESSAGE_TTLS = [0, 86400, 259200, 604800, 1209600, 2592000, 5184000, 10368000, 15552000];
 
 function dmColumnExists(PDO $db, string $table, string $column): bool {
     static $cache = [];
@@ -86,6 +88,11 @@ function dmNormalizeRelayTtlSeconds($value): int {
     return in_array($ttl, DM_ALLOWED_RELAY_TTLS, true) ? $ttl : DM_RELAY_TTL_SECONDS;
 }
 
+function dmNormalizeMessageTtlSeconds($value): int {
+    $ttl = (int)$value;
+    return in_array($ttl, DM_ALLOWED_MESSAGE_TTLS, true) ? $ttl : DM_MESSAGE_TTL_SECONDS;
+}
+
 function dmRelayTtlOptions(): array {
     return array_map(function ($seconds) {
         return [
@@ -95,28 +102,82 @@ function dmRelayTtlOptions(): array {
     }, DM_ALLOWED_RELAY_TTLS);
 }
 
-function dmBuildRelayPolicyRow(array $conversation): array {
-    $currentSeconds = dmNormalizeRelayTtlSeconds($conversation['relay_ttl_seconds'] ?? DM_RELAY_TTL_SECONDS);
-    $pendingSeconds = $conversation['relay_ttl_requested_seconds'] !== null
-        ? dmNormalizeRelayTtlSeconds($conversation['relay_ttl_requested_seconds'])
+function dmMessageTtlOptions(): array {
+    return array_map(function ($seconds) {
+        return [
+            'seconds' => $seconds,
+            'days' => $seconds > 0 ? (int)($seconds / 86400) : 0
+        ];
+    }, DM_ALLOWED_MESSAGE_TTLS);
+}
+
+function dmBuildPolicyRow(
+    array $conversation,
+    string $currentColumn,
+    string $pendingColumn,
+    string $pendingByColumn,
+    string $pendingAtColumn,
+    callable $normalizeValue,
+    int $defaultSeconds,
+    array $options,
+    string $unitKey,
+    int $unitDivisor
+): array {
+    $currentSeconds = $normalizeValue($conversation[$currentColumn] ?? $defaultSeconds);
+    $pendingSeconds = $conversation[$pendingColumn] !== null
+        ? $normalizeValue($conversation[$pendingColumn])
         : null;
 
     return [
         'currentSeconds' => $currentSeconds,
-        'currentHours' => $currentSeconds > 0 ? (int)($currentSeconds / 3600) : 0,
+        'current' . ucfirst($unitKey) => $currentSeconds > 0 ? (int)($currentSeconds / $unitDivisor) : 0,
         'pendingSeconds' => $pendingSeconds,
-        'pendingHours' => $pendingSeconds !== null && $pendingSeconds > 0 ? (int)($pendingSeconds / 3600) : 0,
-        'pendingRequestedByUserId' => $conversation['relay_ttl_requested_by_user_id'] !== null
-            ? (int)$conversation['relay_ttl_requested_by_user_id']
+        'pending' . ucfirst($unitKey) => $pendingSeconds !== null && $pendingSeconds > 0 ? (int)($pendingSeconds / $unitDivisor) : 0,
+        'pendingRequestedByUserId' => $conversation[$pendingByColumn] !== null
+            ? (int)$conversation[$pendingByColumn]
             : null,
-        'pendingRequestedAt' => $conversation['relay_ttl_requested_at'] ?? null,
-        'options' => dmRelayTtlOptions()
+        'pendingRequestedAt' => $conversation[$pendingAtColumn] ?? null,
+        'options' => $options
     ];
+}
+
+function dmBuildRelayPolicyRow(array $conversation): array {
+    return dmBuildPolicyRow(
+        $conversation,
+        'relay_ttl_seconds',
+        'relay_ttl_requested_seconds',
+        'relay_ttl_requested_by_user_id',
+        'relay_ttl_requested_at',
+        'dmNormalizeRelayTtlSeconds',
+        DM_RELAY_TTL_SECONDS,
+        dmRelayTtlOptions(),
+        'hours',
+        3600
+    );
+}
+
+function dmBuildDisappearingPolicyRow(array $conversation): array {
+    return dmBuildPolicyRow(
+        $conversation,
+        'message_ttl_seconds',
+        'message_ttl_requested_seconds',
+        'message_ttl_requested_by_user_id',
+        'message_ttl_requested_at',
+        'dmNormalizeMessageTtlSeconds',
+        DM_MESSAGE_TTL_SECONDS,
+        dmMessageTtlOptions(),
+        'days',
+        86400
+    );
 }
 
 function dmLoadConversationDetailOrFail(PDO $db, int $conversationId): array {
     $hasKindColumn = dmColumnExists($db, 'dm_conversations', 'kind');
     $hasTitleColumn = dmColumnExists($db, 'dm_conversations', 'title');
+    $hasMessageTtlColumn = dmColumnExists($db, 'dm_conversations', 'message_ttl_seconds');
+    $hasMessageTtlRequestedColumn = dmColumnExists($db, 'dm_conversations', 'message_ttl_requested_seconds');
+    $hasMessageTtlRequestedByColumn = dmColumnExists($db, 'dm_conversations', 'message_ttl_requested_by_user_id');
+    $hasMessageTtlRequestedAtColumn = dmColumnExists($db, 'dm_conversations', 'message_ttl_requested_at');
     $conversationStmt = $db->prepare('
         SELECT
             id,
@@ -127,6 +188,18 @@ function dmLoadConversationDetailOrFail(PDO $db, int $conversationId): array {
             relay_ttl_requested_seconds,
             relay_ttl_requested_by_user_id,
             relay_ttl_requested_at' .
+            ($hasMessageTtlColumn ? ',
+            message_ttl_seconds' : ',
+            0 AS message_ttl_seconds') .
+            ($hasMessageTtlRequestedColumn ? ',
+            message_ttl_requested_seconds' : ',
+            NULL AS message_ttl_requested_seconds') .
+            ($hasMessageTtlRequestedByColumn ? ',
+            message_ttl_requested_by_user_id' : ',
+            NULL AS message_ttl_requested_by_user_id') .
+            ($hasMessageTtlRequestedAtColumn ? ',
+            message_ttl_requested_at' : ',
+            NULL AS message_ttl_requested_at') .
             ($hasKindColumn ? ',
             kind' : ',
             "direct" AS kind') .
@@ -236,6 +309,7 @@ function dmFetchConversationPayload(PDO $db, int $conversationId): array {
             'createdAt' => $conversation['created_at'],
             'updatedAt' => $conversation['updated_at'],
             'relayPolicy' => dmBuildRelayPolicyRow($conversation),
+            'disappearingPolicy' => dmBuildDisappearingPolicyRow($conversation),
             'pendingInviteCount' => $pendingInviteCount,
             'participants' => array_map(function ($row) {
                 $profile = userProfileFromRow($row);

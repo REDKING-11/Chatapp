@@ -5,9 +5,16 @@ export default function MessageList({
     messages,
     loading,
     currentUser,
+    markdownLinkContext = null,
+    messageLinkBase = "",
     onReply,
     onEdit,
-    onDelete
+    onDelete,
+    onToggleReaction,
+    onCopyLink,
+    selectedMessageId = null,
+    onSelectMessage = null,
+    reactionPickerRequest = null
 }) {
     if (loading) {
         return <p>Loading messages...</p>;
@@ -33,9 +40,21 @@ export default function MessageList({
                     message={message}
                     messageMap={messageMap}
                     currentUser={currentUser}
+                    markdownLinkContext={markdownLinkContext}
+                    messageLinkBase={messageLinkBase}
                     onReply={onReply}
                     onEdit={onEdit}
                     onDelete={onDelete}
+                    onToggleReaction={onToggleReaction}
+                    onCopyLink={onCopyLink}
+                    isSelected={String(selectedMessageId || "") === String(message.id)}
+                    onSelect={onSelectMessage}
+                    openReactionPickerSignal={
+                        reactionPickerRequest?.messageId != null
+                        && String(reactionPickerRequest.messageId) === String(message.id)
+                            ? reactionPickerRequest.token
+                            : 0
+                    }
                 />
             ))}
         </>

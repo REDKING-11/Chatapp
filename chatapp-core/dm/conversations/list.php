@@ -43,7 +43,8 @@ $conversations = array_map(function ($row) use ($db, $currentUserId) {
         'createdAt' => $conversation['createdAt'],
         'updatedAt' => $conversation['updatedAt'],
         'participants' => $conversation['participants'] ?? [],
-        'relayPolicy' => $conversation['relayPolicy'] ?? null
+        'relayPolicy' => $conversation['relayPolicy'] ?? null,
+        'disappearingPolicy' => $conversation['disappearingPolicy'] ?? null
     ];
 }, $rows);
 

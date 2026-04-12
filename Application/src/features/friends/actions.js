@@ -3,10 +3,12 @@ import { getCoreApiBase } from "../../lib/env";
 import { getStoredAuthToken } from "../session/actions";
 import {
     createDirectConversation,
+    DISAPPEARING_MESSAGE_OPTIONS,
     fetchUserDmDevices,
     importRemoteConversation,
     RELAY_RETENTION_OPTIONS,
     updateRelayRetention,
+    updateDisappearingMessages,
     sendDirectMessage
 } from "../dm/actions";
 
@@ -39,6 +41,22 @@ async function fetchRemoteConversationMetadata(conversationId) {
     const data = await parseJsonResponse(res, "Failed to load conversation details");
 
     return data.conversation || { id: conversationId };
+}
+
+async function syncLocalConversationMetadata({ currentUser, conversation }) {
+    if (!window.secureDm?.syncConversationMetadata || !conversation?.id) {
+        return;
+    }
+
+    try {
+        await window.secureDm.syncConversationMetadata({
+            userId: currentUser.id,
+            username: currentUser.username,
+            conversation
+        });
+    } catch (error) {
+        console.warn("Failed to sync local DM conversation metadata:", error);
+    }
 }
 
 async function hasLocalConversationAccess({ currentUser, conversationId }) {
@@ -219,6 +237,10 @@ export async function linkFriendConversation(friendUserId, conversationId) {
 export async function openFriendConversation({ currentUser, friend }) {
     if (friend.conversationId) {
         const remoteConversation = await fetchRemoteConversationMetadata(friend.conversationId);
+        await syncLocalConversationMetadata({
+            currentUser,
+            conversation: remoteConversation
+        });
         const hasAccess = await hasLocalConversationAccess({
             currentUser,
             conversationId: friend.conversationId
@@ -313,7 +335,7 @@ export async function importPendingHistoryTransfers({ currentUser }) {
     return imported;
 }
 
-export async function initializeFriendDirectConversation({ currentUser, friend, relayTtlSeconds }) {
+export async function initializeFriendDirectConversation({ currentUser, friend, relayTtlSeconds, messageTtlSeconds = 0 }) {
     const token = getStoredAuthToken();
     let conversationId = friend.conversationId;
     let conversation = null;
@@ -338,7 +360,8 @@ export async function initializeFriendDirectConversation({ currentUser, friend, 
             id: friend.friendUserId,
             username: friend.friendUsername
         },
-        relayTtlSeconds
+        relayTtlSeconds,
+        messageTtlSeconds
     });
 
     conversationId = created.remoteConversation.id;
@@ -360,11 +383,12 @@ export async function initializeFriendDirectConversation({ currentUser, friend, 
     };
 }
 
-export async function sendFriendDirectMessage({ currentUser, friend, body, relayTtlSeconds, replyTo = null }) {
+export async function sendFriendDirectMessage({ currentUser, friend, body, relayTtlSeconds, messageTtlSeconds = 0, replyTo = null, attachments = [] }) {
     const initialized = await initializeFriendDirectConversation({
         currentUser,
         friend,
-        relayTtlSeconds
+        relayTtlSeconds,
+        messageTtlSeconds
     });
     const conversationId = initialized.conversationId;
 
@@ -374,8 +398,9 @@ export async function sendFriendDirectMessage({ currentUser, friend, body, relay
         conversationId,
         body,
         messageOptions: {
-            kind: "message",
-            replyTo
+          kind: "message",
+          replyTo,
+          attachments
         }
     });
 
@@ -430,6 +455,25 @@ export async function deleteFriendDirectMessage({ currentUser, friend, messageId
     });
 }
 
+export async function toggleFriendDirectReaction({ currentUser, friend, messageId, emoji }) {
+    await sendDirectMessage({
+        token: getStoredAuthToken(),
+        currentUser,
+        conversationId: friend.conversationId,
+        body: "",
+        messageOptions: {
+            kind: "reaction",
+            targetMessageId: messageId,
+            emoji
+        }
+    });
+
+    return openFriendConversation({
+        currentUser,
+        friend
+    });
+}
+
 export async function requestFriendRelayRetention({ conversationId, relayTtlSeconds }) {
     const token = getStoredAuthToken();
     const data = await updateRelayRetention({
@@ -439,7 +483,7 @@ export async function requestFriendRelayRetention({ conversationId, relayTtlSeco
         mode: "request"
     });
 
-    return data.conversation?.relayPolicy || null;
+    return data.conversation || null;
 }
 
 export async function acceptFriendRelayRetention({ conversationId }) {
@@ -452,5 +496,30 @@ export async function acceptFriendRelayRetention({ conversationId }) {
         mode: "accept"
     });
 
-    return data.conversation?.relayPolicy || null;
+    return data.conversation || null;
+}
+
+export async function requestFriendDisappearingMessages({ conversationId, messageTtlSeconds }) {
+    const token = getStoredAuthToken();
+    const data = await updateDisappearingMessages({
+        token,
+        conversationId,
+        messageTtlSeconds,
+        mode: "request"
+    });
+
+    return data.conversation || null;
+}
+
+export async function acceptFriendDisappearingMessages({ conversationId }) {
+    const token = getStoredAuthToken();
+    const fallbackSeconds = DISAPPEARING_MESSAGE_OPTIONS.find((option) => option.seconds === 1209600)?.seconds ?? 1209600;
+    const data = await updateDisappearingMessages({
+        token,
+        conversationId,
+        messageTtlSeconds: fallbackSeconds,
+        mode: "accept"
+    });
+
+    return data.conversation || null;
 }

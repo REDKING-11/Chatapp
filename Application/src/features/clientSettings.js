@@ -154,6 +154,31 @@ export const CLIENT_SETTINGS_DEFAULTS = {
     sharedServerProfileMediaOnly: true
 };
 
+export const CLIENT_SETTINGS_SECTION_KEYS = {
+    theme: ["themePreset"],
+    readability: ["fontScale", "lineHeight", "uiDensity", "hitTargetSize"],
+    chatIdentity: ["chatIdentityStyle", "chatNameMode", "chatMessageAlignment"],
+    accessibility: ["reducedMotion", "highContrast", "colorBlindMode", "dyslexicFont"],
+    developer: ["debugMode"],
+    profileMedia: ["autoLoadProfileAvatars", "autoLoadProfileBanners", "sharedServerProfileMediaOnly"]
+};
+
+export const CLIENT_SETTINGS_TAB_KEYS = {
+    general: [
+        ...CLIENT_SETTINGS_SECTION_KEYS.theme,
+        ...CLIENT_SETTINGS_SECTION_KEYS.readability,
+        ...CLIENT_SETTINGS_SECTION_KEYS.chatIdentity,
+        ...CLIENT_SETTINGS_SECTION_KEYS.accessibility
+    ],
+    profile: [
+        ...CLIENT_SETTINGS_SECTION_KEYS.profileMedia
+    ],
+    advanced: [
+        ...CLIENT_SETTINGS_SECTION_KEYS.developer
+    ],
+    more: []
+};
+
 function sanitizeFriendTagAssignments(rawAssignments) {
     if (!rawAssignments || typeof rawAssignments !== "object" || Array.isArray(rawAssignments)) {
         return {};
@@ -309,6 +334,38 @@ export function saveClientSettings(settings) {
         }, 0);
     }
     return next;
+}
+
+export function resetClientSettingsSection(settings, sectionId) {
+    const keys = CLIENT_SETTINGS_SECTION_KEYS[sectionId];
+
+    if (!Array.isArray(keys) || keys.length === 0) {
+        return saveClientSettings(settings);
+    }
+
+    const next = { ...settings };
+
+    keys.forEach((key) => {
+        next[key] = CLIENT_SETTINGS_DEFAULTS[key];
+    });
+
+    return saveClientSettings(next);
+}
+
+export function resetClientSettingsTab(settings, tabId) {
+    const keys = CLIENT_SETTINGS_TAB_KEYS[tabId];
+
+    if (!Array.isArray(keys) || keys.length === 0) {
+        return saveClientSettings(settings);
+    }
+
+    const next = { ...settings };
+
+    keys.forEach((key) => {
+        next[key] = CLIENT_SETTINGS_DEFAULTS[key];
+    });
+
+    return saveClientSettings(next);
 }
 
 export function buildClientSettingsExport(settings) {

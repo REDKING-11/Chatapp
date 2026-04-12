@@ -70,3 +70,22 @@ export async function leaveServer(serverId) {
 
     return parseJsonResponse(res, "Failed to leave server");
 }
+
+export async function createServerChannel({ backendUrl, name, type }) {
+    try {
+        const res = await fetch(`${backendUrl}/api/server/channels`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                name,
+                type
+            })
+        });
+
+        return parseJsonResponse(res, "Failed to create channel");
+    } catch (error) {
+        throw normalizeServerFetchError(error, "Server is offline or unreachable");
+    }
+}

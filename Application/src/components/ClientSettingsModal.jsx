@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-    CLIENT_SETTINGS_DEFAULTS,
+    CLIENT_SETTINGS_TAB_KEYS,
     downloadClientSettings,
     importClientSettingsFromFile,
     THEME_PRESETS
@@ -13,6 +13,9 @@ import {
     uploadProfileAssets
 } from "../features/profile/actions";
 import { formatAppError } from "../lib/debug";
+import PolicyDocumentModal from "./PolicyDocumentModal";
+import privacyPolicyMarkdown from "../assets/PP.md?raw";
+import termsOfServiceMarkdown from "../assets/TOS.md?raw";
 
 const FONT_SCALE_OPTIONS = [
     { value: 0.9, label: "Compact" },
@@ -68,7 +71,38 @@ const CHAT_MESSAGE_ALIGNMENT_OPTIONS = [
 const SETTINGS_TABS = [
     { id: "general", label: "General" },
     { id: "profile", label: "Profile" },
-    { id: "advanced", label: "Advanced" }
+    { id: "advanced", label: "Advanced" },
+    { id: "more", label: "More" }
+];
+
+const SHORTCUT_GROUPS = [
+    {
+        title: "Messaging",
+        items: [
+            { keys: "Ctrl + Enter", description: "Send the current message from the composer." },
+            { keys: "Ctrl + Shift + E", description: "Focus the active message composer." },
+            { keys: "Ctrl + Shift + .", description: "Open the active emoji picker." },
+            { keys: "Ctrl + Shift + F", description: "Open the active file picker." },
+            { keys: "Ctrl + Shift + R", description: "Open reactions for the selected or latest message." },
+            { keys: "Up", description: "Edit your last message when the composer is empty." }
+        ]
+    },
+    {
+        title: "Windows",
+        items: [
+            { keys: "Alt + S", description: "Open conversation settings in the current DM." },
+            { keys: "Ctrl + ,", description: "Open Client Settings from anywhere in the app." },
+            { keys: "Ctrl + K", description: "Open the quick switcher for friends, groups, servers, and channels." },
+            { keys: "Esc", description: "Close open popouts, pickers, modals, and menus." }
+        ]
+    },
+    {
+        title: "Server Navigation",
+        items: [
+            { keys: "Alt + Enter", description: "Open Server Settings for the current server." },
+            { keys: "Ctrl + Shift + S", description: "Alternative shortcut for Server Settings." }
+        ]
+    }
 ];
 
 const PROFILE_MEDIA_LIMITS = {
@@ -182,7 +216,7 @@ export default function ClientSettingsModal({
     onChange,
     onImport,
     onUserUpdated,
-    onReset,
+    onTabReset,
     onClose
 }) {
     const importInputRef = useRef(null);
@@ -199,6 +233,7 @@ export default function ClientSettingsModal({
     const [profileSaving, setProfileSaving] = useState(false);
     const [mediaUploading, setMediaUploading] = useState(false);
     const [mediaEditor, setMediaEditor] = useState(null);
+    const [openPolicy, setOpenPolicy] = useState("");
     const [collapsedSections, setCollapsedSections] = useState({
         identity: false,
         theme: false,
@@ -207,11 +242,15 @@ export default function ClientSettingsModal({
         profileMedia: false,
         friendTags: false,
         developer: true,
-        preview: true
+        preview: true,
+        shortcuts: false,
+        policies: false
     });
     const userLabel = currentUser?.displayName || currentUser?.usernameBase || currentUser?.username || "User";
     const userHandle = currentUser?.handle || currentUser?.username || "unknown";
     const userInitial = useMemo(() => userLabel.trim().slice(0, 1).toUpperCase() || "?", [userLabel]);
+    const activeTabLabel = SETTINGS_TABS.find((tab) => tab.id === activeTab)?.label || "tab";
+    const canResetActiveTab = (CLIENT_SETTINGS_TAB_KEYS[activeTab] || []).length > 0;
 
     useEffect(() => {
         setDisplayName(currentUser?.displayName || "");
@@ -561,9 +600,15 @@ export default function ClientSettingsModal({
                         >
                             Import
                         </button>
-                        <button type="button" className="secondary" onClick={onReset}>
-                            Reset
-                        </button>
+                        {canResetActiveTab ? (
+                            <button
+                                type="button"
+                                className="secondary"
+                                onClick={() => onTabReset?.(activeTab)}
+                            >
+                                Reset {activeTabLabel}
+                            </button>
+                        ) : null}
                         <button type="button" className="secondary" onClick={onClose}>
                             Close
                         </button>
@@ -1086,6 +1131,54 @@ export default function ClientSettingsModal({
                         </div>
                     </CollapsibleSection>
                     ) : null}
+
+                    {activeTab === "more" ? (
+                        <>
+                    <CollapsibleSection
+                        title="Shortcuts"
+                        description="Keyboard shortcuts you can learn now, with room for more later."
+                        isOpen={!collapsedSections.shortcuts}
+                        onToggle={() => toggleSection("shortcuts")}
+                    >
+                        <div className="client-shortcut-groups">
+                            {SHORTCUT_GROUPS.map((group) => (
+                                <section key={group.title} className="client-shortcut-card">
+                                    <h4>{group.title}</h4>
+                                    <div className="client-shortcut-list">
+                                        {group.items.map((item) => (
+                                            <div key={item.keys} className="client-shortcut-row">
+                                                <span className="client-shortcut-keys">{item.keys}</span>
+                                                <p>{item.description}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </section>
+                            ))}
+                        </div>
+                    </CollapsibleSection>
+
+                    <CollapsibleSection
+                        title="Policies"
+                        description="Your current privacy policy and terms documents, kept easy to find after onboarding."
+                        isOpen={!collapsedSections.policies}
+                        onToggle={() => toggleSection("policies")}
+                    >
+                        <div className="client-policy-grid">
+                            <button type="button" className="client-policy-card client-policy-launch" onClick={() => setOpenPolicy("privacy")}>
+                                <h4 className="policy-h4">Privacy Policy</h4>
+                                <p>Open the full privacy policy in a plain reading page with its own controls.</p>
+                            </button>
+                            <button type="button" className="client-policy-card client-policy-launch" onClick={() => setOpenPolicy("terms")}>
+                                <h4 className="policy-h4">Terms Of Service</h4>
+                                <p>Open the full terms document in a plain reading page with chapter navigation.</p>
+                            </button>
+                        </div>
+                        <p className="client-settings-muted">
+                            This page is meant to grow over time with more shortcuts, helper docs, and policy details.
+                        </p>
+                    </CollapsibleSection>
+                        </>
+                    ) : null}
                 </div>
                 </div>
 
@@ -1155,6 +1248,24 @@ export default function ClientSettingsModal({
                             </div>
                         </div>
                     </div>
+                ) : null}
+
+                {openPolicy === "privacy" ? (
+                    <PolicyDocumentModal
+                        title="Privacy Policy"
+                        markdown={privacyPolicyMarkdown}
+                        overlayMode="nested"
+                        onClose={() => setOpenPolicy("")}
+                    />
+                ) : null}
+
+                {openPolicy === "terms" ? (
+                    <PolicyDocumentModal
+                        title="Terms Of Service"
+                        markdown={termsOfServiceMarkdown}
+                        overlayMode="nested"
+                        onClose={() => setOpenPolicy("")}
+                    />
                 ) : null}
             </div>
         </div>
