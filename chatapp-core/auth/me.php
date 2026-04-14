@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../user_profile.php';
+require_once __DIR__ . '/_bootstrap.php';
 
 function getBearerToken(): ?string {
     $authHeader = '';
@@ -41,34 +42,12 @@ function getBearerToken(): ?string {
 $token = getBearerToken();
 
 if (!$token) {
-    jsonResponse([
-        'error' => 'Missing token',
-        'debug' => [
-            'HTTP_AUTHORIZATION' => $_SERVER['HTTP_AUTHORIZATION'] ?? null,
-            'REDIRECT_HTTP_AUTHORIZATION' => $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null,
-        ]
-    ], 401);
+    jsonResponse(['error' => 'Missing authorization token'], 401);
 }
 
 $db = getDb();
-
-$stmt = $db->prepare('
-    SELECT
-        users.id,
-        users.username,
-        users.email,
-        users.phone,
-        sessions.expires_at,
-        ' . userProfileDisplayNameSelect($db, 'users') . ',
-        ' . userProfileUsernameTagSelect($db, 'users') . '
-    FROM sessions
-    JOIN users ON users.id = sessions.user_id
-    WHERE sessions.token = ?
-    LIMIT 1
-');
-$stmt->execute([$token]);
-
-$session = $stmt->fetch();
+authBootstrap($db);
+$session = authFindSessionByToken($db, $token, true);
 
 if (!$session) {
     jsonResponse(['error' => 'Invalid token'], 401);
@@ -78,14 +57,17 @@ if (strtotime($session['expires_at']) < time()) {
     jsonResponse(['error' => 'Token expired'], 401);
 }
 
+$currentLastSeenAt = authTouchSession($db, $token) ?? ($session['last_seen_at'] ?? gmdate('Y-m-d H:i:s'));
+
+$totpState = authGetTotpState($db, (int)$session['id']);
+
 jsonResponse([
     'ok' => true,
-    'user' => array_merge(
-        [
-            'id' => (int)$session['id'],
-            'email' => $session['email'],
-            'phone' => $session['phone']
-        ],
-        userProfileFromRow($session)
-    )
+    'user' => authBuildUserPayload($session),
+    'currentSession' => authBuildCurrentSessionPayload($session, $currentLastSeenAt),
+    'mfa' => [
+        'enabled' => !empty($totpState['enabled']),
+        'enabledAt' => $totpState['enabledAt'],
+        'lastVerifiedAt' => $totpState['lastVerifiedAt']
+    ]
 ]);

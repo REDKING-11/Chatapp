@@ -1,14 +1,39 @@
 import {
+  buildSafetyNumber,
   createConversationKey,
   decryptPayload,
   encryptPayload,
+  fingerprintPublicKey,
+  formatFingerprint,
   generateDeviceIdentity,
   hashPublicKey,
   randomId,
+  signMessageEnvelope,
+  signDeviceBundle,
   unwrapConversationKeyForDevice,
+  verifyDeviceBundleSignature,
+  verifyMessageEnvelopeSignature,
   wrapConversationKeyForRecipient
 } from "./crypto";
 import { readSecureDmStore, writeSecureDmStore } from "./storage";
+import {
+  buildOutgoingAttachmentPayload,
+  registerIncomingAttachmentPayload
+} from "../transfers/service";
+
+const FORBIDDEN_DM_EXPORT_KEYS = new Set([
+  "body",
+  "plaintext",
+  "replyTo",
+  "attachments",
+  "conversationKey",
+  "encryptionPrivateKey",
+  "signingPrivateKey",
+  "masterKey",
+  "wrappedMasterKey",
+  "privateKey"
+]);
+const pendingDeviceRotations = new Map();
 
 function getUserState(store, userId) {
   const key = String(userId);
@@ -31,7 +56,8 @@ function ensureDevice(userId, username, deviceName = "Desktop") {
     userState.device = {
       ...generateDeviceIdentity(deviceName),
       userId: Number(userId),
-      username
+      username,
+      keyVersion: 1
     };
     writeSecureDmStore(store);
   }
@@ -75,6 +101,158 @@ function normalizeReplyTo(value) {
   };
 }
 
+function ensureLegacyConversationKeys(conversation) {
+  if (!Array.isArray(conversation.legacyConversationKeys)) {
+    conversation.legacyConversationKeys = [];
+  }
+
+  return conversation.legacyConversationKeys;
+}
+
+function rememberLegacyConversationKey(conversation, conversationKey) {
+  const key = String(conversationKey || "");
+
+  if (!key) {
+    return;
+  }
+
+  const legacyKeys = ensureLegacyConversationKeys(conversation);
+  if (!legacyKeys.includes(key) && key !== String(conversation.conversationKey || "")) {
+    legacyKeys.unshift(key);
+  }
+}
+
+function getConversationKeysForRead(conversation) {
+  const currentKey = String(conversation?.conversationKey || "");
+  const legacyKeys = Array.isArray(conversation?.legacyConversationKeys) ? conversation.legacyConversationKeys : [];
+
+  return [currentKey, ...legacyKeys]
+    .map((entry) => String(entry || ""))
+    .filter((entry, index, collection) => entry && collection.indexOf(entry) === index);
+}
+
+function decryptConversationEnvelope(conversation, envelope) {
+  let lastError = null;
+
+  for (const conversationKey of getConversationKeysForRead(conversation)) {
+    try {
+      return decryptPayload({
+        conversationKey,
+        ciphertext: envelope.ciphertext,
+        nonce: envelope.nonce,
+        aad: envelope.aad,
+        tag: envelope.tag
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error("Unable to decrypt DM message with known conversation keys");
+}
+
+function ensureConversationTrustState(conversation) {
+  if (!conversation.deviceTrust || typeof conversation.deviceTrust !== "object" || Array.isArray(conversation.deviceTrust)) {
+    conversation.deviceTrust = {
+      verifiedDeviceIds: {}
+    };
+  }
+
+  if (!conversation.deviceTrust.verifiedDeviceIds || typeof conversation.deviceTrust.verifiedDeviceIds !== "object" || Array.isArray(conversation.deviceTrust.verifiedDeviceIds)) {
+    conversation.deviceTrust.verifiedDeviceIds = {};
+  }
+
+  return conversation.deviceTrust;
+}
+
+function ensureConversationReplayState(conversation) {
+  if (!conversation.replayProtection || typeof conversation.replayProtection !== "object" || Array.isArray(conversation.replayProtection)) {
+    conversation.replayProtection = {
+      seenMessageIds: {},
+      seenRemoteMessageIds: {},
+      seenEnvelopeSignatures: {}
+    };
+  }
+
+  if (!conversation.replayProtection.seenMessageIds || typeof conversation.replayProtection.seenMessageIds !== "object" || Array.isArray(conversation.replayProtection.seenMessageIds)) {
+    conversation.replayProtection.seenMessageIds = {};
+  }
+
+  if (!conversation.replayProtection.seenRemoteMessageIds || typeof conversation.replayProtection.seenRemoteMessageIds !== "object" || Array.isArray(conversation.replayProtection.seenRemoteMessageIds)) {
+    conversation.replayProtection.seenRemoteMessageIds = {};
+  }
+
+  if (!conversation.replayProtection.seenEnvelopeSignatures || typeof conversation.replayProtection.seenEnvelopeSignatures !== "object" || Array.isArray(conversation.replayProtection.seenEnvelopeSignatures)) {
+    conversation.replayProtection.seenEnvelopeSignatures = {};
+  }
+
+  return conversation.replayProtection;
+}
+
+function recordReplayProofs(conversation, message) {
+  const replayState = ensureConversationReplayState(conversation);
+  const now = new Date().toISOString();
+
+  if (message?.messageId != null && String(message.messageId)) {
+    replayState.seenMessageIds[String(message.messageId)] = message.createdAt || now;
+  }
+
+  if (message?.remoteMessageId != null && String(message.remoteMessageId)) {
+    replayState.seenRemoteMessageIds[String(message.remoteMessageId)] = message.createdAt || now;
+  }
+
+  if (message?.signature != null && String(message.signature)) {
+    replayState.seenEnvelopeSignatures[String(message.signature)] = message.createdAt || now;
+  }
+}
+
+function rebuildReplayProtection(conversation) {
+  conversation.replayProtection = {
+    seenMessageIds: {},
+    seenRemoteMessageIds: {},
+    seenEnvelopeSignatures: {}
+  };
+
+  (Array.isArray(conversation.messages) ? conversation.messages : []).forEach((message) => {
+    recordReplayProofs(conversation, message);
+  });
+
+  return conversation.replayProtection;
+}
+
+function detectReplay(conversation, relayItem) {
+  const replayState = ensureConversationReplayState(conversation);
+
+  if (relayItem?.signature && replayState.seenEnvelopeSignatures[String(relayItem.signature)]) {
+    return "signature";
+  }
+
+  if (relayItem?.messageId && replayState.seenRemoteMessageIds[String(relayItem.messageId)]) {
+    return "remoteMessageId";
+  }
+
+  return null;
+}
+
+function buildPublishedDeviceBundle(device) {
+  const bundle = {
+    userId: Number(device.userId),
+    deviceId: device.deviceId,
+    deviceName: device.deviceName,
+    algorithm: device.algorithm,
+    signingAlgorithm: device.signingAlgorithm,
+    keyVersion: Math.max(1, Number(device.keyVersion) || 1),
+    encryptionPublicKey: device.encryptionPublicKey,
+    signingPublicKey: device.signingPublicKey
+  };
+
+  return {
+    ...bundle,
+    publicKeyFingerprint: hashPublicKey(device.encryptionPublicKey),
+    bundleSignature: signDeviceBundle(bundle, device.signingPrivateKey)
+  };
+}
+
 function normalizeAttachments(value) {
   if (!Array.isArray(value)) {
     return [];
@@ -90,10 +268,27 @@ function normalizeAttachments(value) {
         transferId: entry.transferId ? String(entry.transferId) : "",
         fileName: entry.fileName ? String(entry.fileName) : "file",
         mimeType: entry.mimeType ? String(entry.mimeType) : "application/octet-stream",
-        fileSize: Math.max(0, Number(entry.fileSize) || 0)
+        fileSize: Math.max(0, Number(entry.fileSize) || 0),
+        algorithm: entry.encryption?.algorithm ? String(entry.encryption.algorithm) : undefined
       };
     })
     .filter((entry) => entry && entry.transferId);
+}
+
+function materializeEncryptedAttachments(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object" || !entry.transferId) {
+      return null;
+    }
+
+    return buildOutgoingAttachmentPayload({
+      transferId: entry.transferId
+    });
+  }).filter(Boolean);
 }
 
 function normalizeDisappearingSeconds(value) {
@@ -229,6 +424,10 @@ function inferMessageKind(payload) {
     return "reaction";
   }
 
+  if (payload.messageTtlSeconds != null && String(payload.kind || "").startsWith("disappearing")) {
+    return String(payload.kind);
+  }
+
   return "message";
 }
 
@@ -242,7 +441,9 @@ function buildControlMetadata(payload) {
   return {
     kind,
     targetMessageId: payload?.targetMessageId ? String(payload.targetMessageId) : null,
-    emoji: payload?.emoji ? String(payload.emoji) : null
+    emoji: payload?.emoji ? String(payload.emoji) : null,
+    messageTtlSeconds: payload?.messageTtlSeconds != null ? normalizeDisappearingSeconds(payload.messageTtlSeconds) : null,
+    mode: payload?.mode ? String(payload.mode) : null
   };
 }
 
@@ -272,22 +473,102 @@ function pruneExpiredMessagesInConversation(conversation) {
   return conversation.messages.length !== originalLength;
 }
 
+function assertCiphertextOnlyDmExport(value, path = "conversationExport") {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertCiphertextOnlyDmExport(entry, `${path}[${index}]`));
+    return;
+  }
+
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  Object.entries(value).forEach(([key, entryValue]) => {
+    if (FORBIDDEN_DM_EXPORT_KEYS.has(String(key))) {
+      throw new Error(`DM export attempted to include sensitive plaintext or key material at ${path}.${key}`);
+    }
+
+    assertCiphertextOnlyDmExport(entryValue, `${path}.${key}`);
+  });
+}
+
 export function initializeDevice({ userId, username, deviceName }) {
   const { userState } = ensureDevice(userId, username, deviceName);
 
-  return {
-    deviceId: userState.device.deviceId,
-    deviceName: userState.device.deviceName,
-    algorithm: userState.device.algorithm,
-    signingAlgorithm: userState.device.signingAlgorithm,
-    keyVersion: 1,
-    encryptionPublicKey: userState.device.encryptionPublicKey,
-    signingPublicKey: userState.device.signingPublicKey,
-    publicKeyFingerprint: hashPublicKey(userState.device.encryptionPublicKey)
-  };
+  return buildPublishedDeviceBundle(userState.device);
 }
 
 export const getDeviceBundle = initializeDevice;
+
+export function beginDeviceIdentityRotation({ userId, username, deviceName }) {
+  const { store, userState } = ensureDevice(userId, username, deviceName);
+  const existingDevice = userState.device;
+  const rotatedIdentity = generateDeviceIdentity(deviceName || existingDevice?.deviceName || "Desktop");
+  const rotationKey = String(userId);
+
+  pendingDeviceRotations.set(rotationKey, JSON.parse(JSON.stringify(existingDevice)));
+
+  userState.device = {
+    ...rotatedIdentity,
+    deviceId: existingDevice?.deviceId || rotatedIdentity.deviceId,
+    userId: Number(userId),
+    username,
+    deviceName: deviceName || existingDevice?.deviceName || rotatedIdentity.deviceName,
+    createdAt: existingDevice?.createdAt || rotatedIdentity.createdAt,
+    rotatedAt: new Date().toISOString(),
+    keyVersion: Math.max(1, Number(existingDevice?.keyVersion) || 1) + 1
+  };
+
+  writeSecureDmStore(store);
+  return buildPublishedDeviceBundle(userState.device);
+}
+
+export function commitDeviceIdentityRotation({ userId }) {
+  pendingDeviceRotations.delete(String(userId));
+  return { ok: true };
+}
+
+export function rollbackDeviceIdentityRotation({ userId, username, deviceName }) {
+  const rotationKey = String(userId);
+  const previousDevice = pendingDeviceRotations.get(rotationKey);
+
+  if (!previousDevice) {
+    return getDeviceBundle({ userId, username, deviceName });
+  }
+
+  const { store, userState } = ensureDevice(userId, username, deviceName);
+  userState.device = previousDevice;
+  writeSecureDmStore(store);
+  pendingDeviceRotations.delete(rotationKey);
+
+  return buildPublishedDeviceBundle(userState.device);
+}
+
+export const rotateDeviceIdentity = beginDeviceIdentityRotation;
+
+export function verifyDeviceBundles({ expectedUserId, devices }) {
+  const verifiedDevices = (Array.isArray(devices) ? devices : []).map((device) => {
+    const normalizedDevice = {
+      ...device,
+      userId: Number(device?.userId)
+    };
+
+    if (normalizedDevice.userId !== Number(expectedUserId)) {
+      throw new Error(`Device bundle user mismatch for ${normalizedDevice.deviceId || "unknown-device"}`);
+    }
+
+    if (!verifyDeviceBundleSignature(normalizedDevice)) {
+      throw new Error(`Device bundle signature verification failed for ${normalizedDevice.deviceId || "unknown-device"}`);
+    }
+
+    return normalizedDevice;
+  });
+
+  return {
+    ok: true,
+    devices: verifiedDevices
+  };
+}
 
 export function createConversation({ userId, username, title, participants, recipientDevices }) {
   const { store, userState } = ensureDevice(userId, username);
@@ -322,8 +603,17 @@ export function createConversation({ userId, username, title, participants, reci
       new Set([Number(userId), ...(Array.isArray(participants) ? participants : []).map(Number)])
     ),
     conversationKey,
+    legacyConversationKeys: [],
     wrappedKeys,
     messages: [],
+    deviceTrust: {
+      verifiedDeviceIds: {}
+    },
+    replayProtection: {
+      seenMessageIds: {},
+      seenRemoteMessageIds: {},
+      seenEnvelopeSignatures: {}
+    },
     disappearingMessageSeconds: 0,
     createdAt: new Date().toISOString()
   };
@@ -378,7 +668,14 @@ export function importConversation({ userId, username, conversation }) {
 
   userState.conversations[String(conversation.id)] = {
     ...syncConversationRecord(existingConversation, conversation),
-    conversationKey,
+    conversationKey: existingConversation?.conversationKey || conversationKey,
+    legacyConversationKeys: existingConversation?.legacyConversationKeys || [],
+    deviceTrust: existingConversation?.deviceTrust || { verifiedDeviceIds: {} },
+    replayProtection: existingConversation?.replayProtection || {
+      seenMessageIds: {},
+      seenRemoteMessageIds: {},
+      seenEnvelopeSignatures: {}
+    },
     messages: Array.isArray(conversation.messages)
       ? mergeStoredMessages(existingConversation?.messages || [], conversation.messages.map((message) => {
           let plaintext = null;
@@ -406,6 +703,7 @@ export function importConversation({ userId, username, conversation }) {
             nonce: message.nonce,
             aad: message.aad,
             tag: message.tag,
+            signature: message.signature ?? null,
             createdAt: message.createdAt,
             direction: Number(message.senderUserId) === Number(userId) ? "outgoing" : "incoming",
             control
@@ -413,6 +711,13 @@ export function importConversation({ userId, username, conversation }) {
         }))
       : existingConversation?.messages || []
   };
+
+  if (existingConversation?.conversationKey && existingConversation.conversationKey !== conversationKey) {
+    rememberLegacyConversationKey(userState.conversations[String(conversation.id)], existingConversation.conversationKey);
+    userState.conversations[String(conversation.id)].conversationKey = conversationKey;
+  }
+
+  rebuildReplayProtection(userState.conversations[String(conversation.id)]);
 
   pruneExpiredMessagesInConversation(userState.conversations[String(conversation.id)]);
 
@@ -431,6 +736,7 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
         id: messageId,
         body: plaintext.body ?? "",
         kind: inferMessageKind(plaintext),
+        attachments: materializeEncryptedAttachments(plaintext.attachments),
         createdAt
       }
     : {
@@ -451,6 +757,16 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
     }
   });
   const control = buildControlMetadata(plaintextPayload);
+  const signature = signMessageEnvelope({
+    conversationId,
+    messageId,
+    senderUserId: Number(senderUserId),
+    senderDeviceId: userState.device.deviceId,
+    ciphertext: envelope.ciphertext,
+    nonce: envelope.nonce,
+    aad: envelope.aad,
+    tag: envelope.tag
+  }, userState.device.signingPrivateKey);
 
   const storedMessage = {
     messageId,
@@ -461,12 +777,14 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
     nonce: envelope.nonce,
     aad: envelope.aad,
     tag: envelope.tag,
+    signature,
     createdAt,
     direction: "outgoing",
     control
   };
 
   conversation.messages.push(storedMessage);
+  recordReplayProofs(conversation, storedMessage);
   writeSecureDmStore(store);
 
   return {
@@ -479,22 +797,113 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
     ciphertext: envelope.ciphertext,
     nonce: envelope.nonce,
     aad: envelope.aad,
-    tag: envelope.tag
+    tag: envelope.tag,
+    signature
   };
 }
 
-export function receiveEncryptedMessage({ userId, username, conversationId, relayItem }) {
+export function rotateConversationKey({ userId, username, conversationId, recipientDevices }) {
+  const { store, userState } = ensureDevice(userId, username);
+  const conversation = getConversationOrThrow(userState, conversationId);
+  const previousConversationKey = conversation.conversationKey;
+  const nextConversationKey = createConversationKey();
+  const wrappedKeys = (Array.isArray(recipientDevices) ? recipientDevices : []).map((recipient) => ({
+    recipientUserId: Number(recipient.userId),
+    deviceId: recipient.deviceId,
+    algorithm: "x25519-aes-256-gcm",
+    keyVersion: 1,
+    wrappedConversationKey: JSON.stringify(
+      wrapConversationKeyForRecipient({
+        conversationKey: nextConversationKey,
+        recipientPublicKey: recipient.encryptionPublicKey
+      })
+    )
+  }));
+
+  if (previousConversationKey && previousConversationKey !== nextConversationKey) {
+    rememberLegacyConversationKey(conversation, previousConversationKey);
+  }
+
+  conversation.conversationKey = nextConversationKey;
+  conversation.wrappedKeys = wrappedKeys;
+  conversation.updatedAt = new Date().toISOString();
+  writeSecureDmStore(store);
+
+  return {
+    conversationId,
+    wrappedKeys,
+    rotatedAt: conversation.updatedAt
+  };
+}
+
+export function receiveEncryptedMessage({ userId, username, conversationId, relayItem, senderDevice }) {
   const { store, userState } = ensureDevice(userId, username);
   const conversation = getConversationOrThrow(userState, conversationId);
   const prunedBeforeReceive = pruneExpiredMessagesInConversation(conversation);
-  const plaintext = decryptPayload({
-    conversationKey: conversation.conversationKey,
+  const replayReason = detectReplay(conversation, relayItem);
+
+  if (replayReason) {
+    if (prunedBeforeReceive) {
+      writeSecureDmStore(store);
+    }
+
+    return {
+      id: relayItem.messageId || null,
+      messageId: relayItem.messageId || null,
+      direction: "incoming",
+      imported: false,
+      replayDetected: true,
+      replayReason
+    };
+  }
+
+  if (!senderDevice || String(senderDevice.deviceId || "") !== String(relayItem.senderDeviceId || "")) {
+    throw new Error("Missing verified sender device bundle for DM message");
+  }
+
+  if (Number(senderDevice.userId || 0) !== Number(relayItem.senderUserId || 0)) {
+    throw new Error("Sender device bundle user mismatch");
+  }
+
+  if (!verifyDeviceBundleSignature(senderDevice)) {
+    throw new Error(`Sender device bundle signature verification failed for ${relayItem.senderDeviceId || "unknown-device"}`);
+  }
+
+  if (!verifyMessageEnvelopeSignature({
+    conversationId,
+    messageId: relayItem.messageId,
+    senderUserId: relayItem.senderUserId,
+    senderDeviceId: relayItem.senderDeviceId,
     ciphertext: relayItem.ciphertext,
     nonce: relayItem.nonce,
     aad: relayItem.aad,
     tag: relayItem.tag
-  });
+  }, senderDevice.signingPublicKey, relayItem.signature)) {
+    throw new Error(`DM message signature verification failed for ${relayItem.messageId || "unknown-message"}`);
+  }
+
+  const plaintext = decryptConversationEnvelope(conversation, relayItem);
   const control = buildControlMetadata(plaintext);
+  const replayState = ensureConversationReplayState(conversation);
+
+  if (plaintext?.id && replayState.seenMessageIds[String(plaintext.id)]) {
+    if (prunedBeforeReceive) {
+      writeSecureDmStore(store);
+    }
+
+    return {
+      id: plaintext.id,
+      messageId: plaintext.id,
+      direction: "incoming",
+      imported: false,
+      replayDetected: true,
+      replayReason: "messageId"
+    };
+  }
+
+  (Array.isArray(plaintext.attachments) ? plaintext.attachments : []).forEach((attachment) => {
+    registerIncomingAttachmentPayload(attachment);
+  });
 
   const alreadyExists = conversation.messages.find((message) => (
     message.messageId === plaintext.id
@@ -512,17 +921,31 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
       nonce: relayItem.nonce,
       aad: relayItem.aad,
       tag: relayItem.tag,
+      signature: relayItem.signature,
       createdAt: plaintext.createdAt,
       direction: "incoming",
       control
     });
+    recordReplayProofs(conversation, conversation.messages[conversation.messages.length - 1]);
     writeSecureDmStore(store);
   } else if (prunedBeforeReceive) {
     writeSecureDmStore(store);
   }
 
   return {
-    ...plaintext,
+    id: plaintext.id,
+    messageId: plaintext.id,
+    body: normalizePlaintextBody(plaintext.body),
+    replyTo: normalizeReplyTo(plaintext.replyTo),
+    attachments: normalizeAttachments(plaintext.attachments),
+    reactions: normalizeReactions(plaintext.reactions),
+    editedAt: plaintext.editedAt || null,
+    deletedAt: plaintext.deletedAt || null,
+    isDeleted: Boolean(plaintext.deletedAt),
+    kind: inferMessageKind(plaintext),
+    createdAt: plaintext.createdAt,
+    senderUserId: relayItem.senderUserId ?? null,
+    senderDeviceId: relayItem.senderDeviceId ?? null,
     direction: "incoming",
     imported: !alreadyExists
   };
@@ -533,13 +956,7 @@ function buildVisibleMessages({ conversation, userId }) {
   const visibleMessageMap = new Map();
 
   conversation.messages.forEach((message) => {
-    const plaintext = decryptPayload({
-      conversationKey: conversation.conversationKey,
-      ciphertext: message.ciphertext,
-      nonce: message.nonce,
-      aad: message.aad,
-      tag: message.tag
-    });
+    const plaintext = decryptConversationEnvelope(conversation, message);
     const control = message.control || buildControlMetadata(plaintext);
     const visibleMessageId = plaintext.id || message.messageId;
     const storageMessageId = message.messageId;
@@ -549,6 +966,9 @@ function buildVisibleMessages({ conversation, userId }) {
     const targetMessageId = control?.targetMessageId ?? plaintext.targetMessageId;
     const hasControlTarget = Boolean(targetMessageId);
     const normalizedBody = normalizePlaintextBody(plaintext.body);
+    (Array.isArray(plaintext.attachments) ? plaintext.attachments : []).forEach((attachment) => {
+      registerIncomingAttachmentPayload(attachment);
+    });
     const isBlankArtifact = (
       normalizedBody.trim() === ""
       && !plaintext.replyTo
@@ -558,7 +978,11 @@ function buildVisibleMessages({ conversation, userId }) {
       && normalizeAttachments(plaintext.attachments).length === 0
     );
 
-    if (control || hasControlTarget || kind === "edit" || kind === "delete" || kind === "reaction") {
+    if (control || hasControlTarget || kind === "edit" || kind === "delete" || kind === "reaction" || kind.startsWith("disappearing")) {
+      if (kind.startsWith("disappearing")) {
+        return;
+      }
+
       const targetKey = targetMessageId ? String(targetMessageId) : "";
       const targetMessage = targetKey
         ? (
@@ -661,11 +1085,88 @@ export function listMessages({ userId, conversationId }) {
   return buildVisibleMessages({ conversation, userId });
 }
 
+export function getConversationVerification({ userId, username, conversationId, remoteDevices, remoteUsername }) {
+  const { store, userState } = ensureDevice(userId, username);
+  const conversation = getConversationOrThrow(userState, conversationId);
+  const trustState = ensureConversationTrustState(conversation);
+  const localBundle = buildPublishedDeviceBundle(userState.device);
+  const normalizedRemoteDevices = (Array.isArray(remoteDevices) ? remoteDevices : []).map((device) => {
+    const fingerprintHex = fingerprintPublicKey(device?.encryptionPublicKey || "");
+    const fingerprint = formatFingerprint(fingerprintHex);
+    const verifiedRecord = trustState.verifiedDeviceIds?.[String(device?.deviceId)] || null;
+
+    return {
+      userId: Number(device?.userId),
+      username: remoteUsername || null,
+      deviceId: String(device?.deviceId || ""),
+      deviceName: String(device?.deviceName || "Device"),
+      createdAt: device?.createdAt || null,
+      fingerprint,
+      shortFingerprint: fingerprint.split(" ").slice(0, 4).join(" "),
+      publicKeyFingerprint: device?.publicKeyFingerprint || hashPublicKey(device?.encryptionPublicKey || ""),
+      isVerified: Boolean(verifiedRecord?.verifiedAt),
+      verifiedAt: verifiedRecord?.verifiedAt || null
+    };
+  });
+  const localFingerprintHex = fingerprintPublicKey(localBundle.encryptionPublicKey);
+
+  writeSecureDmStore(store);
+
+  return {
+    conversationId: conversation.conversationId,
+    safetyNumber: buildSafetyNumber({
+      conversationId: conversation.conversationId,
+      participantUserIds: conversation.participantUserIds,
+      devices: [localBundle, ...normalizedRemoteDevices.map((device, index) => ({
+        ...remoteDevices[index]
+      }))]
+    }),
+    localDevice: {
+      userId: Number(userId),
+      username,
+      deviceId: localBundle.deviceId,
+      deviceName: localBundle.deviceName,
+      fingerprint: formatFingerprint(localFingerprintHex),
+      shortFingerprint: formatFingerprint(localFingerprintHex).split(" ").slice(0, 4).join(" ")
+    },
+    remoteDevices: normalizedRemoteDevices
+  };
+}
+
+export function setConversationDeviceVerified({ userId, username, conversationId, deviceId, verified }) {
+  const { store, userState } = ensureDevice(userId, username);
+  const conversation = getConversationOrThrow(userState, conversationId);
+  const trustState = ensureConversationTrustState(conversation);
+  const key = String(deviceId || "");
+
+  if (!key) {
+    throw new Error("deviceId is required");
+  }
+
+  if (verified) {
+    trustState.verifiedDeviceIds[key] = {
+      verifiedAt: new Date().toISOString()
+    };
+  } else {
+    delete trustState.verifiedDeviceIds[key];
+  }
+
+  writeSecureDmStore(store);
+
+  return {
+    ok: true,
+    conversationId,
+    deviceId: key,
+    verified: Boolean(verified),
+    verifiedAt: trustState.verifiedDeviceIds[key]?.verifiedAt || null
+  };
+}
+
 export function exportConversationPackage({ userId, username, conversationId }) {
   const { userState } = ensureDevice(userId, username);
   const conversation = getConversationOrThrow(userState, conversationId);
 
-  return {
+  const exportedConversation = {
     conversationId: conversation.conversationId,
     title: conversation.title,
     participantUserIds: conversation.participantUserIds,
@@ -679,9 +1180,15 @@ export function exportConversationPackage({ userId, username, conversationId }) 
       nonce: message.nonce,
       aad: message.aad,
       tag: message.tag,
+      signature: message.signature ?? null,
       createdAt: message.createdAt
     }))
   };
+
+  // History exports are allowed only as ciphertext bundles plus safe metadata.
+  assertCiphertextOnlyDmExport(exportedConversation);
+
+  return exportedConversation;
 }
 
 export function createWrappedKeyForConversation({
@@ -727,11 +1234,17 @@ export function importConversationPackage({ userId, username, conversation, wrap
 
   userState.conversations[String(conversation.conversationId)] = {
     ...syncConversationRecord(existingConversation, conversation),
-    conversationKey,
+    conversationKey: existingConversation?.conversationKey || conversationKey,
+    legacyConversationKeys: existingConversation?.legacyConversationKeys || [],
     wrappedKeys: [
       ...(existingConversation?.wrappedKeys || []).filter((entry) => entry.deviceId !== wrappedKey.deviceId),
       wrappedKey
     ],
+    replayProtection: existingConversation?.replayProtection || {
+      seenMessageIds: {},
+      seenRemoteMessageIds: {},
+      seenEnvelopeSignatures: {}
+    },
     messages: Array.isArray(conversation.messages)
       ? mergeStoredMessages(existingConversation?.messages || [], conversation.messages.map((message) => {
           let plaintext = null;
@@ -759,6 +1272,7 @@ export function importConversationPackage({ userId, username, conversation, wrap
             nonce: message.nonce,
             aad: message.aad,
             tag: message.tag,
+            signature: message.signature ?? null,
             createdAt: message.createdAt,
             direction: Number(message.senderUserId) === Number(userId) ? "outgoing" : "incoming",
             control
@@ -766,6 +1280,13 @@ export function importConversationPackage({ userId, username, conversation, wrap
         }))
       : existingConversation?.messages || []
   };
+
+  if (existingConversation?.conversationKey && existingConversation.conversationKey !== conversationKey) {
+    rememberLegacyConversationKey(userState.conversations[String(conversation.conversationId)], existingConversation.conversationKey);
+    userState.conversations[String(conversation.conversationId)].conversationKey = conversationKey;
+  }
+
+  rebuildReplayProtection(userState.conversations[String(conversation.conversationId)]);
 
   pruneExpiredMessagesInConversation(userState.conversations[String(conversation.conversationId)]);
 
@@ -790,8 +1311,25 @@ export function syncConversationMetadata({ userId, username, conversation }) {
   userState.conversations[String(conversationId)] = {
     ...syncConversationRecord(existingConversation, conversation),
     conversationKey: existingConversation.conversationKey,
+    legacyConversationKeys: existingConversation.legacyConversationKeys || [],
     messages: existingConversation.messages || []
   };
+
+  const currentWrappedKey = (conversation?.wrappedKeys || []).find(
+    (entry) => entry.deviceId === userState.device.deviceId
+  );
+
+  if (currentWrappedKey) {
+    const nextConversationKey = unwrapConversationKeyForDevice({
+      wrappedKey: JSON.parse(currentWrappedKey.wrappedConversationKey),
+      recipientPrivateKey: userState.device.encryptionPrivateKey
+    });
+
+    if (nextConversationKey && nextConversationKey !== existingConversation.conversationKey) {
+      rememberLegacyConversationKey(userState.conversations[String(conversationId)], existingConversation.conversationKey);
+      userState.conversations[String(conversationId)].conversationKey = nextConversationKey;
+    }
+  }
 
   pruneExpiredMessagesInConversation(userState.conversations[String(conversationId)]);
   writeSecureDmStore(store);

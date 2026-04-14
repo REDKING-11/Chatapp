@@ -8,7 +8,9 @@ import {
   generateKeyPairSync,
   hkdfSync,
   randomBytes,
-  randomUUID
+  randomUUID,
+  sign,
+  verify
 } from "node:crypto";
 
 function toBase64(buffer) {
@@ -129,4 +131,106 @@ export function decryptPayload({ conversationKey, ciphertext, nonce, aad, tag })
 
 export function hashPublicKey(publicKey) {
   return createHash("sha256").update(publicKey).digest("base64");
+}
+
+export function fingerprintPublicKey(publicKey) {
+  return createHash("sha256").update(publicKey).digest("hex");
+}
+
+export function formatFingerprint(value) {
+  const normalized = String(value || "").replace(/[^a-fA-F0-9]/g, "").toUpperCase();
+  return normalized.match(/.{1,4}/g)?.join(" ") || "";
+}
+
+export function buildSafetyNumber({ conversationId, participantUserIds, devices }) {
+  const fingerprintMaterial = (Array.isArray(devices) ? devices : [])
+    .map((device) => [
+      String(device?.userId || ""),
+      String(device?.deviceId || ""),
+      String(device?.encryptionPublicKey || ""),
+      String(device?.signingPublicKey || "")
+    ].join(":"))
+    .sort()
+    .join("|");
+  const participantMaterial = (Array.isArray(participantUserIds) ? participantUserIds : [])
+    .map((entry) => String(entry))
+    .sort()
+    .join("|");
+  const digest = createHash("sha256")
+    .update(`${String(conversationId || "")}|${participantMaterial}|${fingerprintMaterial}`)
+    .digest("hex");
+  const digitString = BigInt(`0x${digest}`).toString(10).padStart(60, "0").slice(0, 60);
+
+  return digitString.match(/.{1,5}/g)?.join(" ") || digitString;
+}
+
+function buildDeviceBundlePayload(bundle) {
+  return Buffer.from(JSON.stringify({
+    userId: Number(bundle?.userId),
+    deviceId: String(bundle?.deviceId || ""),
+    deviceName: String(bundle?.deviceName || ""),
+    algorithm: String(bundle?.algorithm || ""),
+    signingAlgorithm: String(bundle?.signingAlgorithm || ""),
+    keyVersion: Math.max(1, Number(bundle?.keyVersion) || 1),
+    encryptionPublicKey: String(bundle?.encryptionPublicKey || ""),
+    signingPublicKey: String(bundle?.signingPublicKey || "")
+  }), "utf8");
+}
+
+function canonicalizeEnvelope(envelope) {
+  return Buffer.from(JSON.stringify({
+    conversationId: String(envelope?.conversationId || ""),
+    messageId: String(envelope?.messageId || ""),
+    senderUserId: Number(envelope?.senderUserId || 0),
+    senderDeviceId: String(envelope?.senderDeviceId || ""),
+    ciphertext: String(envelope?.ciphertext || ""),
+    nonce: String(envelope?.nonce || ""),
+    aad: String(envelope?.aad || ""),
+    tag: String(envelope?.tag || "")
+  }), "utf8");
+}
+
+export function signDeviceBundle(bundle, signingPrivateKey) {
+  return sign(null, buildDeviceBundlePayload(bundle), createPrivateKey(signingPrivateKey)).toString("base64");
+}
+
+export function verifyDeviceBundleSignature(bundle) {
+  const signature = String(bundle?.bundleSignature || "");
+  const signingPublicKey = String(bundle?.signingPublicKey || "");
+
+  if (!signature || !signingPublicKey) {
+    return false;
+  }
+
+  try {
+    return verify(
+      null,
+      buildDeviceBundlePayload(bundle),
+      createPublicKey(signingPublicKey),
+      Buffer.from(signature, "base64")
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function signMessageEnvelope(envelope, signingPrivateKey) {
+  return sign(null, canonicalizeEnvelope(envelope), createPrivateKey(signingPrivateKey)).toString("base64");
+}
+
+export function verifyMessageEnvelopeSignature(envelope, signingPublicKey, signature) {
+  if (!signingPublicKey || !signature) {
+    return false;
+  }
+
+  try {
+    return verify(
+      null,
+      canonicalizeEnvelope(envelope),
+      createPublicKey(signingPublicKey),
+      Buffer.from(signature, "base64")
+    );
+  } catch {
+    return false;
+  }
 }

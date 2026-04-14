@@ -35,8 +35,8 @@ import {
 } from "./features/dm/actions";
 
 import {
+    hydrateAuthSession,
     getStoredAuthToken,
-    getStoredAuthUser,
     validateSession,
     clearAuthSession,
     saveAuthUser
@@ -118,10 +118,8 @@ function App() {
 
     useEffect(() => {
         async function restoreSession() {
-            const savedUser = getStoredAuthUser();
+            const { token, user: savedUser } = await hydrateAuthSession();
             if (savedUser) setCurrentUser(savedUser);
-
-            const token = getStoredAuthToken();
 
             if (!token) {
                 setAuthLoading(false);
@@ -134,7 +132,7 @@ function App() {
                 saveAuthUser(data.user);
             } catch (err) {
                 console.error("Session restore failed:", err);
-                clearAuthSession();
+                await clearAuthSession();
                 resetAppState();
             } finally {
                 setAuthLoading(false);
@@ -666,14 +664,17 @@ function App() {
                 const token = getStoredAuthToken();
 
                 if (token) {
-                    await registerSecureDmDevice({
+                    const registration = await registerSecureDmDevice({
                         token,
                         currentUser
                     });
-                    await ensureRealtimeConnection({
-                        token,
-                        currentUser
-                    });
+
+                    if (!registration?.approvalRequired) {
+                        await ensureRealtimeConnection({
+                            token,
+                            currentUser
+                        });
+                    }
                 }
             } catch (err) {
                 console.error("Failed to initialize secure DM:", err);
@@ -788,10 +789,9 @@ function App() {
         }
     }
 
-    function handleLogout() {
+    async function handleLogout() {
         closeRealtimeConnection();
-        localStorage.removeItem("authToken");
-        localStorage.removeItem("authUser");
+        await clearAuthSession();
         resetAppState();
     }
 
@@ -990,6 +990,7 @@ function App() {
                             backendUrl={selectedJoinedServer?.backendUrl || null}
                             profileMediaHostUrl={profileMediaHostUrl}
                             clientSettings={clientSettings}
+                            onChangeClientSetting={handleClientSettingChange}
                             onOpenClientSettings={() => setShowClientSettings(true)}
                             onLogout={handleLogout}
                         />
@@ -1002,6 +1003,7 @@ function App() {
                         backendUrl={selectedJoinedServer?.backendUrl || null}
                         profileMediaHostUrl={profileMediaHostUrl}
                         clientSettings={clientSettings}
+                        onChangeClientSetting={handleClientSettingChange}
                         customization={customization}
                         onFriendsActivityChange={setHasFriendsActivity}
                         onOpenClientSettings={() => setShowClientSettings(true)}

@@ -1,24 +1,22 @@
 <?php
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
 
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../user_profile.php';
 
 $data = readJsonInput();
 
-$username = trim($data['username'] ?? '');
-$password = trim($data['password'] ?? '');
+$handleParts = userProfileExtractRegistrationHandleParts($data);
+$usernameBase = $handleParts['usernameBase'];
+$usernameTag = $handleParts['usernameTag'];
+$password = (string)($data['password'] ?? '');
 $email = trim($data['email'] ?? '');
 $phone = trim($data['phone'] ?? '');
-$usernameTag = userProfileNormalizeTag(array_key_exists('usernameTag', $data) ? (string)$data['usernameTag'] : null);
 
-if ($username === '' || $password === '') {
+if ($usernameBase === '' || $password === '') {
     jsonResponse(['error' => 'Username and password are required'], 400);
 }
 
-if (strlen($username) < 3) {
+if (strlen($usernameBase) < 3) {
     jsonResponse(['error' => 'Username must be at least 3 characters'], 400);
 }
 
@@ -31,12 +29,6 @@ if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
 }
 
 $db = getDb();
-
-$stmt = $db->prepare('SELECT id FROM users WHERE username = ?');
-$stmt->execute([$username]);
-if ($stmt->fetch()) {
-    jsonResponse(['error' => 'Username already exists'], 409);
-}
 
 if ($email !== '') {
     $stmt = $db->prepare('SELECT id FROM users WHERE email = ?');
@@ -54,11 +46,21 @@ if ($phone !== '') {
     }
 }
 
-if ($usernameTag !== null && $usernameTag !== '' && userProfileColumnExists($db, 'users', 'username_tag')) {
-    $stmt = $db->prepare('SELECT id FROM users WHERE username = ? AND username_tag = ?');
-    $stmt->execute([$username, $usernameTag]);
+$tagColumnExists = userProfileColumnExists($db, 'users', 'username_tag');
+
+if ($tagColumnExists) {
+    if ($usernameTag !== null && $usernameTag !== '') {
+        $stmt = $db->prepare('SELECT id FROM users WHERE username = ? AND username_tag = ?');
+        $stmt->execute([$usernameBase, $usernameTag]);
+        if ($stmt->fetch()) {
+            jsonResponse(['error' => 'That username tag is already in use'], 409);
+        }
+    }
+} else {
+    $stmt = $db->prepare('SELECT id FROM users WHERE username = ?');
+    $stmt->execute([$usernameBase]);
     if ($stmt->fetch()) {
-        jsonResponse(['error' => 'That username tag is already in use'], 409);
+        jsonResponse(['error' => 'Username already exists'], 409);
     }
 }
 
@@ -66,13 +68,13 @@ $passwordHash = password_hash($password, PASSWORD_DEFAULT);
 $insertFields = ['username', 'email', 'phone', 'password_hash'];
 $insertValues = ['?', '?', '?', '?'];
 $insertParams = [
-    $username,
+    $usernameBase,
     $email !== '' ? $email : null,
     $phone !== '' ? $phone : null,
     $passwordHash
 ];
 
-if (userProfileColumnExists($db, 'users', 'username_tag')) {
+if ($tagColumnExists) {
     $insertFields[] = 'username_tag';
     $insertValues[] = '?';
     $insertParams[] = $usernameTag !== null && $usernameTag !== '' ? $usernameTag : userProfileGenerateRandomTag();
@@ -96,8 +98,8 @@ jsonResponse([
         ],
         userProfileFromRow([
             'id' => $userId,
-            'username' => $username,
-            'username_tag' => userProfileColumnExists($db, 'users', 'username_tag')
+            'username' => $usernameBase,
+            'username_tag' => $tagColumnExists
                 ? ($usernameTag !== null && $usernameTag !== '' ? $usernameTag : $insertParams[count($insertParams) - 1])
                 : null
         ])

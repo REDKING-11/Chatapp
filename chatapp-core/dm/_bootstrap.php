@@ -5,7 +5,7 @@ require_once __DIR__ . '/../auth_required.php';
 require_once __DIR__ . '/../user_profile.php';
 
 const DM_RELAY_TTL_SECONDS = 86400;
-const DM_ALLOWED_RELAY_TTLS = [0, 43200, 86400, 172800, 259200, 345600];
+const DM_ALLOWED_RELAY_TTLS = [0, 3600, 21600, 43200, 86400];
 const DM_MESSAGE_TTL_SECONDS = 0;
 const DM_ALLOWED_MESSAGE_TTLS = [0, 86400, 259200, 604800, 1209600, 2592000, 5184000, 10368000, 15552000];
 
@@ -49,6 +49,80 @@ function dmTableExists(PDO $db, string $table): bool {
     return $cache[$table];
 }
 
+function dmEnsureBundleSignatureColumn(PDO $db, string $table): void {
+    static $ensured = [];
+
+    if (!empty($ensured[$table])) {
+        return;
+    }
+
+    $stmt = $db->prepare('
+        SELECT COUNT(*) AS count_found
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = ?
+          AND COLUMN_NAME = "bundle_signature"
+    ');
+    $stmt->execute([$table]);
+    $exists = ((int)($stmt->fetch()['count_found'] ?? 0)) > 0;
+
+    if (!$exists) {
+        $db->exec(sprintf(
+            'ALTER TABLE %s ADD COLUMN bundle_signature TEXT NULL AFTER key_version',
+            preg_replace('/[^a-zA-Z0-9_]/', '', $table)
+        ));
+    }
+
+    $ensured[$table] = true;
+}
+
+function dmEnsureDeviceApprovalTable(PDO $db): void {
+    static $ensured = false;
+
+    if ($ensured) {
+        return;
+    }
+
+    $db->exec('
+        CREATE TABLE IF NOT EXISTS device_registration_approvals (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            device_id VARCHAR(191) NOT NULL,
+            device_name VARCHAR(191) NOT NULL,
+            encryption_public_key TEXT NOT NULL,
+            signing_public_key TEXT NULL,
+            key_version INT NOT NULL DEFAULT 1,
+            bundle_signature TEXT NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT "pending",
+            requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            approved_at DATETIME NULL,
+            approved_by_device_id VARCHAR(191) NULL,
+            UNIQUE KEY uniq_device_registration_approval_user_device (user_id, device_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ');
+
+    $ensured = true;
+}
+
+function dmEnsureRelayQueueMessageSignatureColumns(PDO $db): void {
+    static $ensured = false;
+
+    if ($ensured || !dmTableExists($db, 'dm_relay_queue')) {
+        return;
+    }
+
+    if (!dmColumnExists($db, 'dm_relay_queue', 'sender_user_id')) {
+        $db->exec('ALTER TABLE dm_relay_queue ADD COLUMN sender_user_id BIGINT NULL AFTER conversation_id');
+    }
+
+    if (!dmColumnExists($db, 'dm_relay_queue', 'message_signature')) {
+        $db->exec('ALTER TABLE dm_relay_queue ADD COLUMN message_signature TEXT NULL AFTER tag');
+    }
+
+    $ensured = true;
+}
+
 function dmTrimmedString($value): ?string {
     if (!is_string($value)) {
         return null;
@@ -79,7 +153,7 @@ function dmRequireArray(array $data, string $key, string $message): array {
 }
 
 function dmCleanupExpiredRelayQueue(PDO $db): void {
-    $stmt = $db->prepare('DELETE FROM dm_relay_queue WHERE expires_at <= UTC_TIMESTAMP()');
+    $stmt = $db->prepare('DELETE FROM dm_relay_queue WHERE expires_at <= UTC_TIMESTAMP() OR acked_at IS NOT NULL');
     $stmt->execute();
 }
 
@@ -345,6 +419,7 @@ function dmEnsureValidEnvelope(array $data): array {
         'ciphertext' => dmRequireString($data, 'ciphertext', 'ciphertext is required'),
         'nonce' => dmRequireString($data, 'nonce', 'nonce is required'),
         'aad' => dmRequireString($data, 'aad', 'aad is required'),
-        'tag' => dmRequireString($data, 'tag', 'tag is required')
+        'tag' => dmRequireString($data, 'tag', 'tag is required'),
+        'signature' => dmRequireString($data, 'signature', 'signature is required')
     ];
 }

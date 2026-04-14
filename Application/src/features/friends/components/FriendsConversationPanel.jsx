@@ -10,6 +10,7 @@ import MarkdownPreview from "../../../components/MarkdownPreview";
 import MessageReactions from "../../../components/MessageReactions";
 import { buildAppLinkContext } from "../../../lib/appLinks";
 import { applyComposerEntitySuggestion, getComposerEntitySuggestions } from "../../../lib/composerEntities";
+import { loadPinnedMessages, savePinnedMessages } from "../../../lib/messagePins";
 
 function EmptyState({ title, description }) {
     return (
@@ -369,6 +370,131 @@ function useFriendMessageAvatarUrls({ userIds, profileMediaHostUrl, enabled }) {
     return avatarUrls;
 }
 
+function buildPinnedScopeKey(kind, conversationId) {
+    if (!conversationId) {
+        return null;
+    }
+
+    return `${kind}:${String(conversationId)}`;
+}
+
+function resolvePinnedMessages(messages, pinnedMessages) {
+    if (!Array.isArray(pinnedMessages) || pinnedMessages.length === 0) {
+        return [];
+    }
+
+    return pinnedMessages.map((pinnedMessage) => {
+        const messageId = pinnedMessage?.messageId;
+
+        if (messageId == null) {
+            return pinnedMessage;
+        }
+
+        return messages.find((message) => String(message.messageId) === String(messageId)) || pinnedMessage;
+    });
+}
+
+function PinnedMessagesMenu({
+    pinnedMessages,
+    isOpen,
+    onToggle,
+    onJump,
+    onUnpin
+}) {
+    const count = Array.isArray(pinnedMessages) ? pinnedMessages.length : 0;
+
+    return (
+        <div className="friends-pins-menu">
+            <button
+                type="button"
+                className={`friends-pins-button ${isOpen ? "is-open" : ""}`.trim()}
+                onClick={onToggle}
+                aria-expanded={isOpen ? "true" : "false"}
+            >
+                <span className="friends-pins-button-label">Pins</span>
+                <span className="friends-pins-button-count">{count}</span>
+            </button>
+
+            {isOpen ? (
+                <div className="friends-pins-popover">
+                    <div className="friends-pins-popover-header">
+                        <strong>Pinned messages</strong>
+                        <span>{count}</span>
+                    </div>
+                    {count === 0 ? (
+                        <p className="friends-pins-empty">No pinned messages in this chat yet.</p>
+                    ) : (
+                        <div className="friends-pins-list">
+                            {pinnedMessages.map((message) => (
+                                <div key={String(message.messageId)} className="friends-pins-item">
+                                    <div className="friends-pins-item-body">
+                                        <strong>{message.author || "Message"}</strong>
+                                        <span>{getMessageBody(message.body) || "Message"}</span>
+                                    </div>
+                                    <div className="friends-pins-item-actions">
+                                        <button type="button" onClick={() => onJump?.(message)}>
+                                            Jump
+                                        </button>
+                                        <button type="button" onClick={() => onUnpin?.(message)}>
+                                            Unpin
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+function normalizeConversationSearchQuery(value) {
+    return String(value || "").trim().toLowerCase();
+}
+
+function messageMatchesSearch({ message, query, displayName = "" }) {
+    const normalizedQuery = normalizeConversationSearchQuery(query);
+
+    if (!normalizedQuery) {
+        return true;
+    }
+
+    const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+    const searchText = [
+        displayName,
+        getMessageBody(message?.body),
+        getReplyPreviewBody(message?.replyTo?.body),
+        ...attachments.map((attachment) => attachment?.fileName || "")
+    ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+    return searchText.includes(normalizedQuery);
+}
+
+function getOutgoingDeliveryMeta(deliveryState) {
+    if (deliveryState === "failed") {
+        return {
+            label: "Failed",
+            tone: "is-failed"
+        };
+    }
+
+    if (deliveryState === "queued") {
+        return {
+            label: "Offline relay",
+            tone: "is-queued"
+        };
+    }
+
+    return {
+        label: "Sent securely",
+        tone: "is-sent"
+    };
+}
+
 function MessageList({
     messages,
     emptyText,
@@ -385,13 +511,21 @@ function MessageList({
     onEdit = null,
     onDelete = null,
     onToggleReaction = null,
+    onCopyMessage = null,
+    onTogglePin = null,
     onDownloadAttachment = null,
+    messageDeliveryById = {},
     transferStates = {},
+    pinnedMessageIds = [],
     selectedMessageId = null,
     onSelectMessage = null,
     reactionPickerRequest = null,
     markdownLinkContext = null
 }) {
+    const pinnedMessageIdSet = useMemo(
+        () => new Set((Array.isArray(pinnedMessageIds) ? pinnedMessageIds : []).map(String)),
+        [pinnedMessageIds]
+    );
     const messageMap = useMemo(
         () => Object.fromEntries(messages.map((message) => [String(message.messageId), message])),
         [messages]
@@ -423,6 +557,9 @@ function MessageList({
                     const repliedMessage = message.replyTo?.messageId
                         ? messageMap[String(message.replyTo.messageId)]
                         : null;
+                    const deliveryMeta = isOutgoing
+                        ? getOutgoingDeliveryMeta(messageDeliveryById?.[String(message.messageId)] || "sent")
+                        : null;
                     const replyAuthor = message.replyTo?.author
                         || (repliedMessage
                             ? getMessageDisplayName({
@@ -437,6 +574,7 @@ function MessageList({
                     return (
                         <div
                             key={message.messageId}
+                            data-message-id={message.messageId}
                             className={`friend-message-row ${identityStyle === "minimal" ? "is-minimal" : ""} ${isOutgoing ? "outgoing-friend-row" : "incoming-friend-row"} ${String(selectedMessageId || "") === String(message.messageId) ? "is-selected" : ""}`}
                             onClick={() => onSelectMessage?.({ ...message, author: displayName })}
                         >
@@ -453,6 +591,11 @@ function MessageList({
                                         <strong>{displayName}</strong>
                                         <time>{new Date(message.createdAt).toLocaleString()}</time>
                                         {message.editedAt ? <small>edited</small> : null}
+                                        {deliveryMeta ? (
+                                            <small className={`friend-message-delivery ${deliveryMeta.tone}`.trim()}>
+                                                {deliveryMeta.label}
+                                            </small>
+                                        ) : null}
                                     </div>
                                     {message.replyTo ? (
                                         <div className="friend-message-reply-preview">
@@ -498,6 +641,16 @@ function MessageList({
                                                     Reply
                                                 </button>
                                             ) : null}
+                                            {onCopyMessage ? (
+                                                <button type="button" onClick={() => onCopyMessage({ ...message, author: displayName })}>
+                                                    Copy text
+                                                </button>
+                                            ) : null}
+                                            {onTogglePin ? (
+                                                <button type="button" onClick={() => onTogglePin({ ...message, author: displayName })}>
+                                                    {pinnedMessageIdSet.has(String(message.messageId)) ? "Unpin" : "Pin"}
+                                                </button>
+                                            ) : null}
                                             {isOutgoing && onEdit ? (
                                                 <button type="button" onClick={() => onEdit({ ...message, author: displayName })}>
                                                     Edit
@@ -517,7 +670,7 @@ function MessageList({
                                             className="message-reactions-controls"
                                             openPickerSignal={
                                                 reactionPickerRequest?.messageId != null
-                                                && String(reactionPickerRequest.messageId) === String(message.messageId)
+                                                    && String(reactionPickerRequest.messageId) === String(message.messageId)
                                                     ? reactionPickerRequest.token
                                                     : 0
                                             }
@@ -593,15 +746,15 @@ function DirectEncryptionStage({
                             : "You need to encrypt this chat before messages can be sent."}
                 </p>
                 {!effectiveSelectedFriend?.conversationId ? (
-                        <button
-                            type="button"
-                            className={`friends-encrypt-button ${submitting ? "is-busy" : ""}`}
-                            onClick={onEncryptChat}
-                            disabled={submitting}
-                        >
-                            <span className="friends-encrypt-lock" aria-hidden="true">🔒</span>
-                            <span>{submitting ? "Encrypting..." : "Encrypt chat"}</span>
-                        </button>
+                    <button
+                        type="button"
+                        className={`friends-encrypt-button ${submitting ? "is-busy" : ""}`}
+                        onClick={onEncryptChat}
+                        disabled={submitting}
+                    >
+                        <span className="friends-encrypt-lock" aria-hidden="true">🔒</span>
+                        <span>{submitting ? "Encrypting..." : "Encrypt chat"}</span>
+                    </button>
                 ) : null}
             </div>
         </div>
@@ -639,6 +792,13 @@ function GroupConversationView({
     const [fileShortcutSignal, setFileShortcutSignal] = useState(0);
     const [cursorPosition, setCursorPosition] = useState(0);
     const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [pinsMenuOpen, setPinsMenuOpen] = useState(false);
+    const pinnedScopeKey = useMemo(
+        () => buildPinnedScopeKey("group", selectedGroupConversation?.id),
+        [selectedGroupConversation?.id]
+    );
+    const [pinnedMessages, setPinnedMessages] = useState(() => loadPinnedMessages(pinnedScopeKey));
     const participantsById = Object.fromEntries(
         (selectedGroupConversation?.participants || []).map((participant) => [
             String(participant.userId),
@@ -674,10 +834,45 @@ function GroupConversationView({
         () => getComposerEntitySuggestions(groupComposer, cursorPosition, markdownLinkContext),
         [cursorPosition, groupComposer, markdownLinkContext]
     );
+    const resolvedPinnedMessages = useMemo(
+        () => resolvePinnedMessages(groupMessages, pinnedMessages),
+        [groupMessages, pinnedMessages]
+    );
+    const filteredGroupMessages = useMemo(() => {
+        const normalizedQuery = normalizeConversationSearchQuery(searchQuery);
+
+        if (!normalizedQuery) {
+            return groupMessages;
+        }
+
+        return groupMessages.filter((message) => {
+            const displayName = getMessageDisplayName({
+                message,
+                currentUser,
+                participantsById,
+                nameMode
+            });
+
+            return messageMatchesSearch({
+                message,
+                query: normalizedQuery,
+                displayName
+            });
+        });
+    }, [currentUser, groupMessages, nameMode, participantsById, searchQuery]);
 
     useEffect(() => {
         setActiveSuggestionIndex(0);
     }, [entitySuggestions?.token, entitySuggestions?.items?.length]);
+
+    useEffect(() => {
+        setSearchQuery("");
+    }, [selectedGroupConversation?.id]);
+
+    useEffect(() => {
+        setPinnedMessages(loadPinnedMessages(pinnedScopeKey));
+        setPinsMenuOpen(false);
+    }, [pinnedScopeKey]);
 
     useEffect(() => {
         function handleShortcut(event) {
@@ -732,6 +927,22 @@ function GroupConversationView({
         return () => window.removeEventListener("chatapp-shortcut", handleShortcut);
     }, [currentUser?.id, groupComposer, groupMessages, onGroupEdit, selectedMessageId]);
 
+    useEffect(() => {
+        if (selectedMessageId == null) {
+            return;
+        }
+
+        const matchingNode = Array.from(document.querySelectorAll(".friend-message-row[data-message-id]"))
+            .find((node) => node.getAttribute("data-message-id") === String(selectedMessageId));
+
+        if (matchingNode) {
+            matchingNode.scrollIntoView({
+                behavior: "smooth",
+                block: "center"
+            });
+        }
+    }, [selectedMessageId]);
+
     if (!selectedGroupConversation) {
         return (
             <EmptyState
@@ -739,6 +950,50 @@ function GroupConversationView({
                 description="Create a group chat or pick one from the left to start messaging."
             />
         );
+    }
+
+    function updatePinnedMessages(nextMessages) {
+        setPinnedMessages(savePinnedMessages(pinnedScopeKey, nextMessages));
+    }
+
+    async function handleCopyMessage(message) {
+        const text = getMessageBody(message?.body);
+
+        if (!text) {
+            return;
+        }
+
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch {
+            // ignore clipboard failures for now
+        }
+    }
+
+    function handleTogglePinnedMessage(message) {
+        if (!message?.messageId) {
+            return;
+        }
+
+        const alreadyPinned = pinnedMessages.some(
+            (entry) => String(entry?.messageId || "") === String(message.messageId)
+        );
+
+        if (alreadyPinned) {
+            updatePinnedMessages(
+                pinnedMessages.filter((entry) => String(entry?.messageId || "") !== String(message.messageId))
+            );
+            return;
+        }
+
+        updatePinnedMessages([
+            {
+                messageId: message.messageId,
+                author: message.author,
+                body: message.body
+            },
+            ...pinnedMessages.filter((entry) => String(entry?.messageId || "") !== String(message.messageId))
+        ]);
     }
 
     return (
@@ -753,6 +1008,31 @@ function GroupConversationView({
                             : ""}
                     </p>
                 </div>
+
+                <div className="friends-conversation-header-actions">
+                    <label className="friends-conversation-search" aria-label="Search this conversation">
+                        <input
+                            type="search"
+                            value={searchQuery}
+                            onChange={(event) => setSearchQuery(event.target.value)}
+                            placeholder="Search chat"
+                        />
+                    </label>
+                    <PinnedMessagesMenu
+                        pinnedMessages={resolvedPinnedMessages}
+                        isOpen={pinsMenuOpen}
+                        onToggle={() => setPinsMenuOpen((prev) => !prev)}
+                        onJump={(message) => {
+                            setSelectedMessageId(message.messageId);
+                            setPinsMenuOpen(false);
+                        }}
+                        onUnpin={(message) => {
+                            updatePinnedMessages(
+                                pinnedMessages.filter((entry) => String(entry?.messageId || "") !== String(message.messageId))
+                            );
+                        }}
+                    />
+                </div>
             </div>
 
             <div className="friends-inline-request">
@@ -762,8 +1042,10 @@ function GroupConversationView({
             </div>
 
             <MessageList
-                messages={groupMessages}
-                emptyText="No messages yet. Start the group conversation."
+                messages={filteredGroupMessages}
+                emptyText={normalizeConversationSearchQuery(searchQuery)
+                    ? "No messages match your search."
+                    : "No messages yet. Start the group conversation."}
                 messageListRef={messageListRef}
                 currentUser={currentUser}
                 participantsById={participantsById}
@@ -776,8 +1058,11 @@ function GroupConversationView({
                 onEdit={onGroupEdit}
                 onDelete={onGroupDelete}
                 onToggleReaction={onGroupToggleReaction}
+                onCopyMessage={handleCopyMessage}
+                onTogglePin={handleTogglePinnedMessage}
                 onDownloadAttachment={onGroupDownloadAttachment}
                 transferStates={transferStates}
+                pinnedMessageIds={resolvedPinnedMessages.map((message) => message.messageId)}
                 selectedMessageId={selectedMessageId}
                 onSelectMessage={(message) => setSelectedMessageId(message.messageId)}
                 reactionPickerRequest={reactionPickerRequest}
@@ -914,6 +1199,7 @@ function DirectConversationView({
     currentUser,
     profileMediaHostUrl,
     clientSettings,
+    presenceByUserId,
     selectedFriend,
     effectiveSelectedFriend,
     secureStatusRef,
@@ -956,6 +1242,7 @@ function DirectConversationView({
     onDirectRemoveAttachment,
     onDirectDownloadAttachment,
     directAttachments,
+    messageDeliveryById,
     transferStates,
     onCancelDirectAction
 }) {
@@ -965,6 +1252,13 @@ function DirectConversationView({
     const [fileShortcutSignal, setFileShortcutSignal] = useState(0);
     const [cursorPosition, setCursorPosition] = useState(0);
     const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [pinsMenuOpen, setPinsMenuOpen] = useState(false);
+    const pinnedScopeKey = useMemo(
+        () => buildPinnedScopeKey("direct", effectiveSelectedFriend?.conversationId || selectedFriend?.friendUserId),
+        [effectiveSelectedFriend?.conversationId, selectedFriend?.friendUserId]
+    );
+    const [pinnedMessages, setPinnedMessages] = useState(() => loadPinnedMessages(pinnedScopeKey));
     const avatarUserIds = useMemo(
         () => [
             currentUser?.id,
@@ -991,10 +1285,47 @@ function DirectConversationView({
         () => getComposerEntitySuggestions(composer, cursorPosition, markdownLinkContext),
         [composer, cursorPosition, markdownLinkContext]
     );
+    const resolvedPinnedMessages = useMemo(
+        () => resolvePinnedMessages(messages, pinnedMessages),
+        [messages, pinnedMessages]
+    );
+    const selectedFriendPresenceState = presenceByUserId?.[String(selectedFriend?.friendUserId)] || "offline";
+    const selectedFriendPresenceLabel = selectedFriendPresenceState === "online" ? "Online" : "Offline";
+    const filteredMessages = useMemo(() => {
+        const normalizedQuery = normalizeConversationSearchQuery(searchQuery);
+
+        if (!normalizedQuery) {
+            return messages;
+        }
+
+        return messages.filter((message) => {
+            const displayName = getMessageDisplayName({
+                message,
+                currentUser,
+                directFriend: selectedFriend,
+                nameMode
+            });
+
+            return messageMatchesSearch({
+                message,
+                query: normalizedQuery,
+                displayName
+            });
+        });
+    }, [currentUser, messages, nameMode, searchQuery, selectedFriend]);
 
     useEffect(() => {
         setActiveSuggestionIndex(0);
     }, [entitySuggestions?.token, entitySuggestions?.items?.length]);
+
+    useEffect(() => {
+        setSearchQuery("");
+    }, [effectiveSelectedFriend?.conversationId, selectedFriend?.friendUserId]);
+
+    useEffect(() => {
+        setPinnedMessages(loadPinnedMessages(pinnedScopeKey));
+        setPinsMenuOpen(false);
+    }, [pinnedScopeKey]);
 
     useEffect(() => {
         function handleShortcut(event) {
@@ -1049,6 +1380,22 @@ function DirectConversationView({
         return () => window.removeEventListener("chatapp-shortcut", handleShortcut);
     }, [composer, currentUser?.id, messages, onDirectEdit, selectedMessageId]);
 
+    useEffect(() => {
+        if (selectedMessageId == null) {
+            return;
+        }
+
+        const matchingNode = Array.from(document.querySelectorAll(".friend-message-row[data-message-id]"))
+            .find((node) => node.getAttribute("data-message-id") === String(selectedMessageId));
+
+        if (matchingNode) {
+            matchingNode.scrollIntoView({
+                behavior: "smooth",
+                block: "center"
+            });
+        }
+    }, [selectedMessageId]);
+
     if (!selectedFriend) {
         return (
             <EmptyState
@@ -1058,11 +1405,66 @@ function DirectConversationView({
         );
     }
 
+    function updatePinnedMessages(nextMessages) {
+        setPinnedMessages(savePinnedMessages(pinnedScopeKey, nextMessages));
+    }
+
+    async function handleCopyMessage(message) {
+        const text = getMessageBody(message?.body);
+
+        if (!text) {
+            return;
+        }
+
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch {
+            // ignore clipboard failures for now
+        }
+    }
+
+    function handleTogglePinnedMessage(message) {
+        if (!message?.messageId) {
+            return;
+        }
+
+        const alreadyPinned = pinnedMessages.some(
+            (entry) => String(entry?.messageId || "") === String(message.messageId)
+        );
+
+        if (alreadyPinned) {
+            updatePinnedMessages(
+                pinnedMessages.filter((entry) => String(entry?.messageId || "") !== String(message.messageId))
+            );
+            return;
+        }
+
+        updatePinnedMessages([
+            {
+                messageId: message.messageId,
+                author: message.author,
+                body: message.body
+            },
+            ...pinnedMessages.filter((entry) => String(entry?.messageId || "") !== String(message.messageId))
+        ]);
+    }
+
     return (
         <>
             <div className="friends-conversation-header">
                 <div>
-                    <h2>{selectedFriend.friendUsername}</h2>
+                    <div className="friends-user-presence">
+                        <span
+                            className={`friends-user-presence-dot is-${selectedFriendPresenceState}`.trim()}
+                            aria-hidden="true"
+                        />
+                        <div className="friends-user-presence-copy">
+                            <h2>{selectedFriend.friendUsername}</h2>
+                            <span className={`friends-user-presence-label is-${selectedFriendPresenceState}`.trim()}>
+                                {selectedFriendPresenceLabel}
+                            </span>
+                        </div>
+                    </div>
                     <p className="friends-security-line">
                         <span
                             ref={secureStatusRef}
@@ -1078,13 +1480,37 @@ function DirectConversationView({
                     </p>
                 </div>
 
-                <button
-                    type="button"
-                    className="friends-settings-button"
-                    onClick={onOpenConversationSettings}
-                >
-                    Conversation settings
-                </button>
+                <div className="friends-conversation-header-actions">
+                    <PinnedMessagesMenu
+                        pinnedMessages={resolvedPinnedMessages}
+                        isOpen={pinsMenuOpen}
+                        onToggle={() => setPinsMenuOpen((prev) => !prev)}
+                        onJump={(message) => {
+                            setSelectedMessageId(message.messageId);
+                            setPinsMenuOpen(false);
+                        }}
+                        onUnpin={(message) => {
+                            updatePinnedMessages(
+                                pinnedMessages.filter((entry) => String(entry?.messageId || "") !== String(message.messageId))
+                            );
+                        }}
+                    />
+                    <label className="friends-conversation-search" aria-label="Search this conversation">
+                        <input
+                            type="search"
+                            value={searchQuery}
+                            onChange={(event) => setSearchQuery(event.target.value)}
+                            placeholder="Search chat"
+                        />
+                    </label>
+                    <button
+                        type="button"
+                        className="friends-settings-button"
+                        onClick={onOpenConversationSettings}
+                    >
+                        Conversation settings
+                    </button>
+                </div>
             </div>
 
             {canRequestOldConversation ? (
@@ -1234,8 +1660,10 @@ function DirectConversationView({
                 </div>
             ) : (
                 <MessageList
-                    messages={messages}
-                    emptyText="No messages yet. Start the conversation."
+                    messages={filteredMessages}
+                    emptyText={normalizeConversationSearchQuery(searchQuery)
+                        ? "No messages match your search."
+                        : "No messages yet. Start the conversation."}
                     messageListRef={messageListRef}
                     currentUser={currentUser}
                     directFriend={selectedFriend}
@@ -1247,8 +1675,12 @@ function DirectConversationView({
                     onEdit={onDirectEdit}
                     onDelete={onDirectDelete}
                     onToggleReaction={onDirectToggleReaction}
+                    onCopyMessage={handleCopyMessage}
+                    onTogglePin={handleTogglePinnedMessage}
                     onDownloadAttachment={onDirectDownloadAttachment}
+                    messageDeliveryById={messageDeliveryById}
                     transferStates={transferStates}
+                    pinnedMessageIds={resolvedPinnedMessages.map((message) => message.messageId)}
                     selectedMessageId={selectedMessageId}
                     onSelectMessage={(message) => setSelectedMessageId(message.messageId)}
                     reactionPickerRequest={reactionPickerRequest}

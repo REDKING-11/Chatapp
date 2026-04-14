@@ -1,7 +1,8 @@
 import { parseJsonResponse } from "../../lib/api";
+import { getStoredAuthToken } from "../session/actions";
 
 function getAuthToken() {
-    return localStorage.getItem("authToken");
+    return getStoredAuthToken();
 }
 
 function buildAuthHeaders(extra = {}) {

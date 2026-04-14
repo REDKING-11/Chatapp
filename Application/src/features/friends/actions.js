@@ -392,7 +392,7 @@ export async function sendFriendDirectMessage({ currentUser, friend, body, relay
     });
     const conversationId = initialized.conversationId;
 
-    await sendDirectMessage({
+    const sendResult = await sendDirectMessage({
         token: getStoredAuthToken(),
         currentUser,
         conversationId,
@@ -414,6 +414,7 @@ export async function sendFriendDirectMessage({ currentUser, friend, body, relay
 
     return {
         conversationId,
+        outboundMessageId: sendResult?.message?.id || null,
         messages: opened.messages,
         conversation: initialized.conversation || opened.conversation
     };
@@ -499,10 +500,11 @@ export async function acceptFriendRelayRetention({ conversationId }) {
     return data.conversation || null;
 }
 
-export async function requestFriendDisappearingMessages({ conversationId, messageTtlSeconds }) {
+export async function requestFriendDisappearingMessages({ currentUser, conversationId, messageTtlSeconds }) {
     const token = getStoredAuthToken();
     const data = await updateDisappearingMessages({
         token,
+        currentUser,
         conversationId,
         messageTtlSeconds,
         mode: "request"
@@ -511,11 +513,12 @@ export async function requestFriendDisappearingMessages({ conversationId, messag
     return data.conversation || null;
 }
 
-export async function acceptFriendDisappearingMessages({ conversationId }) {
+export async function acceptFriendDisappearingMessages({ currentUser, conversationId }) {
     const token = getStoredAuthToken();
     const fallbackSeconds = DISAPPEARING_MESSAGE_OPTIONS.find((option) => option.seconds === 1209600)?.seconds ?? 1209600;
     const data = await updateDisappearingMessages({
         token,
+        currentUser,
         conversationId,
         messageTtlSeconds: fallbackSeconds,
         mode: "accept"

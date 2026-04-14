@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/auth/_bootstrap.php';
 
 function getBearerToken(): ?string {
     $authHeader = '';
@@ -39,14 +40,27 @@ function requireAuth(): array {
     }
 
     $db = getDb();
+    authBootstrap($db);
 
-    $stmt = $db->prepare('
-        SELECT users.id, users.username, users.email, users.phone, sessions.expires_at
-        FROM sessions
-        JOIN users ON users.id = sessions.user_id
-        WHERE sessions.token = ?
-        LIMIT 1
-    ');
+    $selectParts = ['users.id', 'users.username', 'users.email', 'users.phone', 'sessions.expires_at'];
+    if (authSessionColumnExists($db, 'public_id')) {
+        $selectParts[] = 'sessions.public_id';
+    }
+
+    $whereConditions = ['sessions.token = ?'];
+    if (authSessionColumnExists($db, 'revoked_at')) {
+        $whereConditions[] = 'sessions.revoked_at IS NULL';
+    }
+
+    $stmt = $db->prepare(sprintf(
+        'SELECT %s
+         FROM sessions
+         JOIN users ON users.id = sessions.user_id
+         WHERE %s
+         LIMIT 1',
+        implode(', ', $selectParts),
+        implode(' AND ', $whereConditions)
+    ));
     $stmt->execute([$token]);
 
     $session = $stmt->fetch();
@@ -59,10 +73,16 @@ function requireAuth(): array {
         jsonResponse(['error' => 'Token expired'], 401);
     }
 
+    if (authSessionColumnExists($db, 'last_seen_at')) {
+        $touchStmt = $db->prepare('UPDATE sessions SET last_seen_at = UTC_TIMESTAMP() WHERE token = ?');
+        $touchStmt->execute([$token]);
+    }
+
     return [
         'id' => (int)$session['id'],
         'username' => $session['username'],
         'email' => $session['email'],
-        'phone' => $session['phone']
+        'phone' => $session['phone'],
+        'sessionPublicId' => $session['public_id'] ?? null
     ];
 }

@@ -1,6 +1,28 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-contextBridge.exposeInMainWorld("secureDm", {
+function deepFreeze(value) {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  Object.getOwnPropertyNames(value).forEach((key) => {
+    const entry = value[key];
+    if (entry && typeof entry === "object" && !Object.isFrozen(entry)) {
+      deepFreeze(entry);
+    }
+  });
+
+  return Object.freeze(value);
+}
+
+function exposeFrozenApi(name, api) {
+  contextBridge.exposeInMainWorld(name, deepFreeze(api));
+}
+
+// Security boundary: expose only reviewed, high-level secure DM operations.
+// Never expose a generic IPC invoke/send helper here, and never add APIs that can
+// return raw private keys, master keys, wrapped master keys, or decrypted secrets.
+exposeFrozenApi("secureDm", {
   initializeDevice: (payload) => ipcRenderer.invoke("secure-dm:init-device", payload),
   getDeviceBundle: (payload) => ipcRenderer.invoke("secure-dm:get-device-bundle", payload),
   createConversation: (payload) => ipcRenderer.invoke("secure-dm:create-conversation", payload),
@@ -13,19 +35,35 @@ contextBridge.exposeInMainWorld("secureDm", {
   listMessages: (payload) => ipcRenderer.invoke("secure-dm:list-messages", payload),
   exportConversationPackage: (payload) => ipcRenderer.invoke("secure-dm:export-conversation-package", payload),
   createWrappedKey: (payload) => ipcRenderer.invoke("secure-dm:create-wrapped-key", payload),
+  verifyDeviceBundles: (payload) => ipcRenderer.invoke("secure-dm:verify-device-bundles", payload),
+  getConversationVerification: (payload) => ipcRenderer.invoke("secure-dm:get-conversation-verification", payload),
+  setConversationDeviceVerified: (payload) => ipcRenderer.invoke("secure-dm:set-conversation-device-verified", payload),
+  beginDeviceIdentityRotation: (payload) => ipcRenderer.invoke("secure-dm:begin-device-identity-rotation", payload),
+  commitDeviceIdentityRotation: (payload) => ipcRenderer.invoke("secure-dm:commit-device-identity-rotation", payload),
+  rollbackDeviceIdentityRotation: (payload) => ipcRenderer.invoke("secure-dm:rollback-device-identity-rotation", payload),
+  rotateConversationKey: (payload) => ipcRenderer.invoke("secure-dm:rotate-conversation-key", payload),
+  rotateDeviceIdentity: (payload) => ipcRenderer.invoke("secure-dm:rotate-device-identity", payload),
   importConversationPackage: (payload) => ipcRenderer.invoke("secure-dm:import-conversation-package", payload),
   deleteConversation: (payload) => ipcRenderer.invoke("secure-dm:delete-conversation", payload)
 });
 
-contextBridge.exposeInMainWorld("desktopNotifications", {
+exposeFrozenApi("desktopNotifications", {
   show: (payload) => ipcRenderer.invoke("desktop-notifications:show", payload)
 });
 
-contextBridge.exposeInMainWorld("serverHealth", {
+// Auth tokens are persisted only through the reviewed main-process secure store.
+// Do not reintroduce renderer localStorage/sessionStorage token persistence.
+exposeFrozenApi("authSession", {
+  getToken: () => ipcRenderer.invoke("auth-session:get-token"),
+  setToken: (token) => ipcRenderer.invoke("auth-session:set-token", token),
+  clearToken: () => ipcRenderer.invoke("auth-session:clear-token")
+});
+
+exposeFrozenApi("serverHealth", {
   check: (backendUrl) => ipcRenderer.invoke("server-health:check", backendUrl)
 });
 
-contextBridge.exposeInMainWorld("attachmentTransfers", {
+exposeFrozenApi("attachmentTransfers", {
   registerOutgoing: (payload) => ipcRenderer.invoke("attachment-transfers:register-outgoing", payload),
   getOutgoingInfo: (payload) => ipcRenderer.invoke("attachment-transfers:get-outgoing-info", payload),
   readOutgoingChunk: (payload) => ipcRenderer.invoke("attachment-transfers:read-outgoing-chunk", payload),

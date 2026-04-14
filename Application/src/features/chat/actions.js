@@ -1,4 +1,5 @@
 import { parseJsonResponse } from "../../lib/api";
+import { getStoredAuthToken } from "../session/actions";
 
 function normalizeChatFetchError(error, fallbackMessage) {
     if (error instanceof TypeError) {
@@ -9,7 +10,7 @@ function normalizeChatFetchError(error, fallbackMessage) {
 }
 
 export function getAuthHeaders() {
-    const token = localStorage.getItem("authToken");
+    const token = getStoredAuthToken();
 
     return {
         "Content-Type": "application/json",

@@ -11,7 +11,10 @@ export default function MessageItem({
     onEdit,
     onDelete,
     onToggleReaction,
+    onCopyText,
     onCopyLink,
+    onTogglePin,
+    isPinned = false,
     isSelected = false,
     onSelect = null,
     openReactionPickerSignal = 0
@@ -84,6 +87,10 @@ export default function MessageItem({
                 <div className="message-footer-bar">
                     <div className="message-actions">
                         <button onClick={() => onReply(message)}>Reply</button>
+                        <button onClick={() => onCopyText?.(message)}>Copy text</button>
+                        <button onClick={() => onTogglePin?.(message)}>
+                            {isPinned ? "Unpin" : "Pin"}
+                        </button>
                         {messageLinkBase ? (
                             <button onClick={() => onCopyLink?.(`${messageLinkBase}/message/${encodeURIComponent(String(message.id))}`)}>
                                 Copy link

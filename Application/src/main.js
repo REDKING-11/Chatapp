@@ -11,10 +11,18 @@ import {
   listConversations,
   listMessages,
   receiveEncryptedMessage,
+  beginDeviceIdentityRotation,
+  commitDeviceIdentityRotation,
+  rollbackDeviceIdentityRotation,
   syncConversationMetadata,
   exportConversationPackage,
   deleteConversation,
-  createWrappedKeyForConversation
+  createWrappedKeyForConversation,
+  verifyDeviceBundles,
+  getConversationVerification,
+  setConversationDeviceVerified,
+  rotateConversationKey,
+  rotateDeviceIdentity
 } from './main/dm/service';
 import {
   appendIncomingDownloadChunk,
@@ -26,6 +34,119 @@ import {
   readOutgoingAttachmentChunk,
   registerOutgoingAttachment
 } from './main/transfers/service';
+import {
+  clearStoredAuthToken,
+  readStoredAuthToken,
+  writeStoredAuthToken
+} from './main/auth/storage';
+
+const LOCAL_DEVELOPMENT_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const SECURE_DM_SENSITIVE_RESPONSE_KEYS = new Set([
+  'encryptionPrivateKey',
+  'signingPrivateKey',
+  'conversationKey',
+  'masterKey',
+  'wrappedMasterKey',
+  'recipientPrivateKey',
+  'privateKey',
+  'secretKey',
+  'seed',
+  'rawKey',
+  'decryptedKey'
+]);
+const FORBIDDEN_SECURE_DM_CHANNEL_TOKENS = [
+  'private-key',
+  'master-key',
+  'raw-key',
+  'secret',
+  'export-key',
+  'decrypt-key'
+];
+
+function assertNoSecureDmSecrets(value, path = 'result') {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertNoSecureDmSecrets(entry, `${path}[${index}]`));
+    return;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return;
+  }
+
+  Object.entries(value).forEach(([key, entryValue]) => {
+    if (SECURE_DM_SENSITIVE_RESPONSE_KEYS.has(String(key))) {
+      throw new Error(`secure-dm IPC attempted to expose sensitive key material at ${path}.${key}`);
+    }
+
+    assertNoSecureDmSecrets(entryValue, `${path}.${key}`);
+  });
+}
+
+function handleSecureDm(channel, handler) {
+  ipcMain.handle(channel, async (_event, payload) => {
+    const result = await handler(payload);
+    assertNoSecureDmSecrets(result);
+    return result;
+  });
+}
+
+const SECURE_DM_IPC_HANDLERS = Object.freeze({
+  'secure-dm:init-device': initializeDevice,
+  'secure-dm:get-device-bundle': getDeviceBundle,
+  'secure-dm:create-conversation': createConversation,
+  'secure-dm:adopt-conversation-id': adoptConversationId,
+  'secure-dm:import-conversation': importConversation,
+  'secure-dm:create-message': createEncryptedMessage,
+  'secure-dm:receive-message': receiveEncryptedMessage,
+  'secure-dm:sync-conversation-metadata': syncConversationMetadata,
+  'secure-dm:list-conversations': listConversations,
+  'secure-dm:list-messages': listMessages,
+  'secure-dm:export-conversation-package': exportConversationPackage,
+  'secure-dm:create-wrapped-key': createWrappedKeyForConversation,
+  'secure-dm:verify-device-bundles': verifyDeviceBundles,
+  'secure-dm:get-conversation-verification': getConversationVerification,
+  'secure-dm:set-conversation-device-verified': setConversationDeviceVerified,
+  'secure-dm:rotate-conversation-key': rotateConversationKey,
+  'secure-dm:rotate-device-identity': rotateDeviceIdentity,
+  'secure-dm:begin-device-identity-rotation': beginDeviceIdentityRotation,
+  'secure-dm:commit-device-identity-rotation': commitDeviceIdentityRotation,
+  'secure-dm:rollback-device-identity-rotation': rollbackDeviceIdentityRotation,
+  'secure-dm:import-conversation-package': importConversationPackage,
+  'secure-dm:delete-conversation': deleteConversation
+});
+
+function assertSecureDmChannelPolicy(channel) {
+  const normalizedChannel = String(channel || '').toLowerCase();
+
+  FORBIDDEN_SECURE_DM_CHANNEL_TOKENS.forEach((token) => {
+    if (normalizedChannel.includes(token)) {
+      throw new Error(`Refusing to register forbidden secure-dm IPC channel: ${channel}`);
+    }
+  });
+}
+
+function assertAllowedRemoteBackendUrl(value) {
+  let url;
+
+  try {
+    url = new URL(String(value || '').trim());
+  } catch {
+    throw new Error('Backend URL must be a valid URL');
+  }
+
+  const hostname = String(url.hostname || '').trim().toLowerCase();
+  const isLocalDevelopment = LOCAL_DEVELOPMENT_HOSTS.has(hostname) || hostname.endsWith('.localhost');
+
+  if (url.protocol === 'https:') {
+    return url.toString().replace(/\/$/, '');
+  }
+
+  if (isLocalDevelopment && url.protocol === 'http:') {
+    return url.toString().replace(/\/$/, '');
+  }
+
+  throw new Error('Backend URL must use https:// for remote hosts. http:// is allowed only for localhost development.');
+}
 
 const createWindow = () => {
   // Create the browser window.
@@ -50,20 +171,10 @@ const createWindow = () => {
 };
 
 const registerSecureDmIpc = () => {
-  ipcMain.handle('secure-dm:init-device', (_event, payload) => initializeDevice(payload));
-  ipcMain.handle('secure-dm:get-device-bundle', (_event, payload) => getDeviceBundle(payload));
-  ipcMain.handle('secure-dm:create-conversation', (_event, payload) => createConversation(payload));
-  ipcMain.handle('secure-dm:adopt-conversation-id', (_event, payload) => adoptConversationId(payload));
-  ipcMain.handle('secure-dm:import-conversation', (_event, payload) => importConversation(payload));
-  ipcMain.handle('secure-dm:create-message', (_event, payload) => createEncryptedMessage(payload));
-  ipcMain.handle('secure-dm:receive-message', (_event, payload) => receiveEncryptedMessage(payload));
-  ipcMain.handle('secure-dm:sync-conversation-metadata', (_event, payload) => syncConversationMetadata(payload));
-  ipcMain.handle('secure-dm:list-conversations', (_event, payload) => listConversations(payload));
-  ipcMain.handle('secure-dm:list-messages', (_event, payload) => listMessages(payload));
-  ipcMain.handle('secure-dm:export-conversation-package', (_event, payload) => exportConversationPackage(payload));
-  ipcMain.handle('secure-dm:create-wrapped-key', (_event, payload) => createWrappedKeyForConversation(payload));
-  ipcMain.handle('secure-dm:import-conversation-package', (_event, payload) => importConversationPackage(payload));
-  ipcMain.handle('secure-dm:delete-conversation', (_event, payload) => deleteConversation(payload));
+  Object.entries(SECURE_DM_IPC_HANDLERS).forEach(([channel, handler]) => {
+    assertSecureDmChannelPolicy(channel);
+    handleSecureDm(channel, (payload) => handler(payload));
+  });
 };
 
 const registerNotificationIpc = () => {
@@ -86,9 +197,18 @@ const registerNotificationIpc = () => {
   });
 };
 
+const registerAuthSessionIpc = () => {
+  ipcMain.handle('auth-session:get-token', () => ({
+    token: readStoredAuthToken()
+  }));
+
+  ipcMain.handle('auth-session:set-token', (_event, token) => writeStoredAuthToken(token));
+  ipcMain.handle('auth-session:clear-token', () => clearStoredAuthToken());
+};
+
 const registerServerHealthIpc = () => {
   ipcMain.handle('server-health:check', async (_event, backendUrl) => {
-    const baseUrl = String(backendUrl || '').replace(/\/$/, '');
+    const baseUrl = assertAllowedRemoteBackendUrl(backendUrl);
 
     if (!baseUrl) {
       return { online: false };
@@ -126,6 +246,7 @@ const registerAttachmentTransferIpc = () => {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   registerSecureDmIpc();
+  registerAuthSessionIpc();
   registerNotificationIpc();
   registerServerHealthIpc();
   registerAttachmentTransferIpc();

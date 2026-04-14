@@ -1,0 +1,76 @@
+I changed the session storage flow in [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php) so the database no longer needs the raw bearer token to create, find, or touch a session.
+
+**What I changed**
+In the schema bootstrap section around [lines 86-118](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php:86), I added support for a new `token_hash` column on `sessions`:
+- If `token_hash` does not exist, the code now adds it with `ALTER TABLE sessions ADD COLUMN token_hash VARCHAR(64) NULL AFTER token`.
+- Existing rows are backfilled with `SHA2(token, 256)` when `token_hash` is empty.
+- `public_id` is now derived from `token_hash` when available, with a fallback to `SHA2(token, 256)` so older rows still migrate correctly.
+- After the hash is captured, legacy raw `token` values are overwritten with a non-replayable marker string in the form `sha256:<hash>`.
+- I also added a unique index on `token_hash` (`uniq_sessions_token_hash`) so hashed tokens remain efficiently searchable and unique.
+
+I added two helpers at [lines 245-250](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php:245):
+- `authHashSessionToken(string $token): string` returns the SHA-256 hex digest of the bearer token.
+- `authStoredSessionTokenMarker(string $tokenHash): string` formats the stored placeholder as `sha256:<hash>`.
+
+In the session issuance flow at [lines 395-442](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php:395):
+- The raw bearer token is still generated and returned to the client exactly as before.
+- A SHA-256 digest of that token is computed immediately.
+- `publicId` now uses the token hash directly instead of re-hashing separately.
+- If the upgraded schema is available, the row stores:
+  - `token_hash = <sha256 hex>`
+  - `token = sha256:<sha256 hex>`
+- If the schema is still old and `token_hash` does not exist yet, it falls back to the old raw-token behavior so the auth flow still works on older installs.
+
+In the session lookup path at [lines 503-537](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php:503):
+- `authBuildSessionLookupWhereClauses()` now matches on `sessions.token_hash = ?` when that column exists.
+- `authFindSessionByToken()` hashes the incoming bearer token first, then queries by that hash.
+- If `token_hash` does not exist, it still falls back to `sessions.token = ?` for backward compatibility.
+
+In the session touch path at [lines 544-555](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php:544):
+- `authTouchSession()` now updates `last_seen_at` by `token_hash` instead of raw `token` when the hash column exists.
+- It hashes the incoming bearer token before executing the update.
+- It preserves the old raw-token behavior as a fallback for legacy schema cases.
+
+**Why this fixes the issue**
+Before the patch:
+- The app generated a bearer token.
+- It inserted that exact token into `sessions.token`.
+- Later it used that exact token in `SELECT` and `UPDATE` queries.
+- Anyone with DB access could replay active sessions directly from the `sessions` table.
+
+After the patch:
+- The client still receives the bearer token and presents it normally.
+- The server hashes that token before storing or querying it.
+- The DB only needs the SHA-256 digest for lookup.
+- Existing raw values are rewritten to a marker, so leaked DB rows no longer expose replayable bearer tokens.
+
+That reduces the blast radius of a DB disclosure or admin misuse because the session table no longer contains the actual bearer secret in usable form.
+
+**Compatibility and migration behavior**
+I deliberately made this an in-place compatible migration:
+- New installs or upgraded installs get `token_hash` automatically during runtime bootstrap.
+- Existing sessions are migrated by hashing the old `token` value into `token_hash`.
+- Once hashed, the old `token` column value is replaced with `sha256:<hash>` so it is no longer usable as a bearer token.
+- Code continues to function even if the schema upgrade cannot run yet, because it falls back to the legacy behavior in that case.
+
+That means the patch should not immediately break older environments, but the security improvement takes effect once the runtime schema migration succeeds.
+
+**Verification I ran**
+I ran:
+```powershell
+php -l 'C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php'
+```
+
+Result:
+- Syntax check passed.
+- PHP also printed an unrelated startup warning: `Invalid date.timezone value '2', using 'UTC' instead`.
+
+**What I did not change**
+I did not modify:
+- The client-facing token format.
+- Login response payload shape.
+- Session listing/revocation APIs.
+- Any files outside [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php).
+
+**One assumption I made**
+I assumed it was safer to preserve the existing `token` column for schema compatibility, but replace its contents with a non-replayable marker instead of removing or renaming the column outright. That avoids breaking older code or SQL expectations while still eliminating raw bearer-token storage.

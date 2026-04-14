@@ -3,6 +3,27 @@ import ProfileDock from "../../../components/ProfileDock";
 import addFriendIcon from "../../../assets/add-friend.png";
 import addFriendWhiteIcon from "../../../assets/add-friend-white.png";
 
+function getFriendActivityTimestamp(friend, conversationPreviews) {
+    const preview = friend?.conversationId
+        ? conversationPreviews?.[String(friend.conversationId)] || null
+        : null;
+    const candidates = [
+        preview?.timestamp,
+        preview?.latestIncomingTimestamp,
+        friend?.respondedAt,
+        friend?.createdAt
+    ].filter(Boolean);
+
+    for (const value of candidates) {
+        const timestamp = new Date(value).getTime();
+        if (!Number.isNaN(timestamp) && timestamp > 0) {
+            return timestamp;
+        }
+    }
+
+    return 0;
+}
+
 function GroupSection({
     invites,
     conversations,
@@ -74,6 +95,7 @@ function GroupSection({
 
 function FriendCard({
     friend,
+    presenceState = "offline",
     selectedFriendId,
     activeView,
     friendTagLookup,
@@ -86,7 +108,7 @@ function FriendCard({
     const previewText = friend.conversationId
         ? conversationPreviews[String(friend.conversationId)]?.text || ""
         : "";
-    const displayStatus = friend.conversationId ? "DM ready" : "No DM yet";
+    const displayStatus = friend.conversationId ? "Secure conversation ready" : "Start a secure chat";
     const initial = String(friend.friendUsername || "?").trim().slice(0, 1).toUpperCase() || "?";
 
     return (
@@ -96,7 +118,13 @@ function FriendCard({
             onClick={() => onSelectFriend(friend.friendUserId)}
             onContextMenu={(event) => onOpenFriendContextMenu(event, friend)}
         >
-            <span className="friend-card-avatar" aria-hidden="true">{initial}</span>
+            <span className={`friend-card-avatar-wrap is-${presenceState}`.trim()} aria-hidden="true">
+                <span className="friend-card-avatar">{initial}</span>
+                <span
+                    className={`friend-card-presence-dot is-${presenceState}`.trim()}
+                    title={presenceState === "online" ? "Online" : "Offline"}
+                />
+            </span>
             <span className="friend-card-body">
                 <span className="friend-card-title-row">
                     <strong>{friend.friendUsername}</strong>
@@ -114,6 +142,7 @@ function FriendFolderSection({
     folder,
     friends,
     isCollapsed,
+    presenceByUserId,
     selectedFriendId,
     activeView,
     friendTagLookup,
@@ -146,6 +175,7 @@ function FriendFolderSection({
                         <FriendCard
                             key={friend.friendshipId}
                             friend={friend}
+                            presenceState={presenceByUserId?.[String(friend.friendUserId)] || "offline"}
                             selectedFriendId={selectedFriendId}
                             activeView={activeView}
                             friendTagLookup={friendTagLookup}
@@ -165,6 +195,7 @@ export default function FriendsRail({
     currentUser,
     profileMediaHostUrl,
     clientSettings,
+    onChangeClientSetting,
     loading,
     friendsState,
     hasPendingIncomingFriendRequests,
@@ -178,6 +209,7 @@ export default function FriendsRail({
     friendTagLookup,
     collapsedFriendFolders,
     conversationPreviews,
+    presenceByUserId,
     conversationHasUnreadActivity,
     onOpenAddFriend,
     onCreateGroup,
@@ -194,10 +226,23 @@ export default function FriendsRail({
     const [friendSearchQuery, setFriendSearchQuery] = useState("");
     const [friendBrowserView, setFriendBrowserView] = useState("list");
 
-    const friendsWithTags = friendsState.friends.map((friend) => ({
-        ...friend,
-        assignedTagId: friendTags[String(friend.friendUserId)] || null
-    }));
+    const friendsWithTags = useMemo(() => (
+        friendsState.friends
+            .map((friend) => ({
+                ...friend,
+                assignedTagId: friendTags[String(friend.friendUserId)] || null
+            }))
+            .sort((left, right) => {
+                const rightActivity = getFriendActivityTimestamp(right, conversationPreviews);
+                const leftActivity = getFriendActivityTimestamp(left, conversationPreviews);
+
+                if (rightActivity !== leftActivity) {
+                    return rightActivity - leftActivity;
+                }
+
+                return String(left.friendUsername || "").localeCompare(String(right.friendUsername || ""));
+            })
+    ), [conversationPreviews, friendTags, friendsState.friends]);
     const normalizedSearchQuery = friendSearchQuery.trim().toLowerCase();
     const filteredFriends = useMemo(() => {
         if (!normalizedSearchQuery) {
@@ -235,6 +280,7 @@ export default function FriendsRail({
                     <FriendCard
                         key={friend.friendshipId}
                         friend={friend}
+                        presenceState={presenceByUserId?.[String(friend.friendUserId)] || "offline"}
                         selectedFriendId={selectedFriendId}
                         activeView={activeView}
                         friendTagLookup={friendTagLookup}
@@ -340,6 +386,7 @@ export default function FriendsRail({
                                     const assignedTag = friendTagLookup[String(friend.assignedTagId)] || null;
                                     return assignedTag?.folderId === folder.id;
                                 })}
+                                presenceByUserId={presenceByUserId}
                                 selectedFriendId={selectedFriendId}
                                 activeView={activeView}
                                 friendTagLookup={friendTagLookup}
@@ -430,6 +477,7 @@ export default function FriendsRail({
                     currentUser={currentUser}
                     profileMediaHostUrl={profileMediaHostUrl}
                     clientSettings={clientSettings}
+                    onChangeClientSetting={onChangeClientSetting}
                     onOpenClientSettings={onOpenClientSettings}
                     onLogout={onLogout}
                 />

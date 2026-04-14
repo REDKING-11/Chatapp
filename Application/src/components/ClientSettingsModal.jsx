@@ -5,13 +5,29 @@ import {
     importClientSettingsFromFile,
     THEME_PRESETS
 } from "../features/clientSettings";
-import { updateUserProfile } from "../features/auth/actions";
+import {
+    beginMfaSetup,
+    disableMfa,
+    enableMfa,
+    fetchMfaStatus,
+    fetchSessions,
+    revokeSession,
+    updateUserProfile
+} from "../features/auth/actions";
 import {
     deleteProfileAsset,
     fetchProfileAssetBlobUrl,
     fetchProfileAssetManifest,
     uploadProfileAssets
 } from "../features/profile/actions";
+import {
+    approvePendingDmDevice,
+    fetchUserDmDevices,
+    fetchPendingDmDeviceApprovals,
+    revokeDmDeviceAndRewrapConversations,
+    rotateCurrentDmDeviceKeys
+} from "../features/dm/actions";
+import { getStoredAuthToken } from "../features/session/actions";
 import { formatAppError } from "../lib/debug";
 import { SHORTCUT_GROUPS } from "../lib/shortcuts";
 import PolicyDocumentModal from "./PolicyDocumentModal";
@@ -103,6 +119,19 @@ function formatBytes(bytes) {
     }
 
     return `${Math.ceil(bytes / 1024)} KB`;
+}
+
+function formatDeviceTimestamp(value) {
+    if (!value) {
+        return "Unknown time";
+    }
+
+    const timestamp = new Date(value);
+    if (Number.isNaN(timestamp.getTime())) {
+        return "Unknown time";
+    }
+
+    return timestamp.toLocaleString();
 }
 
 function loadImageFromObjectUrl(objectUrl) {
@@ -207,6 +236,18 @@ export default function ClientSettingsModal({
     const [mediaEditor, setMediaEditor] = useState(null);
     const [openPolicy, setOpenPolicy] = useState("");
     const [accountNotice, setAccountNotice] = useState("");
+    const [mfaStatus, setMfaStatus] = useState({ enabled: false, enabledAt: null, pendingSetup: false, available: true });
+    const [mfaSetup, setMfaSetup] = useState(null);
+    const [mfaCode, setMfaCode] = useState("");
+    const [sessions, setSessions] = useState([]);
+    const [sessionActionId, setSessionActionId] = useState("");
+    const [dmDevices, setDmDevices] = useState([]);
+    const [dmDevicesLoading, setDmDevicesLoading] = useState(false);
+    const [deviceActionId, setDeviceActionId] = useState("");
+    const [currentDmDeviceId, setCurrentDmDeviceId] = useState("");
+    const [pendingDmDevices, setPendingDmDevices] = useState([]);
+    const [seenTrustedDeviceIds, setSeenTrustedDeviceIds] = useState({});
+    const [newTrustedDeviceIds, setNewTrustedDeviceIds] = useState({});
     const [collapsedSections, setCollapsedSections] = useState({
         identity: false,
         theme: false,
@@ -225,10 +266,24 @@ export default function ClientSettingsModal({
     const userInitial = useMemo(() => userLabel.trim().slice(0, 1).toUpperCase() || "?", [userLabel]);
     const activeTabLabel = SETTINGS_TABS.find((tab) => tab.id === activeTab)?.label || "tab";
     const canResetActiveTab = (CLIENT_SETTINGS_TAB_KEYS[activeTab] || []).length > 0;
+    const trustedDeviceSeenStorageKey = `trustedDmDevicesSeen:${currentUser?.id || "guest"}`;
 
     useEffect(() => {
         setDisplayName(currentUser?.displayName || "");
     }, [currentUser?.displayName]);
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(trustedDeviceSeenStorageKey);
+            setSeenTrustedDeviceIds(raw ? JSON.parse(raw) : {});
+        } catch {
+            setSeenTrustedDeviceIds({});
+        }
+    }, [trustedDeviceSeenStorageKey]);
+
+    useEffect(() => {
+        localStorage.setItem(trustedDeviceSeenStorageKey, JSON.stringify(seenTrustedDeviceIds));
+    }, [seenTrustedDeviceIds, trustedDeviceSeenStorageKey]);
 
     useEffect(() => () => {
         if (mediaEditor?.objectUrl) {
@@ -255,6 +310,127 @@ export default function ClientSettingsModal({
 
         loadManifest();
     }, [currentUser?.id, profileMediaHostUrl]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        async function loadDmDevices() {
+            if (!currentUser?.id || !window.secureDm) {
+                setDmDevices([]);
+                setCurrentDmDeviceId("");
+                return;
+            }
+
+            const token = getStoredAuthToken();
+
+            if (!token) {
+                setDmDevices([]);
+                setCurrentDmDeviceId("");
+                return;
+            }
+
+            try {
+                setDmDevicesLoading(true);
+                const bundle = await window.secureDm.getDeviceBundle({
+                    userId: currentUser.id,
+                    username: currentUser.username
+                });
+                const data = await fetchUserDmDevices({
+                    token,
+                    userId: currentUser.id,
+                    includeRevoked: true
+                });
+                const pending = await fetchPendingDmDeviceApprovals({
+                    token
+                });
+
+                if (!cancelled) {
+                    setCurrentDmDeviceId(String(bundle?.deviceId || ""));
+                    setDmDevices(data.devices || []);
+                    setPendingDmDevices(pending.pendingDevices || []);
+                    setNewTrustedDeviceIds((prev) => {
+                        const next = {};
+                        (data.devices || []).forEach((device) => {
+                            const deviceId = String(device.deviceId);
+                            if (!seenTrustedDeviceIds[deviceId]) {
+                                next[deviceId] = true;
+                            } else if (prev[deviceId]) {
+                                next[deviceId] = true;
+                            }
+                        });
+                        return next;
+                    });
+                    setSeenTrustedDeviceIds((prev) => {
+                        const next = { ...(prev || {}) };
+                        (data.devices || []).forEach((device) => {
+                            if (!next[String(device.deviceId)]) {
+                                next[String(device.deviceId)] = new Date().toISOString();
+                            }
+                        });
+                        return next;
+                    });
+                }
+            } catch {
+                if (!cancelled) {
+                    setCurrentDmDeviceId("");
+                    setDmDevices([]);
+                    setPendingDmDevices([]);
+                }
+            } finally {
+                if (!cancelled) {
+                    setDmDevicesLoading(false);
+                }
+            }
+        }
+
+        loadDmDevices();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [currentUser?.id, currentUser?.username, seenTrustedDeviceIds]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        async function loadAccountSecurity() {
+            if (!currentUser?.id) {
+                setMfaStatus({ enabled: false, enabledAt: null, pendingSetup: false, available: true });
+                setSessions([]);
+                return;
+            }
+
+            const token = getStoredAuthToken();
+            if (!token) {
+                setMfaStatus({ enabled: false, enabledAt: null, pendingSetup: false, available: true });
+                setSessions([]);
+                return;
+            }
+
+            try {
+                const [mfaData, sessionsData] = await Promise.all([
+                    fetchMfaStatus({ token }),
+                    fetchSessions({ token })
+                ]);
+
+                if (!cancelled) {
+                    setMfaStatus(mfaData.mfa || { enabled: false, enabledAt: null, pendingSetup: false, available: true });
+                    setSessions(sessionsData.sessions || []);
+                }
+            } catch {
+                if (!cancelled) {
+                    setMfaStatus({ enabled: false, enabledAt: null, pendingSetup: false, available: true });
+                    setSessions([]);
+                }
+            }
+        }
+
+        loadAccountSecurity();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [currentUser?.id]);
 
     useEffect(() => {
         let revokedUrl = null;
@@ -548,6 +724,231 @@ export default function ClientSettingsModal({
             }).message);
         } finally {
             setMediaUploading(false);
+        }
+    }
+
+    async function handleRevokeDevice(deviceId) {
+        if (!currentUser?.id || !deviceId) {
+            return;
+        }
+
+        const token = getStoredAuthToken();
+
+        if (!token) {
+            setAccountNotice("Your session expired before that device could be revoked.");
+            return;
+        }
+
+        try {
+            setDeviceActionId(String(deviceId));
+            setAccountNotice("");
+            const data = await revokeDmDeviceAndRewrapConversations({
+                token,
+                currentUser,
+                deviceId
+            });
+            const refreshed = await fetchUserDmDevices({
+                token,
+                userId: currentUser.id,
+                includeRevoked: true
+            });
+            const pending = await fetchPendingDmDeviceApprovals({
+                token
+            });
+            setDmDevices(refreshed.devices || []);
+            setPendingDmDevices(pending.pendingDevices || []);
+            setAccountNotice("Trusted device revoked. Future DM keys will no longer be delivered to it.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not revoke that device right now.",
+                context: "DM device revoke"
+            }).message);
+        } finally {
+            setDeviceActionId("");
+        }
+    }
+
+    async function handleRotateDeviceKeys() {
+        if (!currentUser?.id) {
+            return;
+        }
+
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before this device could rotate its DM keys.");
+            return;
+        }
+
+        try {
+            setDeviceActionId(String(currentDmDeviceId || "rotate-current"));
+            setAccountNotice("");
+            const refreshed = await rotateCurrentDmDeviceKeys({
+                token,
+                currentUser
+            });
+            const pending = await fetchPendingDmDeviceApprovals({
+                token
+            });
+            setDmDevices(refreshed.devices || []);
+            setPendingDmDevices(pending.pendingDevices || []);
+            setAccountNotice("This device rotated its DM keys and rekeyed active conversations for future messages.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not rotate this device's DM keys right now.",
+                context: "DM device rotation"
+            }).message);
+        } finally {
+            setDeviceActionId("");
+        }
+    }
+
+    async function handleApprovePendingDevice(requestId) {
+        if (!currentUser?.id || !currentDmDeviceId) {
+            return;
+        }
+
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before that device could be approved.");
+            return;
+        }
+
+        try {
+            setDeviceActionId(`approve:${requestId}`);
+            setAccountNotice("");
+            const approved = await approvePendingDmDevice({
+                token,
+                currentUser,
+                requestId,
+                approverDeviceId: currentDmDeviceId
+            });
+            setDmDevices(approved.devices || []);
+            setPendingDmDevices(approved.pendingDevices || []);
+            setAccountNotice("Pending DM device approved. It can now receive future direct-message keys.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not approve that pending device right now.",
+                context: "DM device approval"
+            }).message);
+        } finally {
+            setDeviceActionId("");
+        }
+    }
+
+    async function refreshAccountSecurityState(token) {
+        const [mfaData, sessionsData] = await Promise.all([
+            fetchMfaStatus({ token }),
+            fetchSessions({ token })
+        ]);
+
+        setMfaStatus(mfaData.mfa || { enabled: false, enabledAt: null, pendingSetup: false, available: true });
+        setSessions(sessionsData.sessions || []);
+    }
+
+    async function handleBeginMfaSetup() {
+        if (mfaStatus.available === false) {
+            setAccountNotice("MFA setup is not available on this server until the auth schema upgrade is applied.");
+            return;
+        }
+
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before MFA setup could start.");
+            return;
+        }
+
+        try {
+            setSessionActionId("mfa:setup");
+            setAccountNotice("");
+            const data = await beginMfaSetup({ token });
+            setMfaSetup(data.setup || null);
+            setMfaCode("");
+            await refreshAccountSecurityState(token);
+            setAccountNotice("Authenticator setup created. Scan the key and confirm with a code to finish enabling MFA.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not start MFA setup right now.",
+                context: "MFA setup"
+            }).message);
+        } finally {
+            setSessionActionId("");
+        }
+    }
+
+    async function handleEnableMfa() {
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before MFA could be enabled.");
+            return;
+        }
+
+        try {
+            setSessionActionId("mfa:enable");
+            setAccountNotice("");
+            await enableMfa({ token, totpCode: mfaCode });
+            setMfaSetup(null);
+            setMfaCode("");
+            await refreshAccountSecurityState(token);
+            setAccountNotice("MFA is now enabled for this account.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not enable MFA right now.",
+                context: "MFA enable"
+            }).message);
+        } finally {
+            setSessionActionId("");
+        }
+    }
+
+    async function handleDisableMfa() {
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before MFA could be disabled.");
+            return;
+        }
+
+        try {
+            setSessionActionId("mfa:disable");
+            setAccountNotice("");
+            await disableMfa({ token, totpCode: mfaCode });
+            setMfaSetup(null);
+            setMfaCode("");
+            await refreshAccountSecurityState(token);
+            setAccountNotice("MFA has been disabled for this account.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not disable MFA right now.",
+                context: "MFA disable"
+            }).message);
+        } finally {
+            setSessionActionId("");
+        }
+    }
+
+    async function handleRevokeSession(publicId) {
+        if (!publicId) {
+            return;
+        }
+
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before that session could be revoked.");
+            return;
+        }
+
+        try {
+            setSessionActionId(`session:${publicId}`);
+            setAccountNotice("");
+            await revokeSession({ token, publicId });
+            await refreshAccountSecurityState(token);
+            setAccountNotice("Session revoked. That device will need to sign in again.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not revoke that session right now.",
+                context: "Session revoke"
+            }).message);
+        } finally {
+            setSessionActionId("");
         }
     }
 
@@ -862,6 +1263,14 @@ export default function ClientSettingsModal({
                             <button
                                 type="button"
                                 className="secondary"
+                                disabled={Boolean(deviceActionId)}
+                                onClick={handleRotateDeviceKeys}
+                            >
+                                {deviceActionId === String(currentDmDeviceId || "rotate-current") ? "Rotating DM keys..." : "Rotate DM keys"}
+                            </button>
+                            <button
+                                type="button"
+                                className="secondary"
                                 onClick={() => {
                                     setAccountNotice("");
                                     onClose?.();
@@ -878,6 +1287,208 @@ export default function ClientSettingsModal({
                                 Delete account
                             </button>
                         </div>
+                        <p className="client-settings-muted">
+                            Trusted DM devices can decrypt future direct messages. Review new devices, revoke old ones, and confirm bundle integrity here.
+                        </p>
+                        {pendingDmDevices.some((device) => String(device.deviceId) === String(currentDmDeviceId)) ? (
+                            <p className="client-settings-muted">
+                                This device is waiting for approval from an already trusted device before it can receive DM keys.
+                            </p>
+                        ) : null}
+                        <div className="client-settings-stack">
+                            <div className="client-settings-security-card">
+                                <div className="client-settings-security-copy">
+                                    <strong>Multi-factor authentication</strong>
+                                    <p>
+                                        {mfaStatus.enabled
+                                            ? `Enabled${mfaStatus.enabledAt ? ` on ${formatDeviceTimestamp(mfaStatus.enabledAt)}` : ""}.`
+                                            : mfaStatus.available === false
+                                                ? "This server has not applied the auth schema upgrade yet, so MFA setup is temporarily unavailable."
+                                                : "Add a TOTP authenticator code to protect logins if your password is ever exposed."}
+                                    </p>
+                                </div>
+                                <div className="client-settings-inline-actions">
+                                    {!mfaStatus.enabled ? (
+                                        <button
+                                            type="button"
+                                            className="secondary"
+                                            disabled={Boolean(sessionActionId) || mfaStatus.available === false}
+                                            onClick={handleBeginMfaSetup}
+                                        >
+                                            {sessionActionId === "mfa:setup" ? "Preparing..." : "Set up MFA"}
+                                        </button>
+                                    ) : null}
+                                    {mfaStatus.enabled ? (
+                                        <button
+                                            type="button"
+                                            className="danger"
+                                            disabled={Boolean(sessionActionId) || mfaCode.length !== 6}
+                                            onClick={handleDisableMfa}
+                                        >
+                                            {sessionActionId === "mfa:disable" ? "Disabling..." : "Disable MFA"}
+                                        </button>
+                                    ) : null}
+                                </div>
+                                {mfaSetup ? (
+                                    <div className="client-settings-code-block">
+                                        <span>Manual entry key</span>
+                                        <code>{mfaSetup.manualEntryKey}</code>
+                                        <span className="client-settings-muted">Authenticator URI: {mfaSetup.otpauthUri}</span>
+                                    </div>
+                                ) : null}
+                                {(mfaSetup || mfaStatus.enabled) ? (
+                                    <label className="client-settings-field">
+                                        <span>{mfaStatus.enabled ? "Authentication code to disable MFA" : "Authentication code to enable MFA"}</span>
+                                        <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            autoComplete="one-time-code"
+                                            placeholder="123456"
+                                            value={mfaCode}
+                                            onChange={(event) => setMfaCode(event.target.value.replace(/\D+/g, "").slice(0, 6))}
+                                        />
+                                    </label>
+                                ) : null}
+                                {mfaSetup && !mfaStatus.enabled ? (
+                                    <button
+                                        type="button"
+                                        className="secondary"
+                                        disabled={Boolean(sessionActionId) || mfaCode.length !== 6}
+                                        onClick={handleEnableMfa}
+                                    >
+                                        {sessionActionId === "mfa:enable" ? "Enabling..." : "Confirm and enable MFA"}
+                                    </button>
+                                ) : null}
+                            </div>
+
+                            <div className="client-settings-security-card">
+                                <div className="client-settings-security-copy">
+                                    <strong>Sessions</strong>
+                                    <p>Review signed-in devices and revoke anything you no longer trust.</p>
+                                </div>
+                                <div className="client-device-list">
+                                    {sessions.length > 0 ? (
+                                        sessions.map((session) => {
+                                            const isRevokingSession = sessionActionId === `session:${session.publicId}`;
+
+                                            return (
+                                                <div key={session.publicId} className="client-device-row">
+                                                    <div className="client-device-meta">
+                                                        <div className="client-device-heading">
+                                                            <strong>{session.sessionName || "Desktop app"}</strong>
+                                                            <div className="client-device-badges">
+                                                                {session.isCurrent ? <span className="client-device-badge">Current</span> : null}
+                                                                {session.mfaCompleted ? <span className="client-device-badge">MFA</span> : null}
+                                                            </div>
+                                                        </div>
+                                                        <span>{session.publicId}</span>
+                                                        <span>Created: {formatDeviceTimestamp(session.createdAt)}</span>
+                                                        <span>Last seen: {formatDeviceTimestamp(session.lastSeenAt)}</span>
+                                                        <span>Expires: {formatDeviceTimestamp(session.expiresAt)}</span>
+                                                        {session.userAgent ? <span>{session.userAgent}</span> : null}
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        className="danger"
+                                                        disabled={Boolean(sessionActionId) || session.isCurrent}
+                                                        onClick={() => handleRevokeSession(session.publicId)}
+                                                    >
+                                                        {isRevokingSession ? "Revoking..." : session.isCurrent ? "Current session" : "Revoke session"}
+                                                    </button>
+                                                </div>
+                                            );
+                                        })
+                                    ) : (
+                                        <p className="client-settings-muted">No active sessions are visible for this account yet.</p>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="client-device-list">
+                            {dmDevicesLoading ? (
+                                <p className="client-settings-muted">Loading trusted DM devices...</p>
+                            ) : dmDevices.length > 0 ? (
+                                dmDevices.map((device) => {
+                                    const isCurrentDevice = String(device.deviceId) === String(currentDmDeviceId);
+                                    const isRevoking = String(device.deviceId) === String(deviceActionId);
+                                    const isRevoked = Boolean(device.revokedAt);
+                                    const isNewDevice = Boolean(newTrustedDeviceIds[String(device.deviceId)]);
+                                    const statusBadges = [
+                                        isCurrentDevice ? "Current" : null,
+                                        isRevoked ? "Revoked" : "Active",
+                                        isNewDevice ? "New" : null,
+                                        device.signatureVerified ? "Signature verified" : "Unverified bundle"
+                                    ].filter(Boolean);
+
+                                    return (
+                                        <div key={device.deviceId} className="client-device-row">
+                                            <div className="client-device-meta">
+                                                <div className="client-device-heading">
+                                                    <strong>{device.deviceName || "Desktop"}</strong>
+                                                    <div className="client-device-badges">
+                                                        {statusBadges.map((badge) => (
+                                                            <span
+                                                                key={badge}
+                                                                className={`client-device-badge ${badge === "Revoked" ? "is-revoked" : badge === "New" ? "is-new" : ""}`.trim()}
+                                                            >
+                                                                {badge}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <span>{device.deviceId}</span>
+                                                <span>Registered: {formatDeviceTimestamp(device.createdAt)}</span>
+                                                <span>Updated: {formatDeviceTimestamp(device.updatedAt)}</span>
+                                                {device.revokedAt ? (
+                                                    <span>Revoked: {formatDeviceTimestamp(device.revokedAt)}</span>
+                                                ) : null}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                className="danger"
+                                                disabled={isCurrentDevice || isRevoked || Boolean(deviceActionId)}
+                                                onClick={() => handleRevokeDevice(device.deviceId)}
+                                            >
+                                                {isRevoking ? "Revoking..." : isCurrentDevice ? "Current device" : isRevoked ? "Revoked" : "Revoke device"}
+                                            </button>
+                                        </div>
+                                    );
+                                })
+                            ) : (
+                                <p className="client-settings-muted">No DM-capable devices are registered on this account yet.</p>
+                            )}
+                        </div>
+                        {pendingDmDevices.length > 0 ? (
+                            <div className="client-device-list">
+                                {pendingDmDevices.map((device) => {
+                                    const isApproving = String(deviceActionId) === `approve:${device.requestId}`;
+                                    const isCurrentPendingDevice = String(device.deviceId) === String(currentDmDeviceId);
+
+                                    return (
+                                        <div key={`pending-${device.requestId}`} className="client-device-row">
+                                            <div className="client-device-meta">
+                                                <div className="client-device-heading">
+                                                    <strong>{device.deviceName || "Pending device"}</strong>
+                                                    <div className="client-device-badges">
+                                                        <span className="client-device-badge is-new">Pending approval</span>
+                                                    </div>
+                                                </div>
+                                                <span>{device.deviceId}</span>
+                                                <span>Requested: {formatDeviceTimestamp(device.requestedAt)}</span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                className="secondary"
+                                                disabled={Boolean(deviceActionId) || isCurrentPendingDevice || !dmDevices.some((entry) => String(entry.deviceId) === String(currentDmDeviceId) && !entry.revokedAt)}
+                                                onClick={() => handleApprovePendingDevice(device.requestId)}
+                                            >
+                                                {isApproving ? "Approving..." : isCurrentPendingDevice ? "Waiting for another device" : "Approve device"}
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ) : null}
                         {accountNotice ? <p className="client-settings-muted">{accountNotice}</p> : null}
                     </CollapsibleSection>
 
