@@ -9,6 +9,7 @@ export default function MainView({
     backendUrl,
     profileMediaHostUrl,
     clientSettings,
+    onChangeClientSetting,
     customization,
     onFriendsActivityChange,
     onOpenClientSettings,
@@ -25,6 +26,7 @@ export default function MainView({
                 currentUser={currentUser}
                 profileMediaHostUrl={profileMediaHostUrl}
                 clientSettings={clientSettings}
+                onChangeClientSetting={onChangeClientSetting}
                 onActivityChange={onFriendsActivityChange}
                 onOpenClientSettings={onOpenClientSettings}
                 onLogout={onLogout}

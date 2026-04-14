@@ -4,6 +4,7 @@ import MessageList from "../../features/chat/components/MessageList";
 import ChatActionBanner from "../../features/chat/components/ChatActionBanner";
 import ChatComposer from "../../features/chat/components/ChatComposer";
 import { buildAppLinkContext } from "../../lib/appLinks";
+import { loadPinnedMessage, savePinnedMessage } from "../../lib/messagePins";
 
 export default function ChatBlock({
     channelId,
@@ -21,6 +22,11 @@ export default function ChatBlock({
     const [reactionPickerRequest, setReactionPickerRequest] = useState(null);
     const [fileShortcutSignal, setFileShortcutSignal] = useState(0);
     const [focusMessageRequest, setFocusMessageRequest] = useState(null);
+    const pinScopeKey = useMemo(
+        () => `channel:${String(currentServerId || "local")}:${String(channelId || "unknown")}`,
+        [channelId, currentServerId]
+    );
+    const [pinnedMessage, setPinnedMessage] = useState(() => loadPinnedMessage(pinScopeKey));
 
     const {
         messages,
@@ -69,6 +75,13 @@ export default function ChatBlock({
     const messageLinkBase = currentServerId != null && channelId != null
         ? `chatapp://server/${encodeURIComponent(String(currentServerId))}/channel/${encodeURIComponent(String(channelId))}`
         : "";
+    const resolvedPinnedMessage = useMemo(() => {
+        if (!pinnedMessage?.id) {
+            return null;
+        }
+
+        return messages.find((message) => String(message.id) === String(pinnedMessage.id)) || pinnedMessage;
+    }, [messages, pinnedMessage]);
 
     function startEdit(message) {
         if (message.isDeleted) return;
@@ -126,6 +139,41 @@ export default function ChatBlock({
         }
     }
 
+    function updatePinnedMessage(nextMessage) {
+        setPinnedMessage(savePinnedMessage(pinScopeKey, nextMessage));
+    }
+
+    async function handleCopyMessage(message) {
+        const text = String(message?.content || "").trim();
+
+        if (!text) {
+            return;
+        }
+
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch (error) {
+            console.error("Failed to copy message text:", error);
+        }
+    }
+
+    function handleTogglePinnedMessage(message) {
+        if (!message?.id) {
+            return;
+        }
+
+        if (String(pinnedMessage?.id || "") === String(message.id)) {
+            updatePinnedMessage(null);
+            return;
+        }
+
+        updatePinnedMessage({
+            id: message.id,
+            author: message.author,
+            content: message.content
+        });
+    }
+
     useEffect(() => {
         function handleShortcut(event) {
             const action = event.detail?.action;
@@ -176,6 +224,10 @@ export default function ChatBlock({
     }, [currentUser?.id, currentUser?.username, input, messages, selectedMessageId]);
 
     useEffect(() => {
+        setPinnedMessage(loadPinnedMessage(pinScopeKey));
+    }, [pinScopeKey]);
+
+    useEffect(() => {
         function handleFocusMessage(event) {
             const { scope, channelId: targetChannelId, messageId, token } = event.detail || {};
 
@@ -221,6 +273,22 @@ export default function ChatBlock({
         setFocusMessageRequest(null);
     }, [focusMessageRequest, messages]);
 
+    useEffect(() => {
+        if (selectedMessageId == null) {
+            return;
+        }
+
+        const matchingNode = Array.from(document.querySelectorAll(".message-stack[data-message-id]"))
+            .find((node) => node.getAttribute("data-message-id") === String(selectedMessageId));
+
+        if (matchingNode) {
+            matchingNode.scrollIntoView({
+                behavior: "smooth",
+                block: "center"
+            });
+        }
+    }, [selectedMessageId]);
+
     if (!currentUser) {
         return (
             <div className="panel-card">
@@ -234,6 +302,29 @@ export default function ChatBlock({
         <div className="panel-card">
             <h3>Chat</h3>
 
+            {resolvedPinnedMessage ? (
+                <div className="pinned-message-banner" role="note">
+                    <div>
+                        <strong>Pinned</strong>
+                        <span>
+                            {resolvedPinnedMessage.author ? `${resolvedPinnedMessage.author}: ` : ""}
+                            {String(resolvedPinnedMessage.content || "").trim() || "Message"}
+                        </span>
+                    </div>
+                    <div className="pinned-message-banner-actions">
+                        <button
+                            type="button"
+                            onClick={() => setSelectedMessageId(resolvedPinnedMessage.id)}
+                        >
+                            Jump
+                        </button>
+                        <button type="button" onClick={() => updatePinnedMessage(null)}>
+                            Unpin
+                        </button>
+                    </div>
+                </div>
+            ) : null}
+
             <div className="demo-chat">
                 <MessageList
                     messages={messages}
@@ -245,6 +336,7 @@ export default function ChatBlock({
                     onEdit={startEdit}
                     onDelete={deleteExistingMessage}
                     onToggleReaction={(message, emoji) => toggleReaction({ messageId: message.id, emoji })}
+                    onCopyText={handleCopyMessage}
                     onCopyLink={async (href) => {
                         try {
                             await navigator.clipboard.writeText(href);
@@ -252,6 +344,8 @@ export default function ChatBlock({
                             console.error("Failed to copy message link:", error);
                         }
                     }}
+                    onTogglePin={handleTogglePinnedMessage}
+                    pinnedMessageId={resolvedPinnedMessage?.id || null}
                     selectedMessageId={selectedMessageId}
                     onSelectMessage={(message) => setSelectedMessageId(message.id)}
                     reactionPickerRequest={reactionPickerRequest}

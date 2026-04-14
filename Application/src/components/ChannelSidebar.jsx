@@ -8,6 +8,7 @@ export default function ChannelSidebar({
     backendUrl,
     profileMediaHostUrl,
     clientSettings,
+    onChangeClientSetting,
     onOpenClientSettings,
     onLogout
 }) {
@@ -37,6 +38,7 @@ export default function ChannelSidebar({
                     backendUrl={backendUrl}
                     profileMediaHostUrl={profileMediaHostUrl}
                     clientSettings={clientSettings}
+                    onChangeClientSetting={onChangeClientSetting}
                     onOpenClientSettings={onOpenClientSettings}
                     onLogout={onLogout}
                 />

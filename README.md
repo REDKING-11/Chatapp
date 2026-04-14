@@ -265,7 +265,7 @@ The client will support:
 Server owners:
 
 * run their own backend instance
-* expose it via URL (e.g. `http://ip:3000`) (or PortForwarding i have not chosen yet)
+* expose it via HTTPS URL for remote access (e.g. `https://chat.example.com`) (`http://localhost:3000` is fine only for local development)
 
 Optional enhancements:
 

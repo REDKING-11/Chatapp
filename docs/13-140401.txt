@@ -1,0 +1,114 @@
+**What Changed**
+
+Across this chat, I worked on four big areas: the DM settings UI, DM/E2EE security boundaries, auth/security/storage, and login bug.
+
+**1. DM Settings UI**
+- Reworked the broken relay/disappearing-message picker multiple times after the original 3D hex-cylinder version failed.
+- Fixed the selector so it no longer expands the whole list and now shows a stable 3-option picker.
+- Removed the visible up/down arrow controls from the picker UI.
+- Fixed the default relay display so new/unset conversations show `24 hours` instead of `No relay`.
+- Fixed the passive wheel-listener warning by moving wheel handling off the React passive path.
+- Added/kept mouse-wheel and keyboard navigation support.
+- Moved `Logout` into settings.
+- Added a `Delete account` button in Advanced that intentionally does nothing and shows a WIP message.
+- Removed the top-level `Join Server` button next to logout.
+
+Files involved included:
+- [Application/src/features/friends/components/FriendConversationSettingsModal.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/components/FriendConversationSettingsModal.jsx)
+- [Application/src/features/friends/pages/FriendsHome.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/pages/FriendsHome.jsx)
+- [Application/src/components/ClientSettingsModal.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/components/ClientSettingsModal.jsx)
+- [Application/src/index.css](C:/Users/REDKING/Projects/Chatapp/Application/src/index.css)
+- [Application/src/renderer.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/renderer.jsx)
+
+**2. Refresh / chat list behavior**
+- Reworked the friends refresh logic so periodic refreshes no longer jump you back to the top conversation.
+- Preserved selected chat and existing ordering during refresh.
+- Narrowed reload behavior so DM updates only refetch when the selected friend’s relevant data changes.
+
+Main file:
+- [Application/src/features/friends/pages/FriendsHome.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/pages/FriendsHome.jsx)
+
+**3. DM / E2EE security work**
+I implemented or tightened a lot of the security items you listed:
+
+- Kept DM private keys inside the Electron main process and blocked secret-shaped IPC responses.
+- Hardened the preload/main boundary so renderer code cannot directly access DM private keys.
+- Kept DM store material in encrypted main-process storage guarded by `safeStorage`.
+- Added runtime guards to prevent plaintext/key material from leaking through DM export paths.
+- Enforced HTTPS/WSS for remote DM-related endpoints, allowing plain HTTP only for localhost development.
+- Added signed DM device bundles and verification of those bundles on use.
+- Added device revocation flow end to end, including UI and backend revocation endpoints.
+- Encrypted DM attachments before transfer and put the attachment key inside the encrypted DM envelope.
+- Ensured DM edits/deletes/reactions/disappearing-message events go through encrypted control messages instead of plaintext-style routes.
+- Added a self-hosted separate ciphertext-only DM relay store instead of using plaintext channel message storage.
+- Added device fingerprints / safety numbers and user-facing verification UI.
+- Added trusted-device UX in settings so users can see active/new/revoked devices.
+- Added Ed25519 signatures for DM message envelopes and verification on receipt.
+- Added replay protection for DM messages.
+- Added device key rotation and conversation rekeying.
+- Added trusted-device approval for new DM devices.
+- Reduced DM relay metadata retention and shortened retention choices.
+- Moved long-lived auth token persistence out of renderer `localStorage` and into safer main-process storage.
+- Added MFA/TOTP plus session management to account auth.
+
+These touched many files, especially:
+- [Application/src/main/dm/service.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/dm/service.js)
+- [Application/src/main/dm/crypto.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/dm/crypto.js)
+- [Application/src/main/dm/storage.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/dm/storage.js)
+- [Application/src/main/transfers/service.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/transfers/service.js)
+- [Application/src/main.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main.js)
+- [Application/src/preload.js](C:/Users/REDKING/Projects/Chatapp/Application/src/preload.js)
+- [Application/src/features/dm/actions.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/dm/actions.js)
+- [Application/src/features/friends/actions.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/actions.js)
+- [Application/src/main/auth/storage.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/auth/storage.js)
+- [Application/src/features/session/actions.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/session/actions.js)
+- many `chatapp-core/dm/*`, `chatapp-core/keys/*`, and `SelfHServer/*` files
+
+**4. Auth / login / MFA / session work**
+- Refactored backend auth into shared helpers in [chatapp-core/auth/_bootstrap.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/auth/_bootstrap.php).
+- Reworked [login.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/auth/login.php), [me.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/auth/me.php), and [auth_required.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/auth_required.php) to use the shared logic.
+- Added MFA challenge flow, MFA setup/enable/disable endpoints, and session listing/revocation endpoints.
+- Improved the client auth screen UX in [Application/src/components/AuthScreen.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/components/AuthScreen.jsx).
+- Fixed MFA completion so successful MFA login actually stores the session token.
+- Added `X-Chatapp-Session-Name` to auth requests and then fixed the backend CORS allowlist to permit it.
+- Tightened MFA feature gating so partially upgraded schemas do not falsely enable MFA and then fail at runtime.
+- Fixed DB connection handling in [chatapp-core/db.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/db.php), including DB port support.
+- Fixed the main login bug you just reported:
+  - login now accepts visible handles like `name#1234`
+  - login and registration no longer `trim()` passwords
+  - registration properly handles username base/tag split
+
+Important auth files:
+- [chatapp-core/auth/_bootstrap.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/auth/_bootstrap.php)
+- [chatapp-core/auth/login.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/auth/login.php)
+- [chatapp-core/auth/register.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/auth/register.php)
+- [chatapp-core/auth/me.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/auth/me.php)
+- [chatapp-core/auth_required.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/auth_required.php)
+- [chatapp-core/db.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/db.php)
+- [chatapp-core/.htaccess](C:/Users/REDKING/Projects/Chatapp/chatapp-core/.htaccess)
+- [chatapp-core/user_profile.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/user_profile.php)
+- [Application/src/features/auth/actions.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/auth/actions.js)
+- [Application/src/components/AuthScreen.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/components/AuthScreen.jsx)
+
+**Failures / regressions / broken stuff along the way**
+- The first few DM picker rewrites did not work correctly.
+- I had multiple failed UI attempts where the selector rendered blank or invisible.
+- The original 3D hex-cylinder approach was too fragile and had to be abandoned for a simpler stable picker.
+- I introduced an auth-request header change that briefly created a CORS mismatch until I fixed the backend allowlist.
+- The remote login issue on your deployed server was partly environmental/deployment-related, not just app code.
+- MFA/session features depend on schema support; I added compatibility fallbacks, but upgraded features stay unavailable on legacy DBs until those tables/columns exist.
+- I did not fully live-test every backend flow against your deployed remote server after each security change.
+- Several of the large DM security changes were implemented and package/lint checked, but some were not end-to-end integration tested in a live multi-device environment during this chat.
+- PHP linting repeatedly showed a local warning about `date.timezone` being set to `2`; it did not block syntax checks, but it is still a config issue on your PHP setup.
+
+**Verification I did**
+- Repeatedly ran `npm run package` for the Electron app, and it passed after the changes.
+- Ran `php -l` on the main auth files after the login fixes, and they passed.
+- Inspected the schema you pasted and adjusted auth compatibility based on that real DB state.
+
+**Current known state**
+- The username-handle login mismatch is fixed in code.
+- Passwords are no longer silently altered by trimming.
+- The auth screen now clearly tells users they can log in with `name` or `name#1234`.
+- The DM settings picker is in a simpler, stable version instead of the broken earlier 3D one.
+- A lot of the DM hardening work is in place, but the highest-risk remaining gap is live integration validation across all those new security paths.

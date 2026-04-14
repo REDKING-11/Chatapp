@@ -5,6 +5,7 @@ require_once __DIR__ . '/../_bootstrap.php';
 $user = requireAuth();
 $db = getDb();
 $data = readJsonInput();
+dmEnsureRelayQueueMessageSignatureColumns($db);
 
 $participantUserIds = dmRequireArray($data, 'participantUserIds', 'participantUserIds is required');
 $wrappedKeys = dmRequireArray($data, 'wrappedKeys', 'wrappedKeys is required');
@@ -135,14 +136,16 @@ try {
             INSERT INTO dm_relay_queue (
                 message_id,
                 conversation_id,
+                sender_user_id,
                 recipient_device_id,
                 sender_device_id,
                 ciphertext,
                 nonce,
                 aad,
                 tag,
+                message_signature,
                 expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
         ');
 
         foreach ($recipientDeviceIds as $recipientDeviceIdRaw) {
@@ -155,12 +158,14 @@ try {
             $relayStmt->execute([
                 $messageId,
                 $conversationId,
+                (int)$user['id'],
                 $recipientDeviceId,
                 $senderDeviceId,
                 $envelope['ciphertext'],
                 $envelope['nonce'],
                 $envelope['aad'],
                 $envelope['tag'],
+                $envelope['signature'],
                 $relayTtlSeconds
             ]);
         }

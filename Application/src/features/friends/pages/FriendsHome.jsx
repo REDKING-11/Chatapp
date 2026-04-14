@@ -30,7 +30,8 @@ import {
     sendFriendRequest,
     toggleFriendDirectReaction
 } from "../actions";
-import { DISAPPEARING_MESSAGE_OPTIONS, RELAY_RETENTION_OPTIONS, sendSecureDmRealtimeEvent } from "../../dm/actions";
+import { DISAPPEARING_MESSAGE_OPTIONS, RELAY_RETENTION_OPTIONS, sendSecureDmRealtimeEvent, subscribeSecureDmPresence } from "../../dm/actions";
+import { getStoredAuthToken } from "../../session/actions";
 import {
     createGroupConversation,
     fetchPendingGroupInvites,
@@ -57,6 +58,7 @@ export default function FriendsHome({
     currentUser,
     profileMediaHostUrl,
     clientSettings,
+    onChangeClientSetting,
     onActivityChange,
     onOpenClientSettings,
     onLogout
@@ -117,6 +119,8 @@ export default function FriendsHome({
     const [directAttachments, setDirectAttachments] = useState([]);
     const [groupAttachments, setGroupAttachments] = useState([]);
     const [attachmentTransferStates, setAttachmentTransferStates] = useState({});
+    const [presenceByUserId, setPresenceByUserId] = useState({});
+    const [messageDeliveryById, setMessageDeliveryById] = useState({});
     const messageListRef = useRef(null);
     const secureStatusRef = useRef(null);
     const lockCloseTimeoutRef = useRef(null);
@@ -378,6 +382,67 @@ export default function FriendsHome({
         window.addEventListener("clientSettingsChanged", handleClientSettingsChanged);
         return () => window.removeEventListener("clientSettingsChanged", handleClientSettingsChanged);
     }, []);
+
+    useEffect(() => {
+        setPresenceByUserId({});
+    }, [currentUser?.id]);
+
+    useEffect(() => {
+        function handlePresenceSnapshot(event) {
+            const items = Array.isArray(event.detail?.items) ? event.detail.items : [];
+
+            setPresenceByUserId((prev) => {
+                const next = { ...prev };
+                items.forEach((item) => {
+                    const userId = String(item?.userId || "");
+                    if (!userId) {
+                        return;
+                    }
+
+                    next[userId] = item?.state === "online" ? "online" : "offline";
+                });
+                return next;
+            });
+        }
+
+        function handlePresenceUpdate(event) {
+            const userId = String(event.detail?.userId || "");
+            if (!userId) {
+                return;
+            }
+
+            setPresenceByUserId((prev) => ({
+                ...prev,
+                [userId]: event.detail?.state === "online" ? "online" : "offline"
+            }));
+        }
+
+        window.addEventListener("secureDmPresenceSnapshot", handlePresenceSnapshot);
+        window.addEventListener("secureDmPresenceUpdate", handlePresenceUpdate);
+        return () => {
+            window.removeEventListener("secureDmPresenceSnapshot", handlePresenceSnapshot);
+            window.removeEventListener("secureDmPresenceUpdate", handlePresenceUpdate);
+        };
+    }, []);
+
+    useEffect(() => {
+        const token = getStoredAuthToken();
+        const friendUserIds = (friendsState.friends || [])
+            .map((friend) => Number(friend.friendUserId))
+            .filter((userId) => Number.isInteger(userId) && userId > 0);
+
+        if (!currentUser?.id || !token || friendUserIds.length === 0) {
+            return;
+        }
+
+        subscribeSecureDmPresence({
+            token,
+            currentUser,
+            userIds: friendUserIds
+        }).catch((error) => {
+            console.warn("Failed to subscribe to friend presence updates:", error);
+        });
+    }, [currentUser, friendsState.friends]);
 
     useEffect(() => {
         if (!debugModeEnabled && errorDebugDetails) {
@@ -838,7 +903,7 @@ export default function FriendsHome({
 
                     if (!attachmentInfo) {
                         await sendSecureDmRealtimeEvent({
-                            token: localStorage.getItem("authToken"),
+                            token: getStoredAuthToken(),
                             currentUser,
                             payload: {
                                 type: "dm:file:error",
@@ -857,15 +922,12 @@ export default function FriendsHome({
                     });
 
                     await sendSecureDmRealtimeEvent({
-                        token: localStorage.getItem("authToken"),
+                        token: getStoredAuthToken(),
                         currentUser,
                         payload: {
                             type: "dm:file:ready",
                             targetDeviceId: detail.senderDeviceId,
-                            transferId,
-                            fileName: attachmentInfo.fileName,
-                            fileSize: attachmentInfo.fileSize,
-                            mimeType: attachmentInfo.mimeType
+                            transferId
                         }
                     });
 
@@ -879,13 +941,15 @@ export default function FriendsHome({
                         });
 
                         await sendSecureDmRealtimeEvent({
-                            token: localStorage.getItem("authToken"),
+                            token: getStoredAuthToken(),
                             currentUser,
                             payload: {
                                 type: "dm:file:chunk",
                                 targetDeviceId: detail.senderDeviceId,
                                 transferId,
                                 chunkBase64: chunk.chunkBase64,
+                                ivBase64: chunk.ivBase64,
+                                tagBase64: chunk.tagBase64,
                                 nextOffset: chunk.nextOffset,
                                 fileSize: chunk.fileSize
                             }
@@ -904,7 +968,7 @@ export default function FriendsHome({
                     }
 
                     await sendSecureDmRealtimeEvent({
-                        token: localStorage.getItem("authToken"),
+                        token: getStoredAuthToken(),
                         currentUser,
                         payload: {
                             type: "dm:file:complete",
@@ -924,7 +988,7 @@ export default function FriendsHome({
                     updateAttachmentTransferState(transferId, {
                         status: "downloading",
                         progress: 0,
-                        fileName: detail.fileName || attachmentTransferStates[String(transferId)]?.fileName || "file"
+                        fileName: attachmentTransferStates[String(transferId)]?.fileName || "file"
                     });
                     return;
                 }
@@ -932,7 +996,9 @@ export default function FriendsHome({
                 if (detail.type === "dm:file:chunk") {
                     await window.attachmentTransfers.appendIncomingChunk({
                         transferId,
-                        chunkBase64: detail.chunkBase64
+                        chunkBase64: detail.chunkBase64,
+                        ivBase64: detail.ivBase64,
+                        tagBase64: detail.tagBase64
                     });
 
                     updateAttachmentTransferState(transferId, {
@@ -1042,8 +1108,27 @@ export default function FriendsHome({
     }, [currentUser?.id]);
 
     useEffect(() => {
+        setMessageDeliveryById({});
+    }, [currentUser?.id]);
+
+    useEffect(() => {
         function handleRelayQueueState(event) {
             const detail = event.detail || {};
+            const messageId = detail.messageId != null ? String(detail.messageId) : "";
+            const hasDroppedRecipients = (detail.droppedRecipients || []).length > 0;
+            const hasOfflineRecipients = (detail.offlineRecipients || []).length > 0;
+
+            if (messageId) {
+                setMessageDeliveryById((prev) => ({
+                    ...prev,
+                    [messageId]: hasDroppedRecipients
+                        ? "failed"
+                        : hasOfflineRecipients
+                            ? "queued"
+                            : "sent"
+                }));
+            }
+
             if ((detail.droppedRecipients || []).length > 0) {
                 showStaticError("Your friend is offline and this chat is set to no relay, so the message was not queued.", "Friends relay queue: dropped recipients while relay was disabled.");
             }
@@ -1303,6 +1388,12 @@ export default function FriendsHome({
             setMessages(result.messages);
             setConversationMeta(result.conversation);
             setHasLocalConversationAccess(true);
+            if (result.outboundMessageId) {
+                setMessageDeliveryById((prev) => ({
+                    ...prev,
+                    [String(result.outboundMessageId)]: prev[String(result.outboundMessageId)] || "sent"
+                }));
+            }
             setFriendsState((prev) => ({
                 ...prev,
                 friends: prev.friends.map((friend) =>
@@ -1657,6 +1748,7 @@ export default function FriendsHome({
 
         try {
             const conversation = await requestFriendDisappearingMessages({
+                currentUser,
                 conversationId: effectiveSelectedFriend.conversationId,
                 messageTtlSeconds: selectedDisappearingTtlSeconds
             });
@@ -1692,6 +1784,7 @@ export default function FriendsHome({
 
         try {
             const conversation = await acceptFriendDisappearingMessages({
+                currentUser,
                 conversationId: effectiveSelectedFriend.conversationId
             });
 
@@ -1982,16 +2075,13 @@ export default function FriendsHome({
         });
 
         await sendSecureDmRealtimeEvent({
-            token: localStorage.getItem("authToken"),
+            token: getStoredAuthToken(),
             currentUser,
             payload: {
                 type: "dm:file:request",
                 conversationId,
                 targetDeviceId: senderDeviceId,
-                transferId: attachment.transferId,
-                fileName: attachment.fileName,
-                fileSize: attachment.fileSize,
-                mimeType: attachment.mimeType
+                transferId: attachment.transferId
             }
         });
     }
@@ -2256,6 +2346,7 @@ export default function FriendsHome({
                     currentUser={currentUser}
                     profileMediaHostUrl={profileMediaHostUrl}
                     clientSettings={clientSettings}
+                    onChangeClientSetting={onChangeClientSetting}
                     loading={loading}
                     friendsState={friendsState}
                     hasPendingIncomingFriendRequests={(friendsState.incomingRequests || []).length > 0}
@@ -2269,6 +2360,7 @@ export default function FriendsHome({
                     friendTagLookup={friendTagLookup}
                     collapsedFriendFolders={collapsedFriendFolders}
                     conversationPreviews={conversationPreviews}
+                    presenceByUserId={presenceByUserId}
                     conversationHasUnreadActivity={conversationHasUnreadActivity}
                     onOpenAddFriend={() => setShowAddFriendModal(true)}
                     onCreateGroup={() => setShowCreateGroupModal(true)}
@@ -2296,6 +2388,7 @@ export default function FriendsHome({
                     groupEditingMessage={groupEditingMessage}
                     selectedFriend={selectedFriend}
                     effectiveSelectedFriend={effectiveSelectedFriend}
+                    presenceByUserId={presenceByUserId}
                     secureStatusRef={secureStatusRef}
                     canRequestOldConversation={canRequestOldConversation}
                     isForgettingOldConversation={isForgettingOldConversation}
@@ -2368,6 +2461,7 @@ export default function FriendsHome({
                     }}
                     onDirectDelete={handleDeleteDirectMessage}
                     onDirectToggleReaction={handleToggleDirectReaction}
+                    messageDeliveryById={messageDeliveryById}
                     onCancelDirectAction={() => {
                         setDirectReplyTo(null);
                         setDirectEditingMessage(null);
@@ -2379,6 +2473,7 @@ export default function FriendsHome({
 
             {showConversationSettings && selectedFriend ? (
                 <FriendConversationSettingsModal
+                    currentUser={currentUser}
                     selectedFriend={selectedFriend}
                     effectiveSelectedFriend={effectiveSelectedFriend}
                     selectedRelayTtlSeconds={selectedRelayTtlSeconds}

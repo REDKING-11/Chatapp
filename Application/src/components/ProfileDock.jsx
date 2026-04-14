@@ -8,6 +8,34 @@ import {
     updateServerProfile
 } from "../features/profile/serverProfileActions";
 
+const PRESENCE_OPTIONS = [
+    {
+        id: "online",
+        label: "On",
+        detail: "Ready to chat"
+    },
+    {
+        id: "free",
+        label: "Free",
+        detail: "Available"
+    },
+    {
+        id: "busy",
+        label: "Busy",
+        detail: "Heads down"
+    },
+    {
+        id: "chilling",
+        label: "Chilling",
+        detail: "Taking it easy"
+    },
+    {
+        id: "off",
+        label: "Off",
+        detail: "Away for now"
+    }
+];
+
 function getUserLabel(user) {
     return user?.displayName || user?.usernameBase || user?.username || "User";
 }
@@ -39,6 +67,7 @@ export default function ProfileDock({
     backendUrl,
     profileMediaHostUrl,
     clientSettings,
+    onChangeClientSetting,
     onOpenClientSettings,
     onLogout
 }) {
@@ -60,6 +89,8 @@ export default function ProfileDock({
     const userHandle = useMemo(() => getUserHandle(currentUser), [currentUser]);
     const initials = useMemo(() => getInitials(userLabel), [userLabel]);
     const hasServerProfile = Boolean(backendUrl);
+    const presenceStatus = clientSettings?.presenceStatus || "online";
+    const presenceMeta = PRESENCE_OPTIONS.find((option) => option.id === presenceStatus) || PRESENCE_OPTIONS[0];
 
     useEffect(() => {
         async function loadManifest() {
@@ -251,6 +282,14 @@ export default function ProfileDock({
         }
     }
 
+    function handleStatusChange(nextStatus) {
+        if (!nextStatus || nextStatus === presenceStatus) {
+            return;
+        }
+
+        onChangeClientSetting?.("presenceStatus", nextStatus);
+    }
+
     return (
         <div className="profile-dock">
             {isCardOpen ? (
@@ -268,7 +307,7 @@ export default function ProfileDock({
                             <div className="profile-dock-avatar profile-dock-card-avatar">
                                 {avatarUrl ? <img src={avatarUrl} alt={userLabel} className="profile-dock-avatar-image" /> : initials}
                             </div>
-                            <span className="profile-dock-card-status-dot" />
+                            <span className={`profile-dock-card-status-dot is-${presenceStatus}`.trim()} />
                         </div>
 
                         <div className="profile-dock-card-actions">
@@ -293,6 +332,29 @@ export default function ProfileDock({
                         <div className="profile-dock-card-meta">
                             <strong>{userLabel}</strong>
                             <span>{userHandle}</span>
+                        </div>
+
+                        <div className="profile-dock-status-panel">
+                            <div className="profile-dock-status-summary">
+                                <span className={`profile-dock-status-pill is-${presenceStatus}`.trim()}>
+                                    {presenceMeta.label}
+                                </span>
+                                <small>{presenceMeta.detail}</small>
+                            </div>
+
+                            <div className="profile-dock-status-grid" aria-label="Presence status">
+                                {PRESENCE_OPTIONS.map((option) => (
+                                    <button
+                                        key={option.id}
+                                        type="button"
+                                        className={`profile-dock-status-option ${option.id === presenceStatus ? "is-active" : ""}`.trim()}
+                                        onClick={() => handleStatusChange(option.id)}
+                                    >
+                                        <span className={`profile-dock-status-dot is-${option.id}`.trim()} aria-hidden="true" />
+                                        <span>{option.label}</span>
+                                    </button>
+                                ))}
+                            </div>
                         </div>
 
                         <div className="profile-dock-host-note">
@@ -442,7 +504,7 @@ export default function ProfileDock({
                 </div>
                 <div className="profile-dock-meta">
                     <strong>{userLabel}</strong>
-                    <span>{userHandle}</span>
+                    <span>{userHandle} · {presenceMeta.label}</span>
                 </div>
             </button>
         </div>

@@ -11,7 +11,10 @@ export default function MessageList({
     onEdit,
     onDelete,
     onToggleReaction,
+    onCopyText,
     onCopyLink,
+    onTogglePin,
+    pinnedMessageId = null,
     selectedMessageId = null,
     onSelectMessage = null,
     reactionPickerRequest = null
@@ -46,7 +49,10 @@ export default function MessageList({
                     onEdit={onEdit}
                     onDelete={onDelete}
                     onToggleReaction={onToggleReaction}
+                    onCopyText={onCopyText}
                     onCopyLink={onCopyLink}
+                    onTogglePin={onTogglePin}
+                    isPinned={String(pinnedMessageId || "") === String(message.id)}
                     isSelected={String(selectedMessageId || "") === String(message.id)}
                     onSelect={onSelectMessage}
                     openReactionPickerSignal={

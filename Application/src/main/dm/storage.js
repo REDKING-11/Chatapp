@@ -3,6 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
+// DM secrets are only allowed to persist inside this encrypted store.
+// Do not duplicate DM key material or decrypted conversation data into logs,
+// localStorage, plain JSON files, exports, or any other weaker storage path.
 const STORE_DIR = path.join(app.getPath("userData"), "secure-dm");
 const MASTER_KEY_PATH = path.join(STORE_DIR, "master-key.bin");
 const STORE_PATH = path.join(STORE_DIR, "store.json.enc");
@@ -58,6 +61,14 @@ function getMasterKey() {
   return key;
 }
 
+function writeEncryptedStoreFile(store, masterKey) {
+  const encryptedPayload = JSON.stringify(encryptJson(store, masterKey), null, 2);
+  const tempPath = `${STORE_PATH}.tmp`;
+
+  fs.writeFileSync(tempPath, encryptedPayload, "utf8");
+  fs.renameSync(tempPath, STORE_PATH);
+}
+
 export function readSecureDmStore() {
   ensureDir();
   const masterKey = Buffer.from(getMasterKey(), "base64");
@@ -75,5 +86,5 @@ export function readSecureDmStore() {
 export function writeSecureDmStore(store) {
   ensureDir();
   const masterKey = Buffer.from(getMasterKey(), "base64");
-  fs.writeFileSync(STORE_PATH, JSON.stringify(encryptJson(store, masterKey), null, 2));
+  writeEncryptedStoreFile(store, masterKey);
 }

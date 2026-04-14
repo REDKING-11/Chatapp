@@ -2,9 +2,9 @@ const CORE_API_BASES = Array.from(
     new Set(
         [
             process.env.CORE_API_BASE,
-            "http://56.228.2.7",
             "https://56.228.2.7",
-            "https://core.samlam24.treok.io"
+            "https://core.samlam24.treok.io",
+            "http://localhost:4000"
         ].filter(Boolean)
     )
 );

@@ -1,0 +1,168 @@
+Here’s the full breakdown of what I changed for that pass.
+
+**What Changed**
+
+I worked on three areas:
+
+1. making DMs behave more like a real inbox
+2. making delivery state clearer per message
+3. improving the wording in the friends rail
+
+**1. Friends / DM Inbox Ordering**
+
+In [friends/list.php](/C:/Users/REDKING/Projects/Chatapp/chatapp-core/friends/list.php:8), the backend used to return friends ordered by `friendships.created_at DESC`, which effectively meant “most recently added friend first.” That makes the rail feel like a contact list, not an inbox.
+
+I changed the query so it now:
+- `LEFT JOIN`s `dm_conversations c ON c.id = f.conversation_id`
+- selects `c.updated_at AS conversation_updated_at`
+- orders by `COALESCE(c.updated_at, f.responded_at, f.created_at) DESC`
+
+That means the server now prefers:
+- most recently active DM conversation first
+- then most recently responded friendship
+- then original friendship creation time
+
+So even before the frontend does anything, the API is now closer to “recent conversations first.”
+
+I also added a frontend sort in [FriendsRail.jsx](/C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/components/FriendsRail.jsx:6) so the UI reacts immediately to recent message activity using the already-loaded preview timestamps. I added:
+- `getFriendActivityTimestamp(friend, conversationPreviews)`
+- a `useMemo(...)` around `friendsWithTags`
+- sorting by latest preview activity first, then username as a stable fallback
+
+This means if conversation previews refresh locally, the rail can re-order right away without waiting for a full backend reload.
+
+**2. Better Rail Language**
+
+In [FriendsRail.jsx](/C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/components/FriendsRail.jsx:95), the old copy was:
+
+- `DM ready`
+- `No DM yet`
+
+I changed that to:
+
+- `Secure conversation ready`
+- `Start a secure chat`
+
+That makes the feature feel more intentional and better matches the encrypted DM system you already built.
+
+I also slightly strengthened the visual weight of that line in [index.css](/C:/Users/REDKING/Projects/Chatapp/Application/src/index.css:2580) by giving `.friend-card-status` a `font-weight: 600;` so it reads more like meaningful secondary inbox info.
+
+**3. Per-Message Delivery State**
+
+You pointed out that users want better confidence around message delivery. There was already a relay/offline error path in [FriendsHome.jsx](/C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/pages/FriendsHome.jsx:1110), but it only showed a general error, not a status on the message itself.
+
+I added a message-level delivery state flow.
+
+In [friends/actions.js](/C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/actions.js:386), I changed `sendFriendDirectMessage(...)` so it captures the result of `sendDirectMessage(...)` instead of ignoring it. Then I return:
+- `outboundMessageId: sendResult?.message?.id || null`
+
+That gives the page layer a stable way to associate send-state with the actual outgoing message row.
+
+In [FriendsHome.jsx](/C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/pages/FriendsHome.jsx:122), I added:
+- `const [messageDeliveryById, setMessageDeliveryById] = useState({});`
+
+Then I wired it in like this:
+
+- on user change, it resets so old send-state does not leak between accounts
+- in the existing `secureDmRelayQueueState` event handler, I now read:
+  - `messageId`
+  - `offlineRecipients`
+  - `droppedRecipients`
+
+Based on that event, I assign one of:
+- `"sent"`
+- `"queued"`
+- `"failed"`
+
+Specifically:
+- if there are dropped recipients, it becomes `failed`
+- else if there are offline recipients, it becomes `queued`
+- otherwise it becomes `sent`
+
+I kept the old relay-disabled error message too, so the global error still appears when needed.
+
+Then after a successful `handleSendMessage(...)`, once the refreshed message list comes back, I mark the returned `outboundMessageId` as `"sent"` by default if it has not already been upgraded by the realtime queue event. That keeps the message from appearing untracked.
+
+Finally I pass `messageDeliveryById` into the DM panel component so the thread renderer can use it.
+
+**4. DM Thread UI Delivery Badge**
+
+In [FriendsConversationPanel.jsx](/C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/components/FriendsConversationPanel.jsx:477), I added:
+- `getOutgoingDeliveryMeta(deliveryState)`
+
+That maps internal state to visible labels and tones:
+- `failed` -> `Failed`
+- `queued` -> `Offline relay`
+- everything else -> `Sent securely`
+
+Then inside `MessageList(...)` I added a new prop:
+- `messageDeliveryById = {}`
+
+For each message row:
+- if it is outgoing, I compute its delivery meta from `messageDeliveryById[message.messageId]`
+- I render a small badge next to the timestamp / edited label in the message meta row
+
+So outgoing messages now show a clear pill:
+- `Sent securely`
+- `Offline relay`
+- `Failed`
+
+Incoming messages do not get this badge.
+
+I threaded that prop from the page into the direct-message `MessageList` call in the same file.
+
+**5. Styling for the Delivery Badge**
+
+In [index.css](/C:/Users/REDKING/Projects/Chatapp/Application/src/index.css:3711), I added styles for:
+- `.friend-message-delivery`
+- `.friend-message-delivery.is-sent`
+- `.friend-message-delivery.is-queued`
+- `.friend-message-delivery.is-failed`
+
+The styling is intentionally compact so it fits beside the timestamp without overpowering the bubble:
+- uppercase micro-label
+- pill shape
+- green for sent
+- amber for relay queue
+- red for failed
+
+**What I Did Not Claim / Change**
+
+I did not add true end-to-end delivery receipts from the recipient device.
+
+So the new status is honest about what the app actually knows today:
+- `Sent securely` means the local send path completed and was not reported as dropped
+- `Offline relay` means the realtime server explicitly reported offline recipients and queued the message
+- `Failed` means the server said the message could not be queued because relay was disabled
+
+It does not yet mean:
+- the other person has opened the app
+- the other device has decrypted the message
+- the other user has seen it
+
+That would need explicit receipt events.
+
+**Files Changed In This Pass**
+
+Backend:
+- [friends/list.php](/C:/Users/REDKING/Projects/Chatapp/chatapp-core/friends/list.php:1)
+
+Frontend logic:
+- [friends/actions.js](/C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/actions.js:386)
+- [FriendsHome.jsx](/C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/pages/FriendsHome.jsx:122)
+- [FriendsRail.jsx](/C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/components/FriendsRail.jsx:6)
+- [FriendsConversationPanel.jsx](/C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/components/FriendsConversationPanel.jsx:477)
+
+Frontend styling:
+- [index.css](/C:/Users/REDKING/Projects/Chatapp/Application/src/index.css:2580)
+- [index.css](/C:/Users/REDKING/Projects/Chatapp/Application/src/index.css:3711)
+
+**Verification**
+
+I ran:
+- Vite/OXC parse checks on the touched frontend files
+- `php -l` on [friends/list.php](/C:/Users/REDKING/Projects/Chatapp/chatapp-core/friends/list.php:1)
+
+Both passed. The only extra output was the unrelated local PHP startup warning about `date.timezone` being set to `2`.
+
+If you want, I can do one more pass and add actual `delivered to recipient device` receipts next, which would make the status line feel much more like Discord/WhatsApp/Signal.

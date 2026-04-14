@@ -1,7 +1,15 @@
 import { parseJsonResponse } from "../../lib/api";
-import { getCoreApiBase } from "../../lib/env";
+import { getCoreApiBase, normalizeBackendUrl } from "../../lib/env";
+import { getStoredAuthToken } from "../session/actions";
 
 const CORE_API_BASE = getCoreApiBase();
+
+function normalizeJoinedServer(server) {
+    return {
+        ...server,
+        backendUrl: normalizeBackendUrl(server?.backendUrl || server?.connectUrl || "", "Server backend URL")
+    };
+}
 
 function normalizeServerFetchError(error, fallbackMessage) {
     if (error instanceof TypeError) {
@@ -12,7 +20,7 @@ function normalizeServerFetchError(error, fallbackMessage) {
 }
 
 function getAuthHeaders() {
-    const token = localStorage.getItem("authToken");
+    const token = getStoredAuthToken();
 
     return {
         "Content-Type": "application/json",
@@ -21,8 +29,10 @@ function getAuthHeaders() {
 }
 
 export async function fetchServerData(backendUrl) {
+    const normalizedBackendUrl = normalizeBackendUrl(backendUrl, "Server backend URL");
+
     try {
-        const res = await fetch(`${backendUrl}/api/server`);
+        const res = await fetch(`${normalizedBackendUrl}/api/server`);
         return parseJsonResponse(res, "Failed to fetch server");
     } catch (error) {
         throw normalizeServerFetchError(error, "Server is offline or unreachable");
@@ -35,11 +45,12 @@ export async function fetchUserServers() {
         headers: getAuthHeaders()
     });
 
-    return parseJsonResponse(res, "Failed to load joined servers");
+    const data = await parseJsonResponse(res, "Failed to load joined servers");
+    return Array.isArray(data) ? data.map(normalizeJoinedServer) : [];
 }
 
 export async function joinServer({ backendUrl }) {
-    const trimmedUrl = backendUrl.trim();
+    const trimmedUrl = normalizeBackendUrl(backendUrl, "Server backend URL");
 
     if (!trimmedUrl) {
         throw new Error("Backend URL is required");
@@ -59,7 +70,7 @@ export async function joinServer({ backendUrl }) {
         })
     });
 
-    return parseJsonResponse(res, "Failed to join server");
+    return normalizeJoinedServer(await parseJsonResponse(res, "Failed to join server"));
 }
 
 export async function leaveServer(serverId) {
@@ -72,8 +83,10 @@ export async function leaveServer(serverId) {
 }
 
 export async function createServerChannel({ backendUrl, name, type }) {
+    const normalizedBackendUrl = normalizeBackendUrl(backendUrl, "Server backend URL");
+
     try {
-        const res = await fetch(`${backendUrl}/api/server/channels`, {
+        const res = await fetch(`${normalizedBackendUrl}/api/server/channels`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"

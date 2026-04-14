@@ -1,5 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DISAPPEARING_MESSAGE_OPTIONS, RELAY_RETENTION_OPTIONS } from "../../dm/actions";
+import { fetchUserDmDevices } from "../../dm/actions";
+import { getStoredAuthToken } from "../../session/actions";
 
 function WheelSelect({ options, value, disabled, onChange, ariaLabel }) {
     const selectRef = useRef(null);
@@ -103,6 +105,7 @@ function WheelSelect({ options, value, disabled, onChange, ariaLabel }) {
 }
 
 export default function FriendConversationSettingsModal({
+    currentUser,
     selectedFriend,
     effectiveSelectedFriend,
     selectedRelayTtlSeconds,
@@ -127,6 +130,109 @@ export default function FriendConversationSettingsModal({
     onDisappearingRequest,
     onDisappearingAccept
 }) {
+    const [verification, setVerification] = useState(null);
+    const [verificationLoading, setVerificationLoading] = useState(false);
+    const [verificationError, setVerificationError] = useState("");
+    const [verificationActionId, setVerificationActionId] = useState("");
+
+    useEffect(() => {
+        let cancelled = false;
+
+        async function loadVerification() {
+            if (!window.secureDm || !currentUser?.id || !effectiveSelectedFriend?.conversationId || !selectedFriend?.friendUserId) {
+                setVerification(null);
+                setVerificationError("");
+                return;
+            }
+
+            const token = getStoredAuthToken();
+            if (!token) {
+                setVerification(null);
+                setVerificationError("");
+                return;
+            }
+
+            try {
+                setVerificationLoading(true);
+                setVerificationError("");
+                const data = await fetchUserDmDevices({
+                    token,
+                    userId: selectedFriend.friendUserId
+                });
+                const nextVerification = await window.secureDm.getConversationVerification({
+                    userId: currentUser.id,
+                    username: currentUser.username,
+                    conversationId: effectiveSelectedFriend.conversationId,
+                    remoteUsername: selectedFriend.friendUsername,
+                    remoteDevices: data.devices || []
+                });
+
+                if (!cancelled) {
+                    setVerification(nextVerification);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    setVerification(null);
+                    setVerificationError(String(error?.message || error || "Could not load safety details."));
+                }
+            } finally {
+                if (!cancelled) {
+                    setVerificationLoading(false);
+                }
+            }
+        }
+
+        loadVerification();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        currentUser?.id,
+        currentUser?.username,
+        effectiveSelectedFriend?.conversationId,
+        selectedFriend?.friendUserId,
+        selectedFriend?.friendUsername
+    ]);
+
+    async function handleToggleDeviceVerification(deviceId, nextVerified) {
+        if (!window.secureDm || !effectiveSelectedFriend?.conversationId) {
+            return;
+        }
+
+        try {
+            setVerificationActionId(String(deviceId));
+            const result = await window.secureDm.setConversationDeviceVerified({
+                userId: currentUser.id,
+                username: currentUser.username,
+                conversationId: effectiveSelectedFriend.conversationId,
+                deviceId,
+                verified: nextVerified
+            });
+
+            setVerification((prev) => (
+                prev
+                    ? {
+                        ...prev,
+                        remoteDevices: (prev.remoteDevices || []).map((device) => (
+                            String(device.deviceId) === String(deviceId)
+                                ? {
+                                    ...device,
+                                    isVerified: Boolean(result.verified),
+                                    verifiedAt: result.verifiedAt || null
+                                }
+                                : device
+                        ))
+                    }
+                    : prev
+            ));
+        } catch (error) {
+            setVerificationError(String(error?.message || error || "Could not update verification."));
+        } finally {
+            setVerificationActionId("");
+        }
+    }
+
     if (!selectedFriend) {
         return null;
     }
@@ -247,6 +353,67 @@ export default function FriendConversationSettingsModal({
                         Both people must agree before disappearing-message timers change.
                     </small>
                 )}
+
+                <div className="friends-retention-copy friends-verification-copy">
+                    <strong>Device verification</strong>
+                    <span>Compare this safety number with {selectedFriend.friendUsername} on another channel.</span>
+                </div>
+
+                <div className="friends-verification-panel">
+                    {verificationLoading ? (
+                        <small className="friends-retention-note">Loading safety details...</small>
+                    ) : verification ? (
+                        <>
+                            <div className="friends-safety-number-card">
+                                <span className="friends-safety-number-label">Safety number</span>
+                                <code>{verification.safetyNumber}</code>
+                            </div>
+
+                            <div className="friends-verification-device-list">
+                                <div className="friends-verification-device friends-verification-device-local">
+                                    <div>
+                                        <strong>This device</strong>
+                                        <span>{verification.localDevice?.deviceName || "Current device"}</span>
+                                    </div>
+                                    <code>{verification.localDevice?.fingerprint || "Unavailable"}</code>
+                                </div>
+
+                                {(verification.remoteDevices || []).map((device) => (
+                                    <div key={device.deviceId} className="friends-verification-device">
+                                        <div className="friends-verification-device-meta">
+                                            <div>
+                                                <strong>{device.deviceName || "Friend device"}</strong>
+                                                <span>
+                                                    {device.isVerified
+                                                        ? `Verified${device.verifiedAt ? ` on ${new Date(device.verifiedAt).toLocaleDateString()}` : ""}`
+                                                        : "Not verified"}
+                                                </span>
+                                            </div>
+
+                                            <button
+                                                type="button"
+                                                disabled={verificationActionId === String(device.deviceId)}
+                                                onClick={() => handleToggleDeviceVerification(device.deviceId, !device.isVerified)}
+                                            >
+                                                {device.isVerified ? "Unverify" : "Mark verified"}
+                                            </button>
+                                        </div>
+
+                                        <code>{device.fingerprint}</code>
+                                    </div>
+                                ))}
+                            </div>
+                        </>
+                    ) : (
+                        <small className="friends-retention-note">
+                            Open an encrypted conversation first to compare device fingerprints.
+                        </small>
+                    )}
+
+                    {verificationError ? (
+                        <small className="friends-retention-note">{verificationError}</small>
+                    ) : null}
+                </div>
             </div>
         </div>
     );

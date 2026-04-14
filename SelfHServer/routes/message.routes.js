@@ -1,15 +1,47 @@
 const express = require("express");
 const { verifyUser } = require("../services/auth.service");
-const { readMessages, writeMessages, addMessageLog } = require("../utils/storage");
+const {
+    readChannelMessages,
+    writeChannelMessages,
+    addChannelMessageLog
+} = require("../utils/storage");
 
 const router = express.Router();
 
+function rejectDmControlPayload(req, res) {
+    const body = req.body || {};
+    const hasEncryptedRelayFields = (
+        body.recipientDeviceId != null
+        || body.wrappedKey != null
+        || body.ciphertext != null
+        || body.messageTtlSeconds != null
+    );
+    const hasDmControlShape = (
+        hasEncryptedRelayFields
+        || body.kind != null
+        || (body.targetMessageId != null && body.emoji != null)
+    );
+
+    if (!hasDmControlShape) {
+        return false;
+    }
+
+    res.status(400).json({
+        error: "DM messages and DM control events must use the encrypted DM relay, not channel message routes."
+    });
+    return true;
+}
+
 router.post("/channels/:channelId/messages", async (req, res) => {
+    if (rejectDmControlPayload(req, res)) {
+        return;
+    }
+
     const user = await verifyUser(req);
 
     if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-    const messages = readMessages();
+    const messages = readChannelMessages();
     const channelId = req.params.channelId;
     const { content, replyTo } = req.body;
 
@@ -34,9 +66,9 @@ router.post("/channels/:channelId/messages", async (req, res) => {
     }
 
     messages[channelId].push(newMessage);
-    writeMessages(messages);
+    writeChannelMessages(messages);
 
-    addMessageLog({
+    addChannelMessageLog({
         id: `log_${Date.now()}`,
         actionType: replyTo ? "message_replied" : "message_sent",
         messageId: newMessage.id,
@@ -53,6 +85,10 @@ router.post("/channels/:channelId/messages", async (req, res) => {
 });
 
 router.post("/messages/:messageId/reactions", async (req, res) => {
+    if (rejectDmControlPayload(req, res)) {
+        return;
+    }
+
     const user = await verifyUser(req);
 
     if (!user) {
@@ -67,7 +103,7 @@ router.post("/messages/:messageId/reactions", async (req, res) => {
     }
 
     const reactionKey = String(emoji).trim();
-    const messages = readMessages();
+    const messages = readChannelMessages();
 
     for (const channelId of Object.keys(messages)) {
         const message = messages[channelId].find((m) => m.id === messageId);
@@ -94,9 +130,9 @@ router.post("/messages/:messageId/reactions", async (req, res) => {
             delete message.reactions[reactionKey];
         }
 
-        writeMessages(messages);
+        writeChannelMessages(messages);
 
-        addMessageLog({
+        addChannelMessageLog({
             id: `log_${Date.now()}`,
             actionType: hasReaction ? "message_reaction_removed" : "message_reaction_added",
             messageId: message.id,
@@ -116,6 +152,10 @@ router.post("/messages/:messageId/reactions", async (req, res) => {
 });
 
 router.patch("/messages/:messageId", async (req, res) => {
+    if (rejectDmControlPayload(req, res)) {
+        return;
+    }
+
     const user = await verifyUser(req);
 
     if (!user) {
@@ -129,7 +169,7 @@ router.patch("/messages/:messageId", async (req, res) => {
         return res.status(400).json({ error: "Message content is required" });
     }
 
-    const messages = readMessages();
+    const messages = readChannelMessages();
 
     for (const channelId of Object.keys(messages)) {
         const message = messages[channelId].find((m) => m.id === messageId);
@@ -144,9 +184,9 @@ router.patch("/messages/:messageId", async (req, res) => {
             message.content = content.trim();
             message.updatedAt = Date.now();
 
-            writeMessages(messages);
+            writeChannelMessages(messages);
 
-            addMessageLog({
+            addChannelMessageLog({
                 id: `log_${Date.now()}`,
                 actionType: "message_edited",
                 messageId: message.id,
@@ -167,6 +207,10 @@ router.patch("/messages/:messageId", async (req, res) => {
 });
 
 router.delete("/messages/:messageId", async (req, res) => {
+    if (rejectDmControlPayload(req, res)) {
+        return;
+    }
+
     const user = await verifyUser(req);
 
     if (!user) {
@@ -174,7 +218,7 @@ router.delete("/messages/:messageId", async (req, res) => {
     }
 
     const { messageId } = req.params;
-    const messages = readMessages();
+    const messages = readChannelMessages();
 
     for (const channelId of Object.keys(messages)) {
         const message = messages[channelId].find((m) => m.id === messageId);
@@ -190,9 +234,9 @@ router.delete("/messages/:messageId", async (req, res) => {
             message.isDeleted = true;
             message.updatedAt = Date.now();
 
-            writeMessages(messages);
+            writeChannelMessages(messages);
 
-            addMessageLog({
+            addChannelMessageLog({
                 id: `log_${Date.now()}`,
                 actionType: "message_deleted",
                 messageId: message.id,

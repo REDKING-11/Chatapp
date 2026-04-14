@@ -5,6 +5,7 @@ require_once __DIR__ . '/../_bootstrap.php';
 $user = requireAuth();
 $db = getDb();
 $data = readJsonInput();
+dmEnsureRelayQueueMessageSignatureColumns($db);
 
 $conversationId = (int)($data['conversationId'] ?? 0);
 $messageId = dmRequireString($data, 'messageId', 'messageId is required');
@@ -20,6 +21,19 @@ dmLoadConversationOrFail($db, $conversationId, (int)$user['id']);
 dmCleanupExpiredRelayQueue($db);
 $relayTtlSeconds = dmGetConversationRelayTtlSeconds($db, $conversationId);
 
+$allowedRecipientStmt = $db->prepare('
+    SELECT device_id
+    FROM dm_conversation_wrapped_keys
+    WHERE conversation_id = ?
+');
+$allowedRecipientStmt->execute([$conversationId]);
+$allowedRecipientDeviceIds = array_fill_keys(
+    array_map(function ($row) {
+        return (string)$row['device_id'];
+    }, $allowedRecipientStmt->fetchAll()),
+    true
+);
+
 $db->beginTransaction();
 
 try {
@@ -28,14 +42,16 @@ try {
             INSERT INTO dm_relay_queue (
                 message_id,
                 conversation_id,
+                sender_user_id,
                 recipient_device_id,
                 sender_device_id,
                 ciphertext,
                 nonce,
                 aad,
                 tag,
+                message_signature,
                 expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
         ');
 
         foreach ($recipientDeviceIds as $recipientDeviceIdRaw) {
@@ -45,15 +61,21 @@ try {
                 continue;
             }
 
+            if (!isset($allowedRecipientDeviceIds[$recipientDeviceId])) {
+                continue;
+            }
+
             $relayStmt->execute([
                 $messageId,
                 $conversationId,
+                (int)$user['id'],
                 $recipientDeviceId,
                 $senderDeviceId,
                 $envelope['ciphertext'],
                 $envelope['nonce'],
                 $envelope['aad'],
                 $envelope['tag'],
+                $envelope['signature'],
                 $relayTtlSeconds
             ]);
         }
@@ -83,7 +105,8 @@ jsonResponse([
         'ciphertext' => $envelope['ciphertext'],
         'nonce' => $envelope['nonce'],
         'aad' => $envelope['aad'],
-        'tag' => $envelope['tag']
+        'tag' => $envelope['tag'],
+        'signature' => $envelope['signature']
     ],
-    'relayTtlSeconds' => DM_RELAY_TTL_SECONDS
+    'relayTtlSeconds' => $relayTtlSeconds
 ], 201);

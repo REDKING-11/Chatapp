@@ -1,7 +1,8 @@
 import { parseJsonResponse } from "../../lib/api";
+import { getStoredAuthToken } from "../session/actions";
 
 function buildAuthHeaders(extra = {}) {
-    const token = localStorage.getItem("authToken");
+    const token = getStoredAuthToken();
     return {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...extra

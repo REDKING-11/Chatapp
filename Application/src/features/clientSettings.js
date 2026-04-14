@@ -135,6 +135,7 @@ export const THEME_PRESETS = {
 
 export const CLIENT_SETTINGS_DEFAULTS = {
     themePreset: "midnight",
+    presenceStatus: "online",
     fontScale: 1,
     lineHeight: 1.5,
     uiDensity: "comfortable",
@@ -263,6 +264,10 @@ function sanitizeSettings(raw) {
         ...CLIENT_SETTINGS_DEFAULTS,
         ...raw
     };
+
+    if (!["online", "free", "busy", "off", "chilling"].includes(next.presenceStatus)) {
+        next.presenceStatus = CLIENT_SETTINGS_DEFAULTS.presenceStatus;
+    }
 
     if (!THEME_PRESETS[next.themePreset]) {
         next.themePreset = CLIENT_SETTINGS_DEFAULTS.themePreset;

@@ -51,6 +51,9 @@ try {
         ]);
     }
 
+    $updateStmt = $db->prepare('UPDATE dm_conversations SET updated_at = UTC_TIMESTAMP() WHERE id = ?');
+    $updateStmt->execute([$conversationId]);
+
     $db->commit();
 } catch (Throwable $error) {
     if ($db->inTransaction()) {
