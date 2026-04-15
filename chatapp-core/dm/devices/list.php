@@ -6,7 +6,7 @@ require_once __DIR__ . '/../_bootstrap.php';
 $db = getDb();
 dmEnsureBundleSignatureColumn($db, 'dm_devices');
 $userId = (int)($_GET['userId'] ?? 0);
-$includeRevoked = !empty($_GET['includeRevoked']) && $userId === (int)$authUser['id'];
+$includeRevoked = !empty($_GET['includeRevoked']);
 
 if ($userId <= 0) {
     jsonResponse(['error' => 'userId is required'], 400);

@@ -51,6 +51,7 @@ function getUserState(store, userId) {
 function ensureDevice(userId, username, deviceName = "Desktop") {
   const store = readSecureDmStore();
   const userState = getUserState(store, userId);
+  let didChangeDevice = false;
 
   if (!userState.device) {
     userState.device = {
@@ -59,6 +60,15 @@ function ensureDevice(userId, username, deviceName = "Desktop") {
       username,
       keyVersion: 1
     };
+    didChangeDevice = true;
+  }
+
+  if (!hasUsablePublishedBundle(userState.device)) {
+    userState.device = repairLegacyDeviceState(userState.device, userId, username, deviceName);
+    didChangeDevice = true;
+  }
+
+  if (didChangeDevice) {
     writeSecureDmStore(store);
   }
 
@@ -250,6 +260,48 @@ function buildPublishedDeviceBundle(device) {
     ...bundle,
     publicKeyFingerprint: hashPublicKey(device.encryptionPublicKey),
     bundleSignature: signDeviceBundle(bundle, device.signingPrivateKey)
+  };
+}
+
+function hasUsablePublishedBundle(device) {
+  try {
+    return verifyDeviceBundleSignature(buildPublishedDeviceBundle(device));
+  } catch {
+    return false;
+  }
+}
+
+function repairLegacyDeviceState(device, userId, username, deviceName = "Desktop") {
+  const nextIdentity = generateDeviceIdentity(deviceName || device?.deviceName || "Desktop");
+  const nextKeyVersion = Math.max(1, Number(device?.keyVersion) || 0) + 1;
+  const hasExistingEncryptionIdentity = (
+    typeof device?.encryptionPublicKey === "string"
+    && device.encryptionPublicKey.trim() !== ""
+    && typeof device?.encryptionPrivateKey === "string"
+    && device.encryptionPrivateKey.trim() !== ""
+  );
+
+  if (hasExistingEncryptionIdentity) {
+    return {
+      ...device,
+      userId: Number(userId),
+      username,
+      deviceName: deviceName || device?.deviceName || nextIdentity.deviceName,
+      signingAlgorithm: nextIdentity.signingAlgorithm,
+      signingPublicKey: nextIdentity.signingPublicKey,
+      signingPrivateKey: nextIdentity.signingPrivateKey,
+      keyVersion: nextKeyVersion
+    };
+  }
+
+  return {
+    ...nextIdentity,
+    deviceId: device?.deviceId || nextIdentity.deviceId,
+    userId: Number(userId),
+    username,
+    deviceName: deviceName || device?.deviceName || nextIdentity.deviceName,
+    createdAt: device?.createdAt || nextIdentity.createdAt,
+    keyVersion: nextKeyVersion
   };
 }
 
@@ -865,19 +917,17 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
     throw new Error("Sender device bundle user mismatch");
   }
 
-  if (!verifyDeviceBundleSignature(senderDevice)) {
-    throw new Error(`Sender device bundle signature verification failed for ${relayItem.senderDeviceId || "unknown-device"}`);
-  }
+  const senderBundleVerified = verifyDeviceBundleSignature(senderDevice);
 
   if (!verifyMessageEnvelopeSignature({
     conversationId,
     messageId: relayItem.messageId,
     senderUserId: relayItem.senderUserId,
-    senderDeviceId: relayItem.senderDeviceId,
-    ciphertext: relayItem.ciphertext,
-    nonce: relayItem.nonce,
-    aad: relayItem.aad,
-    tag: relayItem.tag
+      senderDeviceId: relayItem.senderDeviceId,
+      ciphertext: relayItem.ciphertext,
+      nonce: relayItem.nonce,
+      aad: relayItem.aad,
+      tag: relayItem.tag
   }, senderDevice.signingPublicKey, relayItem.signature)) {
     throw new Error(`DM message signature verification failed for ${relayItem.messageId || "unknown-message"}`);
   }
@@ -922,6 +972,7 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
       aad: relayItem.aad,
       tag: relayItem.tag,
       signature: relayItem.signature,
+      senderBundleVerified,
       createdAt: plaintext.createdAt,
       direction: "incoming",
       control

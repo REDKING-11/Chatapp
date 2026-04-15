@@ -2,6 +2,77 @@ import { useState } from "react";
 import { completeMfaLogin, submitAuth } from "../features/auth/actions";
 import { formatAppError } from "../lib/debug";
 
+function validateRegistrationUsername(username) {
+    const trimmed = String(username || "").trim();
+
+    if (!trimmed) {
+        return "Username and password are required.";
+    }
+
+    const taggedMatch = trimmed.match(/^(.*)#(\d{1,4})$/);
+    if (trimmed.includes("#") && !taggedMatch) {
+        return "Username tags must look like name#1234.";
+    }
+
+    const usernameBase = taggedMatch
+        ? taggedMatch[1].trim().replace(/\s+/g, " ")
+        : trimmed.replace(/\s+/g, " ");
+
+    if (usernameBase.length < 3) {
+        return "Username must be at least 3 characters.";
+    }
+
+    if (!/^[A-Za-z0-9 _.-]{3,24}$/.test(usernameBase)) {
+        return "Username can only use letters, numbers, spaces, ., _, and - and must be 3 to 24 characters.";
+    }
+
+    return "";
+}
+
+function validateAuthSubmission({ mode, username, password, totpCode, isMfaStep }) {
+    if (isMfaStep) {
+        if (String(totpCode || "").trim().length !== 6) {
+            return "Enter the 6-digit code from your authenticator app.";
+        }
+
+        return "";
+    }
+
+    if (!String(username || "").trim() || !String(password || "")) {
+        return "Username and password are required.";
+    }
+
+    if (mode === "register") {
+        const usernameValidationError = validateRegistrationUsername(username);
+        if (usernameValidationError) {
+            return usernameValidationError;
+        }
+
+        if (String(password || "").length < 4) {
+            return "Password must be at least 4 characters.";
+        }
+    }
+
+    return "";
+}
+
+function formatAuthSubmitError(error, { isMfaStep, mode }) {
+    const rawMessage = String(error?.userMessage || error?.message || error || "").trim();
+
+    if (/username|password|taken|already|required|authentication code|challenge expired|name#1234|invalid username or password/i.test(rawMessage)) {
+        return rawMessage;
+    }
+
+    return formatAppError(error, {
+        fallbackMessage: isMfaStep
+            ? "Could not verify your sign-in code right now."
+            : mode === "register"
+                ? "Could not create your account right now."
+                : "Could not sign you in right now.",
+        context: "Auth"
+    }).message;
+}
+
 export default function AuthScreen({ onAuthSuccess }) {
     const [mode, setMode] = useState("login");
     const [username, setUsername] = useState("");
@@ -33,8 +104,22 @@ export default function AuthScreen({ onAuthSuccess }) {
 
     async function handleSubmit(e) {
         e.preventDefault();
-        setLoading(true);
         setError("");
+
+        const validationError = validateAuthSubmission({
+            mode,
+            username,
+            password,
+            totpCode,
+            isMfaStep
+        });
+
+        if (validationError) {
+            setError(validationError);
+            return;
+        }
+
+        setLoading(true);
 
         try {
             const data = mfaChallenge
@@ -63,12 +148,7 @@ export default function AuthScreen({ onAuthSuccess }) {
 
             onAuthSuccess(data.user, data.token);
         } catch (err) {
-            setError(formatAppError(err, {
-                fallbackMessage: isMfaStep
-                    ? "Could not verify your sign-in code right now."
-                    : "Could not sign you in right now.",
-                context: "Auth"
-            }).message);
+            setError(formatAuthSubmitError(err, { isMfaStep, mode }));
         } finally {
             setLoading(false);
         }
@@ -120,6 +200,12 @@ export default function AuthScreen({ onAuthSuccess }) {
                             autoComplete={mode === "login" ? "current-password" : "new-password"}
                         />
                     </label>
+
+                    {mode === "register" && !isMfaStep ? (
+                        <p className="auth-muted-note">
+                            Usernames must be 3 to 24 characters. Passwords must be at least 4 characters.
+                        </p>
+                    ) : null}
 
                     {isMfaStep ? (
                         <label className="auth-field">
