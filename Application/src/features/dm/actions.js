@@ -36,6 +36,10 @@ function isMissingLocalConversationError(error) {
   );
 }
 
+function isMissingRelayDeviceError(error) {
+  return /device not found or revoked/i.test(String(error?.message || error || ""));
+}
+
 function authHeaders(token) {
   return {
     "Content-Type": "application/json",
@@ -799,7 +803,18 @@ export async function pullRelayMessages({ token, currentUser }) {
       }
     }
   );
-  const relayData = await parseJsonResponse(relayRes, "Failed to load relay messages");
+  let relayData;
+
+  try {
+    relayData = await parseJsonResponse(relayRes, "Failed to load relay messages");
+  } catch (error) {
+    if (relayRes.status === 404 && isMissingRelayDeviceError(error)) {
+      return [];
+    }
+
+    throw error;
+  }
+
   const imported = [];
 
   if ((relayData.items || []).length > 0) {
