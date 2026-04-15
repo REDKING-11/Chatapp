@@ -108,6 +108,10 @@ $bundleMatchesExisting = $existingDevice
     && (string)$existingDevice['encryption_public_key'] === $encryptionPublicKey
     && (string)($existingDevice['signing_public_key'] ?? '') === (string)($signingPublicKey ?? '')
     && (string)$existingDevice['bundle_signature'] === $bundleSignature;
+$signatureRefreshAllowed = $existingDevice
+    && (string)$existingDevice['device_name'] === $deviceName
+    && (string)$existingDevice['encryption_public_key'] === $encryptionPublicKey
+    && (string)($existingDevice['signing_public_key'] ?? '') === (string)($signingPublicKey ?? '');
 $legacyBundleBackfillAllowed = $existingDevice
     && (string)$existingDevice['device_name'] === $deviceName
     && (string)$existingDevice['encryption_public_key'] === $encryptionPublicKey
@@ -120,13 +124,13 @@ $legacyBundleBackfillAllowed = $existingDevice
 if ($existingDevice && $existingDevice['revoked_at'] === null) {
     $existingKeyVersion = max(1, (int)$existingDevice['key_version']);
     $shouldRefreshExistingBundle = $keyVersion > $existingKeyVersion
-        || ($keyVersion === $existingKeyVersion && $legacyBundleBackfillAllowed);
+        || ($keyVersion === $existingKeyVersion && ($legacyBundleBackfillAllowed || $signatureRefreshAllowed));
 
     if ($keyVersion < $existingKeyVersion) {
         jsonResponse(['error' => 'keyVersion must not be lower than the currently registered device version'], 409);
     }
 
-    if ($keyVersion === $existingKeyVersion && !$bundleMatchesExisting && !$legacyBundleBackfillAllowed) {
+    if ($keyVersion === $existingKeyVersion && !$bundleMatchesExisting && !$legacyBundleBackfillAllowed && !$signatureRefreshAllowed) {
         jsonResponse(['error' => 'Device bundle changed without a higher keyVersion'], 409);
     }
 

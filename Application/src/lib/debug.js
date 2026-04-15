@@ -27,13 +27,18 @@ export function formatAppError(error, options = {}) {
         invalidResponseMessage = "The server returned an invalid response.",
         context = ""
     } = options;
+    const userMessage = typeof error?.userMessage === "string"
+        ? error.userMessage.trim()
+        : "";
     const rawMessage = normalizeErrorMessage(error);
     const lowerMessage = rawMessage.toLowerCase();
     const debugMode = isDebugModeEnabled();
 
     let message = fallbackMessage;
 
-    if (!rawMessage) {
+    if (userMessage) {
+        message = userMessage;
+    } else if (!rawMessage) {
         message = fallbackMessage;
     } else if (
         error instanceof TypeError

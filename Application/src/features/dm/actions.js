@@ -47,6 +47,46 @@ function authHeaders(token) {
   };
 }
 
+function createUserFacingDmError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  error.userMessage = message;
+  return error;
+}
+
+function hasConversationRecipientKey(device) {
+  return Boolean(device?.deviceId && device?.encryptionPublicKey);
+}
+
+async function inspectDeviceList({ expectedUserId, devices }) {
+  const inspectedDevices = [];
+
+  for (const device of Array.isArray(devices) ? devices : []) {
+    try {
+      const verification = await window.secureDm.verifyDeviceBundles({
+        expectedUserId,
+        devices: [device]
+      });
+      const verifiedDevice = (verification.devices || [])[0] || device;
+      inspectedDevices.push({
+        ...device,
+        ...verifiedDevice,
+        signatureVerified: true,
+        verificationError: null
+      });
+    } catch (error) {
+      inspectedDevices.push({
+        ...device,
+        userId: Number(device?.userId),
+        signatureVerified: false,
+        verificationError: String(error?.message || error || "Device bundle verification failed")
+      });
+    }
+  }
+
+  return inspectedDevices;
+}
+
 async function queueEncryptedConversationMessage({
   token,
   currentUser,
@@ -101,7 +141,8 @@ async function handleRealtimeDelivery({ currentUser, relayItem, token }) {
   if (relayItem?.senderUserId && relayItem?.senderDeviceId) {
     const senderDevices = await fetchUserDmDevices({
       token,
-      userId: relayItem.senderUserId
+      userId: relayItem.senderUserId,
+      includeRevoked: true
     });
     senderDevice = (senderDevices.devices || []).find(
       (device) => String(device.deviceId) === String(relayItem.senderDeviceId)
@@ -401,17 +442,16 @@ export async function approvePendingDmDevice({ token, currentUser, requestId, ap
   });
 
   const data = await parseJsonResponse(res, "Failed to approve pending DM device");
-  const verification = await window.secureDm.verifyDeviceBundles({
+  const inspectedDevices = await inspectDeviceList({
     expectedUserId: currentUser.id,
     devices: data.devices || []
   });
 
   return {
     ...data,
-    devices: verification.devices.map((device) => ({
+    devices: inspectedDevices.map((device) => ({
       ...device,
-      revokedAt: data.devices?.find((entry) => String(entry.deviceId) === String(device.deviceId))?.revokedAt || null,
-      signatureVerified: true
+      revokedAt: data.devices?.find((entry) => String(entry.deviceId) === String(device.deviceId))?.revokedAt || null
     }))
   };
 }
@@ -427,17 +467,16 @@ export async function fetchUserDmDevices({ token, userId, includeRevoked = false
   );
 
   const data = await parseJsonResponse(res, "Failed to fetch DM devices");
-  const verification = await window.secureDm.verifyDeviceBundles({
+  const inspectedDevices = await inspectDeviceList({
     expectedUserId: userId,
     devices: data.devices || []
   });
 
   return {
     ...data,
-    devices: verification.devices.map((device) => ({
+    devices: inspectedDevices.map((device) => ({
       ...device,
-      revokedAt: data.devices?.find((entry) => String(entry.deviceId) === String(device.deviceId))?.revokedAt || null,
-      signatureVerified: true
+      revokedAt: data.devices?.find((entry) => String(entry.deviceId) === String(device.deviceId))?.revokedAt || null
     }))
   };
 }
@@ -449,14 +488,14 @@ export async function revokeDmDevice({ token, currentUser, deviceId }) {
     body: JSON.stringify({ deviceId })
   });
   const data = await parseJsonResponse(res, "Failed to revoke DM device");
-  const verification = await window.secureDm.verifyDeviceBundles({
+  const inspectedDevices = await inspectDeviceList({
     expectedUserId: currentUser.id,
     devices: data.devices || []
   });
 
   return {
     ...data,
-    devices: verification.devices
+    devices: inspectedDevices
   };
 }
 
@@ -659,11 +698,32 @@ export async function createDirectConversation({
   }
 
   const additionalOwnDevices = (ownDevicesResponse.devices || []).filter(
-    (device) => device.deviceId !== currentDevice.deviceId
+    (device) => device.deviceId !== currentDevice.deviceId && hasConversationRecipientKey(device)
   );
+  const usableRecipientDevices = (recipientDevicesResponse.devices || []).filter(
+    (device) => hasConversationRecipientKey(device)
+  );
+  const verifiedRecipientDevices = usableRecipientDevices.filter(
+    (device) => device.signatureVerified === true
+  );
+
+  if (!usableRecipientDevices.length) {
+    throw createUserFacingDmError(
+      `${recipientUser.username} needs to reopen Chatapp to finish setting up secure DMs before you can start an encrypted chat.`,
+      "dm_recipient_devices_unavailable"
+    );
+  }
+
+  if (!verifiedRecipientDevices.length) {
+    throw createUserFacingDmError(
+      `${recipientUser.username} needs to open the latest Chatapp on one of their devices or rotate their DM keys before you can start an encrypted chat. Their current DM devices could not be verified yet.`,
+      "dm_recipient_devices_unverified"
+    );
+  }
+
   const recipientDevices = [
     ...additionalOwnDevices,
-    ...(recipientDevicesResponse.devices || [])
+    ...verifiedRecipientDevices
   ];
 
   const localConversation = await window.secureDm.createConversation({
@@ -830,7 +890,8 @@ export async function pullRelayMessages({ token, currentUser }) {
     const senderDevices = item.senderUserId
       ? await fetchUserDmDevices({
           token,
-          userId: item.senderUserId
+          userId: item.senderUserId,
+          includeRevoked: true
         })
       : { devices: [] };
     const senderDevice = (senderDevices.devices || []).find(

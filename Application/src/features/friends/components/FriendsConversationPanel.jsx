@@ -720,7 +720,8 @@ function DirectEncryptionStage({
     lockPhase,
     submitting,
     effectiveSelectedFriend,
-    onEncryptChat
+    onEncryptChat,
+    errorMessage
 }) {
     return (
         <div className={`friends-encryption-stage ${lockPhase === "open" ? "is-open" : ""} ${lockPhase === "closing" ? "is-closing" : ""} ${lockPhase === "closed" ? "is-closed" : ""}`}>
@@ -755,6 +756,9 @@ function DirectEncryptionStage({
                         <span className="friends-encrypt-lock" aria-hidden="true">🔒</span>
                         <span>{submitting ? "Encrypting..." : "Encrypt chat"}</span>
                     </button>
+                ) : null}
+                {errorMessage ? (
+                    <p className="friends-error">{errorMessage}</p>
                 ) : null}
             </div>
         </div>
@@ -1217,6 +1221,7 @@ function DirectConversationView({
     submitting,
     showEncryptionStage,
     lockPhase,
+    encryptChatError,
     messages,
     composer,
     directReplyTo,
@@ -1656,6 +1661,7 @@ function DirectConversationView({
                         submitting={submitting}
                         effectiveSelectedFriend={effectiveSelectedFriend}
                         onEncryptChat={onEncryptChat}
+                        errorMessage={encryptChatError}
                     />
                 </div>
             ) : (

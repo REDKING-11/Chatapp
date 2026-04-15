@@ -90,6 +90,7 @@ export default function FriendsHome({
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState("");
     const [errorDebugDetails, setErrorDebugDetails] = useState("");
+    const [encryptChatError, setEncryptChatError] = useState("");
     const [selectedRelayTtlSeconds, setSelectedRelayTtlSeconds] = useState(86400);
     const [selectedDisappearingTtlSeconds, setSelectedDisappearingTtlSeconds] = useState(0);
     const [conversationMeta, setConversationMeta] = useState(null);
@@ -142,6 +143,7 @@ export default function FriendsHome({
     function clearErrorState() {
         setError("");
         setErrorDebugDetails("");
+        setEncryptChatError("");
     }
 
     function showError(errorValue, options = {}) {
@@ -152,6 +154,16 @@ export default function FriendsHome({
         });
         setError(formatted.message);
         setErrorDebugDetails(formatted.debugMode ? formatted.debugDetails : "");
+    }
+
+    function showEncryptChatError(errorValue) {
+        const formatted = formatAppError(errorValue, {
+            fallbackMessage: "Could not start the encrypted chat.",
+            context: "Friends"
+        });
+        setError(formatted.message);
+        setErrorDebugDetails(formatted.debugMode ? formatted.debugDetails : "");
+        setEncryptChatError(formatted.message);
     }
 
     function showStaticError(message, debugDetails = "") {
@@ -449,6 +461,10 @@ export default function FriendsHome({
             setErrorDebugDetails("");
         }
     }, [debugModeEnabled, errorDebugDetails]);
+
+    useEffect(() => {
+        setEncryptChatError("");
+    }, [selectedFriendId]);
 
     useEffect(() => {
         try {
@@ -1512,7 +1528,7 @@ export default function FriendsHome({
                     [forgottenKey]: previousForgottenConversationId
                 }));
             }
-            showError(err);
+            showEncryptChatError(err);
         } finally {
             setIsEncryptingChat(false);
             setSubmitting(false);
@@ -2404,6 +2420,7 @@ export default function FriendsHome({
                     submitting={submitting}
                     showEncryptionStage={showEncryptionStage}
                     lockPhase={lockPhase}
+                    encryptChatError={encryptChatError}
                     messages={messages}
                     composer={composer}
                     directAttachments={directAttachments}
