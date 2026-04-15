@@ -67,3 +67,12 @@
 - Marketing-language upgrades before the protocol and verification flow are solid.  
   Problem: Overclaiming is a security risk in itself.  
   How to fix: Keep public claims conservative until the DM path is mature.
+
+
+
+add a update chechker in to the app
+i release new updates to github as a release so it could be looking for it?
+https://github.com/REDKING-11/Chatapp/releases
+
+this is latest rn
+https://github.com/REDKING-11/Chatapp/releases/tag/v0.1.4-alpha
