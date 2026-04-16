@@ -862,24 +862,23 @@ export default function ClientSettingsModal({
     async function handleRecoverMissingKeys() {
         const token = getStoredAuthToken();
         if (!token) {
-            setRecoveryStatus("Your session has expired. Please sign in again before recovering keys.");
+            setRecoveryStatus("Your session has expired. Sign in again before recovering keys.");
             return;
         }
         try {
             setRecoveryStatus("Recovering…");
             const result = await recoverMissingConversationKeys({ token, currentUser });
-            const recoveredCount = result.recovered?.length ?? 0;
-            const unrecoverableCount = result.unrecoverable?.length ?? 0;
-            if (unrecoverableCount === 0) {
-                setRecoveryStatus(`Recovered ${recoveredCount} conversation${recoveredCount !== 1 ? "s" : ""} successfully.`);
+            const nOk = result.recovered?.length ?? 0;
+            const nBad = result.unrecoverable?.length ?? 0;
+            if (nBad === 0) {
+                setRecoveryStatus(`Recovered ${nOk} conversation${nOk !== 1 ? "s" : ""} successfully.`);
             } else {
                 setRecoveryStatus(
-                    `Recovered ${recoveredCount} conversation${recoveredCount !== 1 ? "s" : ""}. ` +
-                    `${unrecoverableCount} conversation${unrecoverableCount !== 1 ? "s" : ""} ` +
-                    `could not be recovered from the server — use a device transfer package from your other device.`
+                    `Recovered ${nOk} conversation${nOk !== 1 ? "s" : ""}. ` +
+                    `${nBad} could not be recovered from the server — ` +
+                    `import a transfer package from your other device.`
                 );
             }
-            // Refresh the diagnosis so the count updates.
             const diagnosis = await window.secureDm.diagnoseMissingKeys({
                 userId: currentUser.id,
                 username: currentUser.username
@@ -914,11 +913,11 @@ export default function ClientSettingsModal({
                 username: currentUser.username,
                 transferPackage
             });
+            const n = result.installedConversationCount;
             setTransferImportStatus(
-                `Imported ${result.installedConversationCount} conversation${result.installedConversationCount !== 1 ? "s" : ""} from device ${result.sourceDeviceId}.`
+                `Imported ${n} conversation${n !== 1 ? "s" : ""} from device ${result.sourceDeviceId}.`
             );
             setTransferImportJson("");
-            // Refresh key health after import.
             const diagnosis = await window.secureDm.diagnoseMissingKeys({
                 userId: currentUser.id,
                 username: currentUser.username
@@ -926,7 +925,7 @@ export default function ClientSettingsModal({
             setMissingKeyConversations(diagnosis.missing || []);
         } catch (error) {
             setTransferImportError(formatAppError(error, {
-                fallbackMessage: "Transfer import failed. Check that the package is valid and addressed to this device.",
+                fallbackMessage: "Import failed. Check that the package is valid and addressed to this device.",
                 context: "Device transfer import"
             }).message);
             setTransferImportStatus("");
@@ -1592,13 +1591,13 @@ export default function ClientSettingsModal({
 
                     <CollapsibleSection
                         title="Conversation Key Health"
-                        description="Check whether this device has a decryption key for every conversation, and recover any that are missing."
+                        description="Check whether this device holds a decryption key for every conversation, and recover any that are missing."
                         isOpen={!collapsedSections.keyHealth}
                         onToggle={() => toggleSection("keyHealth")}
                     >
-                        <div className="client-settings-action-row">
+                        <div className="client-settings-inline-actions">
                             <button
-                                className="client-settings-btn"
+                                className="secondary"
                                 onClick={handleCheckKeyHealth}
                             >
                                 Check key health
@@ -1607,54 +1606,64 @@ export default function ClientSettingsModal({
                                 missingKeyConversations.length === 0 ? (
                                     <span className="client-settings-muted">All conversations have a valid key on this device.</span>
                                 ) : (
-                                    <span className="client-settings-muted">
-                                        {missingKeyConversations.length} conversation{missingKeyConversations.length !== 1 ? "s" : ""} missing a key.
-                                    </span>
+                                    <button
+                                        onClick={handleRecoverMissingKeys}
+                                        disabled={recoveryStatus === "Recovering…"}
+                                    >
+                                        Recover {missingKeyConversations.length} missing key{missingKeyConversations.length !== 1 ? "s" : ""} from server
+                                    </button>
                                 )
                             )}
                         </div>
-                        {missingKeyConversations !== null && missingKeyConversations.length > 0 && (
-                            <div className="client-settings-action-row">
-                                <button
-                                    className="client-settings-btn"
-                                    onClick={handleRecoverMissingKeys}
-                                    disabled={recoveryStatus === "Recovering…"}
-                                >
-                                    Recover from server
-                                </button>
-                            </div>
-                        )}
-                        {recoveryStatus ? <p className="client-settings-muted">{recoveryStatus}</p> : null}
+                        {recoveryStatus ? (
+                            <p className="client-settings-muted" style={{ marginTop: "8px" }}>{recoveryStatus}</p>
+                        ) : null}
 
-                        <div className="client-settings-field-group" style={{ marginTop: "16px" }}>
-                            <label className="client-settings-field-label">
-                                Import device transfer package
-                            </label>
-                            <p className="client-settings-muted" style={{ marginBottom: "8px" }}>
-                                If some conversations cannot be recovered from the server, export a transfer package from your other device and paste it here.
-                            </p>
+                        <div className="client-settings-stack" style={{ marginTop: "18px" }}>
+                            <div>
+                                <p style={{ margin: "0 0 6px", fontWeight: 600, fontSize: "0.9em" }}>
+                                    Import device transfer package
+                                </p>
+                                <p className="client-settings-muted" style={{ marginBottom: "10px" }}>
+                                    If conversations can&apos;t be recovered from the server, export a transfer package from your other device and paste it here.
+                                </p>
+                            </div>
                             <textarea
-                                className="client-settings-textarea"
-                                rows={5}
+                                style={{
+                                    width: "100%",
+                                    boxSizing: "border-box",
+                                    padding: "10px 12px",
+                                    border: "1px solid color-mix(in srgb, var(--shell-border) 88%, transparent)",
+                                    borderRadius: "calc(10px * var(--client-radius-multiplier))",
+                                    background: "var(--shell-surface-alt)",
+                                    color: "var(--shell-text)",
+                                    fontFamily: "monospace",
+                                    fontSize: "0.8em",
+                                    resize: "vertical",
+                                    minHeight: "90px"
+                                }}
                                 placeholder="Paste the JSON transfer package here…"
                                 value={transferImportJson}
-                                onChange={(event) => {
-                                    setTransferImportJson(event.target.value);
+                                onChange={(e) => {
+                                    setTransferImportJson(e.target.value);
                                     setTransferImportError("");
                                     setTransferImportStatus("");
                                 }}
                             />
-                            <div className="client-settings-action-row" style={{ marginTop: "8px" }}>
+                            <div className="client-settings-inline-actions">
                                 <button
-                                    className="client-settings-btn"
                                     onClick={handleImportTransferPackage}
                                     disabled={!transferImportJson.trim() || transferImportStatus === "Importing…"}
                                 >
                                     Import package
                                 </button>
                             </div>
-                            {transferImportError ? <p className="client-settings-muted client-settings-error">{transferImportError}</p> : null}
-                            {transferImportStatus ? <p className="client-settings-muted">{transferImportStatus}</p> : null}
+                            {transferImportError ? (
+                                <p className="client-settings-error">{transferImportError}</p>
+                            ) : null}
+                            {transferImportStatus ? (
+                                <p className="client-settings-muted">{transferImportStatus}</p>
+                            ) : null}
                         </div>
                     </CollapsibleSection>
 

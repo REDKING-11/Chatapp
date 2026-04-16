@@ -4,8 +4,6 @@ import {
   createConversationKey,
   decryptFromSenderDevice,
   decryptPayload,
-  deriveChainId,
-  deriveInitialChainKey,
   encryptForRecipientDevice,
   encryptPayload,
   fingerprintPublicKey,
@@ -1639,9 +1637,10 @@ export function deleteConversation({ userId, conversationId }) {
 // ─── Device Transfer & Recovery ───────────────────────────────────────────────
 
 /**
- * Scan local store for conversations where this device has no wrapped key or
- * no conversation key, and return a structured diagnostic list so the UI can
- * surface actionable recovery options without exposing raw key material.
+ * Scan the local store and return every conversation where this device is
+ * missing a wrapped key or has no usable conversation key. The result gives
+ * the UI enough information to surface targeted recovery options without
+ * exposing any raw key material.
  */
 export function diagnoseMissingConversationKeys({ userId, username }) {
   const { userState } = ensureDevice(userId, username);
@@ -1670,22 +1669,18 @@ export function diagnoseMissingConversationKeys({ userId, username }) {
 }
 
 /**
- * Build an encrypted + signed device transfer package containing all
- * conversation keys and message histories (including plaintextCache for
- * ratcheted messages that can no longer be re-decrypted).
+ * Build an encrypted + Ed25519-signed device transfer package containing all
+ * conversation keys and message histories for this user. The payload is
+ * encrypted with X25519-ECDH so only the intended recipient device can open
+ * it, and the signature lets the recipient verify authenticity before
+ * installing any data.
  *
- * The payload is encrypted using X25519-ECDH for the recipient device so only
- * that device can open it, and signed with the source device's Ed25519 key so
- * the recipient can verify authenticity before installing any data.
- *
- * The header is plaintext so the recipient can route and validate it without
- * first decrypting; the signed payload inside the ciphertext provides the
- * tamper-evident guarantee.
+ * The plaintext header is intentionally minimal — the signed, encrypted
+ * payload carries the tamper-evident guarantee.
  */
 export function exportDeviceTransferPackage({ userId, username, recipientDeviceId, recipientPublicKey }) {
   const { userState } = ensureDevice(userId, username);
   const device = userState.device;
-
   const exportedAt = new Date().toISOString();
 
   const conversations = {};
@@ -1709,8 +1704,7 @@ export function exportDeviceTransferPackage({ userId, username, recipientDeviceI
         signature: message.signature ?? null,
         createdAt: message.createdAt,
         direction: message.direction,
-        control: message.control ?? null,
-        plaintextCache: message.plaintextCache ?? null
+        control: message.control ?? null
       }))
     };
   }
@@ -1746,12 +1740,11 @@ export function exportDeviceTransferPackage({ userId, username, recipientDeviceI
 }
 
 /**
- * Receive a device transfer package produced by `exportDeviceTransferPackage`,
- * verify its signature, decrypt it with this device's private key, and install
- * the conversation data into the local store.
+ * Receive a transfer package produced by `exportDeviceTransferPackage`,
+ * verify its Ed25519 signature, decrypt it with this device's X25519 private
+ * key, and merge the conversation data into the local store.
  *
- * On success the caller gets a summary of what was installed; no raw key
- * material is returned through the IPC boundary.
+ * Returns a safe summary — no raw key material crosses the IPC boundary.
  */
 export function importDeviceTransferPackage({ userId, username, transferPackage }) {
   const { store, userState } = ensureDevice(userId, username);
@@ -1803,10 +1796,11 @@ export function importDeviceTransferPackage({ userId, username, transferPackage 
   for (const [conversationId, convData] of Object.entries(transferPayload.conversations || {})) {
     const existing = userState.conversations[conversationId] || null;
 
+    // Prefer a key this device already resolved; otherwise take the transferred one.
     const resolvedConversationKey = existing?.conversationKey || convData.conversationKey || null;
 
-    // Merge legacy keys: deduplicate across both sources, demoting the transferred
-    // current key to legacy if the device already has a newer one installed.
+    // Merge legacy keys from both sides, demoting the transferred current key if
+    // this device already has a newer one installed.
     const allLegacyKeys = Array.from(new Set([
       ...(existing?.legacyConversationKeys || []),
       ...(convData.legacyConversationKeys || []),
@@ -1830,11 +1824,6 @@ export function importDeviceTransferPackage({ userId, username, transferPackage 
         seenRemoteMessageIds: {},
         seenEnvelopeSignatures: {}
       },
-      // Preserve chain state — the transferred chain state is irrelevant here since
-      // this device's ratchet position starts fresh; old plaintextCache entries carry
-      // the decrypted content for messages the source device already processed.
-      sendingChain: existing?.sendingChain ?? null,
-      receivingChains: existing?.receivingChains ?? {},
       messages: mergeStoredMessages(
         existing?.messages || [],
         (convData.messages || []).map((message) => ({
@@ -1849,8 +1838,7 @@ export function importDeviceTransferPackage({ userId, username, transferPackage 
           signature: message.signature ?? null,
           createdAt: message.createdAt,
           direction: message.direction,
-          control: message.control ?? null,
-          plaintextCache: message.plaintextCache ?? null
+          control: message.control ?? null
         }))
       )
     };
