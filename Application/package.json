@@ -1,7 +1,7 @@
 {
   "name": "chatapp",
   "productName": "Chatapp",
-  "version": "0.1.0",
+  "version": "0.1.4-alpha",
   "description": "Privacy-first desktop chat with local-first encrypted messaging.",
   "main": ".vite/build/main.js",
   "private": true,
