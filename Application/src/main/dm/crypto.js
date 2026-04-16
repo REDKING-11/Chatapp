@@ -214,7 +214,7 @@ export function verifyDeviceBundleSignature(bundle) {
   }
 }
 
-// ─── Device Transfer Encryption ──────────────────────────────────────────────
+// Device Transfer Encryption
 
 /**
  * Encrypt an arbitrary payload (Buffer or string) for a specific X25519 recipient
@@ -267,7 +267,7 @@ export function decryptFromSenderDevice({ encryptedPayload, recipientPrivateKey 
 
 /**
  * Sign a JSON-serialisable value with an Ed25519 device signing key.
- * Canonical form: `JSON.stringify(payload)` — callers must not mutate the object
+ * Canonical form: `JSON.stringify(payload)` - callers must not mutate the object
  * between sign and verify calls or the signature will not match.
  */
 export function signJsonPayload(payload, signingPrivateKey) {
@@ -299,7 +299,7 @@ export function verifyJsonPayload(payload, signingPublicKey, signature) {
   }
 }
 
-// ─── Symmetric Ratchet (KDF Chain) ───────────────────────────────────────────
+// Symmetric Ratchet (KDF Chain)
 
 /**
  * Maximum number of out-of-order message keys to store per sender chain.
@@ -312,7 +312,7 @@ export const MAX_RATCHET_SKIP = 2000;
  *
  * The epoch ID changes whenever the conversation key rotates, which lets receivers
  * automatically discover that a fresh receiving chain must be initialised from the
- * new key — without any extra signalling from the sender.
+ * new key - without any extra signalling from the sender.
  */
 export function deriveChainId(conversationKey, senderDeviceId) {
   return createHash("sha256")
@@ -368,95 +368,6 @@ export function verifyMessageEnvelopeSignature(envelope, signingPublicKey, signa
     return verify(
       null,
       canonicalizeEnvelope(envelope),
-      createPublicKey(signingPublicKey),
-      Buffer.from(signature, "base64")
-    );
-  } catch {
-    return false;
-  }
-}
-
-// ─── Device Transfer Encryption ──────────────────────────────────────────────
-
-/**
- * Encrypt an arbitrary payload for a specific X25519 recipient device public
- * key using the same ECDH + HKDF-SHA256 + AES-256-GCM scheme as conversation-
- * key wrapping, but with a different info string so a ciphertext from one
- * context cannot be replayed into the other.
- */
-export function encryptForRecipientDevice({ payload, recipientPublicKey }) {
-  const payloadBuffer = Buffer.isBuffer(payload)
-    ? payload
-    : Buffer.from(String(payload), "utf8");
-  const ephemeral = generateKeyPairSync("x25519");
-  const sharedSecret = diffieHellman({
-    privateKey: ephemeral.privateKey,
-    publicKey: createPublicKey(recipientPublicKey)
-  });
-  const aesKey = deriveAesKey(sharedSecret, "chatapp/device-transfer/v1");
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", aesKey, iv);
-  const ciphertext = Buffer.concat([cipher.update(payloadBuffer), cipher.final()]);
-  const tag = cipher.getAuthTag();
-
-  return {
-    algorithm: "x25519-aes-256-gcm",
-    ephemeralPublicKey: ephemeral.publicKey.export({ type: "spki", format: "pem" }),
-    iv: toBase64(iv),
-    tag: toBase64(tag),
-    ciphertext: toBase64(ciphertext)
-  };
-}
-
-/**
- * Decrypt a payload produced by `encryptForRecipientDevice` using the
- * recipient device's X25519 private key. Returns the raw decrypted Buffer.
- */
-export function decryptFromSenderDevice({ encryptedPayload, recipientPrivateKey }) {
-  const sharedSecret = diffieHellman({
-    privateKey: createPrivateKey(recipientPrivateKey),
-    publicKey: createPublicKey(encryptedPayload.ephemeralPublicKey)
-  });
-  const aesKey = deriveAesKey(sharedSecret, "chatapp/device-transfer/v1");
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    aesKey,
-    fromBase64(encryptedPayload.iv)
-  );
-  decipher.setAuthTag(fromBase64(encryptedPayload.tag));
-
-  return Buffer.concat([
-    decipher.update(fromBase64(encryptedPayload.ciphertext)),
-    decipher.final()
-  ]);
-}
-
-/**
- * Sign a JSON-serialisable value with an Ed25519 device signing key.
- * Canonical form: JSON.stringify(payload). Callers must not mutate the object
- * between sign and verify or the signature will not match.
- */
-export function signJsonPayload(payload, signingPrivateKey) {
-  return sign(
-    null,
-    Buffer.from(JSON.stringify(payload), "utf8"),
-    createPrivateKey(signingPrivateKey)
-  ).toString("base64");
-}
-
-/**
- * Verify a signature produced by `signJsonPayload`. Returns false on any
- * verification failure rather than throwing.
- */
-export function verifyJsonPayload(payload, signingPublicKey, signature) {
-  if (!signingPublicKey || !signature) {
-    return false;
-  }
-
-  try {
-    return verify(
-      null,
-      Buffer.from(JSON.stringify(payload), "utf8"),
       createPublicKey(signingPublicKey),
       Buffer.from(signature, "base64")
     );
