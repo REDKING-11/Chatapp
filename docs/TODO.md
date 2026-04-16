@@ -1,13 +1,5 @@
 ## Do After
 
-- Move from a simple per-conversation key model toward a more mature ratcheting design.  
-  Problem: [Application/src/main/dm/service.js](/C:/Users/REDKING/Projects/Chatapp/Application/src/main/dm/service.js) currently uses a conversation key model with wrapped keys. That is useful, but a static conversation key is weaker than a ratcheting protocol for long-term compromise resistance.  
-  How to fix: Move toward per-message or per-chain derived keys with forward secrecy and post-compromise recovery.
-
-- Add better recovery and re-sync flows for users who add or replace devices.  
-  Problem: Import/export helpers exist in [Application/src/main/dm/service.js](/C:/Users/REDKING/Projects/Chatapp/Application/src/main/dm/service.js), but full secure recovery UX is not obvious.  
-  How to fix: Add explicit secure device transfer, conversation recovery, and missing-key handling flows.
-
 - Encrypt more attachment metadata like file names where practical.  
   Problem: The DM service normalizes attachment metadata in plaintext structures. Even if file bytes are encrypted later, names and MIME types may still leak.  
   How to fix: Put filenames and sensitive metadata inside the encrypted message body whenever possible.
@@ -67,12 +59,3 @@
 - Marketing-language upgrades before the protocol and verification flow are solid.  
   Problem: Overclaiming is a security risk in itself.  
   How to fix: Keep public claims conservative until the DM path is mature.
-
-
-
-add a update chechker in to the app
-i release new updates to github as a release so it could be looking for it?
-https://github.com/REDKING-11/Chatapp/releases
-
-this is latest rn
-https://github.com/REDKING-11/Chatapp/releases/tag/v0.1.4-alpha
