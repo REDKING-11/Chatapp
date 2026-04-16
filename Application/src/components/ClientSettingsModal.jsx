@@ -24,6 +24,7 @@ import {
     approvePendingDmDevice,
     fetchUserDmDevices,
     fetchPendingDmDeviceApprovals,
+    recoverMissingConversationKeys,
     revokeDmDeviceAndRewrapConversations,
     rotateCurrentDmDeviceKeys
 } from "../features/dm/actions";
@@ -236,6 +237,11 @@ export default function ClientSettingsModal({
     const [mediaEditor, setMediaEditor] = useState(null);
     const [openPolicy, setOpenPolicy] = useState("");
     const [accountNotice, setAccountNotice] = useState("");
+    const [missingKeyConversations, setMissingKeyConversations] = useState(null);
+    const [recoveryStatus, setRecoveryStatus] = useState("");
+    const [transferImportJson, setTransferImportJson] = useState("");
+    const [transferImportStatus, setTransferImportStatus] = useState("");
+    const [transferImportError, setTransferImportError] = useState("");
     const [mfaStatus, setMfaStatus] = useState({ enabled: false, enabledAt: null, pendingSetup: false, available: true });
     const [mfaSetup, setMfaSetup] = useState(null);
     const [mfaCode, setMfaCode] = useState("");
@@ -256,6 +262,7 @@ export default function ClientSettingsModal({
         profileMedia: false,
         friendTags: false,
         account: false,
+        keyHealth: true,
         developer: true,
         preview: true,
         shortcuts: false,
@@ -832,6 +839,97 @@ export default function ClientSettingsModal({
             }).message);
         } finally {
             setDeviceActionId("");
+        }
+    }
+
+    async function handleCheckKeyHealth() {
+        if (!currentUser?.id) return;
+        try {
+            const diagnosis = await window.secureDm.diagnoseMissingKeys({
+                userId: currentUser.id,
+                username: currentUser.username
+            });
+            setMissingKeyConversations(diagnosis.missing || []);
+            setRecoveryStatus("");
+        } catch (error) {
+            setRecoveryStatus(formatAppError(error, {
+                fallbackMessage: "Could not check key health right now.",
+                context: "Key health check"
+            }).message);
+        }
+    }
+
+    async function handleRecoverMissingKeys() {
+        const token = getStoredAuthToken();
+        if (!token) {
+            setRecoveryStatus("Your session has expired. Please sign in again before recovering keys.");
+            return;
+        }
+        try {
+            setRecoveryStatus("Recovering…");
+            const result = await recoverMissingConversationKeys({ token, currentUser });
+            const recoveredCount = result.recovered?.length ?? 0;
+            const unrecoverableCount = result.unrecoverable?.length ?? 0;
+            if (unrecoverableCount === 0) {
+                setRecoveryStatus(`Recovered ${recoveredCount} conversation${recoveredCount !== 1 ? "s" : ""} successfully.`);
+            } else {
+                setRecoveryStatus(
+                    `Recovered ${recoveredCount} conversation${recoveredCount !== 1 ? "s" : ""}. ` +
+                    `${unrecoverableCount} conversation${unrecoverableCount !== 1 ? "s" : ""} ` +
+                    `could not be recovered from the server — use a device transfer package from your other device.`
+                );
+            }
+            // Refresh the diagnosis so the count updates.
+            const diagnosis = await window.secureDm.diagnoseMissingKeys({
+                userId: currentUser.id,
+                username: currentUser.username
+            });
+            setMissingKeyConversations(diagnosis.missing || []);
+        } catch (error) {
+            setRecoveryStatus(formatAppError(error, {
+                fallbackMessage: "Recovery failed. Try again or use a device transfer package.",
+                context: "Key recovery"
+            }).message);
+        }
+    }
+
+    async function handleImportTransferPackage() {
+        setTransferImportError("");
+        setTransferImportStatus("");
+        if (!transferImportJson.trim()) {
+            setTransferImportError("Paste a device transfer package first.");
+            return;
+        }
+        let transferPackage;
+        try {
+            transferPackage = JSON.parse(transferImportJson.trim());
+        } catch {
+            setTransferImportError("The pasted text is not valid JSON. Make sure you copied the full package.");
+            return;
+        }
+        try {
+            setTransferImportStatus("Importing…");
+            const result = await window.secureDm.importDeviceTransfer({
+                userId: currentUser.id,
+                username: currentUser.username,
+                transferPackage
+            });
+            setTransferImportStatus(
+                `Imported ${result.installedConversationCount} conversation${result.installedConversationCount !== 1 ? "s" : ""} from device ${result.sourceDeviceId}.`
+            );
+            setTransferImportJson("");
+            // Refresh key health after import.
+            const diagnosis = await window.secureDm.diagnoseMissingKeys({
+                userId: currentUser.id,
+                username: currentUser.username
+            });
+            setMissingKeyConversations(diagnosis.missing || []);
+        } catch (error) {
+            setTransferImportError(formatAppError(error, {
+                fallbackMessage: "Transfer import failed. Check that the package is valid and addressed to this device.",
+                context: "Device transfer import"
+            }).message);
+            setTransferImportStatus("");
         }
     }
 
@@ -1490,6 +1588,74 @@ export default function ClientSettingsModal({
                             </div>
                         ) : null}
                         {accountNotice ? <p className="client-settings-muted">{accountNotice}</p> : null}
+                    </CollapsibleSection>
+
+                    <CollapsibleSection
+                        title="Conversation Key Health"
+                        description="Check whether this device has a decryption key for every conversation, and recover any that are missing."
+                        isOpen={!collapsedSections.keyHealth}
+                        onToggle={() => toggleSection("keyHealth")}
+                    >
+                        <div className="client-settings-action-row">
+                            <button
+                                className="client-settings-btn"
+                                onClick={handleCheckKeyHealth}
+                            >
+                                Check key health
+                            </button>
+                            {missingKeyConversations !== null && (
+                                missingKeyConversations.length === 0 ? (
+                                    <span className="client-settings-muted">All conversations have a valid key on this device.</span>
+                                ) : (
+                                    <span className="client-settings-muted">
+                                        {missingKeyConversations.length} conversation{missingKeyConversations.length !== 1 ? "s" : ""} missing a key.
+                                    </span>
+                                )
+                            )}
+                        </div>
+                        {missingKeyConversations !== null && missingKeyConversations.length > 0 && (
+                            <div className="client-settings-action-row">
+                                <button
+                                    className="client-settings-btn"
+                                    onClick={handleRecoverMissingKeys}
+                                    disabled={recoveryStatus === "Recovering…"}
+                                >
+                                    Recover from server
+                                </button>
+                            </div>
+                        )}
+                        {recoveryStatus ? <p className="client-settings-muted">{recoveryStatus}</p> : null}
+
+                        <div className="client-settings-field-group" style={{ marginTop: "16px" }}>
+                            <label className="client-settings-field-label">
+                                Import device transfer package
+                            </label>
+                            <p className="client-settings-muted" style={{ marginBottom: "8px" }}>
+                                If some conversations cannot be recovered from the server, export a transfer package from your other device and paste it here.
+                            </p>
+                            <textarea
+                                className="client-settings-textarea"
+                                rows={5}
+                                placeholder="Paste the JSON transfer package here…"
+                                value={transferImportJson}
+                                onChange={(event) => {
+                                    setTransferImportJson(event.target.value);
+                                    setTransferImportError("");
+                                    setTransferImportStatus("");
+                                }}
+                            />
+                            <div className="client-settings-action-row" style={{ marginTop: "8px" }}>
+                                <button
+                                    className="client-settings-btn"
+                                    onClick={handleImportTransferPackage}
+                                    disabled={!transferImportJson.trim() || transferImportStatus === "Importing…"}
+                                >
+                                    Import package
+                                </button>
+                            </div>
+                            {transferImportError ? <p className="client-settings-muted client-settings-error">{transferImportError}</p> : null}
+                            {transferImportStatus ? <p className="client-settings-muted">{transferImportStatus}</p> : null}
+                        </div>
                     </CollapsibleSection>
 
                     <CollapsibleSection
