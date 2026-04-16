@@ -787,7 +787,7 @@ export async function importRemoteConversation({ token, currentUser, conversatio
     };
   } catch (error) {
     // Surface missing-key failures as a structured result so the caller can
-    // offer a recovery flow instead of showing a generic error.
+    // offer a recovery flow rather than showing a generic error toast.
     if (error?.code === "dm_missing_conversation_key") {
       return {
         conversation: data.conversation,
@@ -800,11 +800,12 @@ export async function importRemoteConversation({ token, currentUser, conversatio
 }
 
 /**
- * Diagnose which conversations on this device are missing a key, then attempt
- * to recover each one by re-importing it from the server. Conversations that
- * still fail after a server re-import (e.g. the server has no wrapped key for
- * this device either) are returned in `unrecoverable` so the UI can show the
- * user what needs a device-transfer package from another device.
+ * Diagnose which conversations on this device are missing a decryption key,
+ * then attempt to recover each one by re-importing it from the server.
+ *
+ * Conversations that still fail after a server re-import — because the server
+ * holds no wrapped key for this device either — are returned in `unrecoverable`
+ * so the UI can prompt the user to use a device transfer package instead.
  */
 export async function recoverMissingConversationKeys({ token, currentUser }) {
   const diagnosis = await window.secureDm.diagnoseMissingKeys({
