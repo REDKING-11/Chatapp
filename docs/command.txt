@@ -6,4 +6,16 @@ sudo cp /home/ubuntu/.env /var/www/chatapp-core/public/.env
 sudo cp /home/ubuntu/.htaccess /var/www/chatapp-core/public/.htaccess
 sudo chown -R www-data:www-data /var/www/chatapp-core
 
+sudo rm -rf /var/www/chatapp-realtime/{*,.*} 2>/dev/null && \
+sudo cp /home/ubuntu/app.js /var/www/chatapp-realtime/app.js && \
+sudo cp /home/ubuntu/.env /var/www/chatapp-realtime/.env && \
+sudo chown -R www-data:www-data /var/www/chatapp-realtime && \
+sudo npm install -g pm2 && \
+pm2 delete chatapp-realtime 2>/dev/null && \
+pm2 start /var/www/chatapp-realtime/app.js --name chatapp-realtime --cwd /var/www/chatapp-realtime && \
+pm2 save
+
+run:
+sudo rm -rf /var/www/chatapp-realtime/{*,.*} 2>/dev/null && sudo cp /home/ubuntu/app.js /var/www/chatapp-realtime/app.js && sudo cp /home/ubuntu/.env /var/www/chatapp-realtime/.env && sudo chown -R www-data:www-data /var/www/chatapp-realtime && sudo npm install -g pm2 && pm2 delete chatapp-realtime 2>/dev/null; pm2 start /var/www/chatapp-realtime/app.js --name chatapp-realtime --cwd /var/www/chatapp-realtime && pm2 save
+
 $env:Path += ";C:\Program Files (x86)\WiX Toolset v3.14\bin"
