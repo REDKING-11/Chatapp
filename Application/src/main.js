@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Notification } from 'electron';
+import { app, BrowserWindow, ipcMain, Notification, shell } from 'electron';
 import path from 'node:path';
 import {
   adoptConversationId,
@@ -236,6 +236,51 @@ const registerServerHealthIpc = () => {
   });
 };
 
+const GITHUB_RELEASES_URL = 'https://api.github.com/repos/REDKING-11/Chatapp/releases/latest';
+const GITHUB_RELEASES_PAGE = 'https://github.com/REDKING-11/Chatapp/releases';
+
+const registerAppUpdateIpc = () => {
+  ipcMain.handle('app-update:check', async () => {
+    const currentVersion = app.getVersion();
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const res = await fetch(GITHUB_RELEASES_URL, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': `Chatapp/${currentVersion}`
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        return { currentVersion, hasUpdate: false };
+      }
+
+      const data = await res.json();
+      const latestTag = String(data.tag_name || '');
+      const latestVersion = latestTag.replace(/^v/, '');
+      const hasUpdate = latestVersion.length > 0 && latestVersion !== currentVersion;
+
+      return {
+        currentVersion,
+        latestVersion: latestTag,
+        hasUpdate,
+        releaseUrl: data.html_url || GITHUB_RELEASES_PAGE,
+        releaseName: data.name || latestTag
+      };
+    } catch {
+      return { currentVersion, hasUpdate: false };
+    }
+  });
+
+  ipcMain.handle('app-update:open-releases', () => {
+    shell.openExternal(GITHUB_RELEASES_PAGE);
+  });
+};
+
 const registerAttachmentTransferIpc = () => {
   ipcMain.handle('attachment-transfers:register-outgoing', (_event, payload) => registerOutgoingAttachment(payload));
   ipcMain.handle('attachment-transfers:get-outgoing-info', (_event, payload) => getOutgoingAttachmentInfo(payload));
@@ -256,6 +301,7 @@ app.whenReady().then(() => {
   registerNotificationIpc();
   registerServerHealthIpc();
   registerAttachmentTransferIpc();
+  registerAppUpdateIpc();
   createWindow();
 
   // On OS X it's common to re-create a window in the app when the

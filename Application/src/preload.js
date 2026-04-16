@@ -66,6 +66,11 @@ exposeFrozenApi("serverHealth", {
   check: (backendUrl) => ipcRenderer.invoke("server-health:check", backendUrl)
 });
 
+exposeFrozenApi("appUpdates", {
+  check: () => ipcRenderer.invoke("app-update:check"),
+  openReleasesPage: () => ipcRenderer.invoke("app-update:open-releases")
+});
+
 exposeFrozenApi("attachmentTransfers", {
   registerOutgoing: (payload) => ipcRenderer.invoke("attachment-transfers:register-outgoing", payload),
   getOutgoingInfo: (payload) => ipcRenderer.invoke("attachment-transfers:get-outgoing-info", payload),

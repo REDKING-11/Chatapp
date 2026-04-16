@@ -1,4 +1,5 @@
 import {
+  advanceChainStep,
   buildSafetyNumber,
   createConversationKey,
   decryptFromSenderDevice,
@@ -9,6 +10,7 @@ import {
   formatFingerprint,
   generateDeviceIdentity,
   hashPublicKey,
+  MAX_RATCHET_SKIP,
   randomId,
   signDeviceBundle,
   signJsonPayload,
@@ -28,6 +30,7 @@ import {
 const FORBIDDEN_DM_EXPORT_KEYS = new Set([
   "body",
   "plaintext",
+  "plaintextCache",
   "replyTo",
   "attachments",
   "conversationKey",
@@ -123,6 +126,126 @@ function ensureLegacyConversationKeys(conversation) {
   return conversation.legacyConversationKeys;
 }
 
+// ─── Symmetric Ratchet Helpers ───────────────────────────────────────────────
+
+/**
+ * Safely decode the base64-encoded AAD JSON from a relay envelope.
+ * Returns {} on any parse failure so callers can safely destructure.
+ */
+function parseEnvelopeAad(aadBase64) {
+  try {
+    const raw = Buffer.from(String(aadBase64 || ""), "base64").toString("utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Return the active sending chain for this device in the given conversation,
+ * creating or re-seeding it automatically when the conversation key has rotated.
+ *
+ * The chainId encodes the current conversation key epoch, so any rotation
+ * causes a fresh chain to be initialised from the new key — no explicit reset needed.
+ */
+function ensureSendingChain(conversation, device) {
+  const expectedChainId = deriveChainId(conversation.conversationKey, device.deviceId);
+
+  if (!conversation.sendingChain || conversation.sendingChain.chainId !== expectedChainId) {
+    conversation.sendingChain = {
+      chainId: expectedChainId,
+      chainKey: deriveInitialChainKey(conversation.conversationKey, device.deviceId),
+      messageIndex: 0
+    };
+  }
+
+  return conversation.sendingChain;
+}
+
+/**
+ * Ensure the receivingChains map exists on the conversation.
+ */
+function ensureReceivingChains(conversation) {
+  if (!conversation.receivingChains || typeof conversation.receivingChains !== "object" || Array.isArray(conversation.receivingChains)) {
+    conversation.receivingChains = {};
+  }
+
+  return conversation.receivingChains;
+}
+
+/**
+ * Locate (or initialise) the receiving chain for a specific sender.
+ *
+ * The lookup key is `${chainId}:${senderDeviceId}`. If the chainId in the
+ * incoming message doesn't match any stored chain we try every known
+ * conversation key (current + legacy) to find the matching epoch.  This
+ * handles the post-rotation case where a receiver already synced the new key
+ * but the receiving chain for that epoch hasn't been created yet.
+ */
+function resolveReceivingChain(conversation, senderDeviceId, chainId) {
+  const chains = ensureReceivingChains(conversation);
+  const lookupKey = `${chainId}:${senderDeviceId}`;
+
+  if (chains[lookupKey]) {
+    return chains[lookupKey];
+  }
+
+  // No existing chain — try to find a conversation key that produces this chainId.
+  for (const ck of getConversationKeysForRead(conversation)) {
+    if (deriveChainId(ck, senderDeviceId) === chainId) {
+      chains[lookupKey] = {
+        chainKey: deriveInitialChainKey(ck, senderDeviceId),
+        nextIndex: 0,
+        skippedMessageKeys: {}
+      };
+      return chains[lookupKey];
+    }
+  }
+
+  throw new Error(`Ratchet: unknown chain epoch for sender ${senderDeviceId}`);
+}
+
+/**
+ * Advance a receiving chain to `targetIndex` and return the single-use message key.
+ *
+ * Out-of-order messages (targetIndex < nextIndex): look up the pre-stored skipped key.
+ * In-order or future messages: advance the chain, storing any skipped positions.
+ *
+ * In both cases the consumed key is deleted from storage after this call returns.
+ */
+function advanceReceivingChain(chainState, targetIndex) {
+  if (targetIndex < chainState.nextIndex) {
+    const stored = chainState.skippedMessageKeys[String(targetIndex)];
+    if (!stored) {
+      throw new Error(`Ratchet: no stored key for out-of-order index ${targetIndex}`);
+    }
+    delete chainState.skippedMessageKeys[String(targetIndex)];
+    return stored;
+  }
+
+  const gap = targetIndex - chainState.nextIndex;
+  if (gap > MAX_RATCHET_SKIP) {
+    throw new Error(`Ratchet: message index gap ${gap} exceeds MAX_RATCHET_SKIP ${MAX_RATCHET_SKIP}`);
+  }
+
+  // Advance through any skipped positions, storing their keys for future out-of-order delivery.
+  while (chainState.nextIndex < targetIndex) {
+    const { nextChainKey, messageKey } = advanceChainStep(chainState.chainKey);
+    chainState.skippedMessageKeys[String(chainState.nextIndex)] = messageKey;
+    chainState.chainKey = nextChainKey;
+    chainState.nextIndex++;
+  }
+
+  // Derive the actual key for targetIndex.
+  const { nextChainKey, messageKey } = advanceChainStep(chainState.chainKey);
+  chainState.chainKey = nextChainKey;
+  chainState.nextIndex++;
+  return messageKey;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function rememberLegacyConversationKey(conversation, conversationKey) {
   const key = String(conversationKey || "");
 
@@ -146,6 +269,20 @@ function getConversationKeysForRead(conversation) {
 }
 
 function decryptConversationEnvelope(conversation, envelope) {
+  // Ratcheted messages store their plaintext locally because the single-use
+  // message key is not retained after encrypt/decrypt.  Use the cache as the
+  // source of truth; it lives inside the AES-256-GCM encrypted store, so it
+  // is protected by the same OS-backed master key as every other secret.
+  if (typeof envelope.plaintextCache === "string") {
+    try {
+      return JSON.parse(envelope.plaintextCache);
+    } catch {
+      // Cache entry is corrupted — fall through to the ciphertext path so
+      // legacy (non-ratcheted) messages that happen to have a bad cache still work.
+    }
+  }
+
+  // Legacy path: try the current conversation key then every retained legacy key.
   let lastError = null;
 
   for (const conversationKey of getConversationKeysForRead(conversation)) {
@@ -402,9 +539,12 @@ function mergeStoredMessages(existingMessages, incomingMessages) {
       }
 
       // Prefer entries that have remote ids/control metadata, but keep any local-only data too.
+      // plaintextCache is always kept from the existing (local) record — it is the only
+      // copy of the decrypted plaintext for ratcheted messages and must not be discarded.
       merged.set(fallbackKey, {
         ...existing,
         ...message,
+        plaintextCache: existing.plaintextCache ?? message.plaintextCache ?? undefined,
         remoteMessageId: message.remoteMessageId ?? existing.remoteMessageId ?? null,
         control: message.control ?? existing.control ?? null
       });
@@ -736,12 +876,20 @@ export function importConversation({ userId, username, conversation }) {
       seenRemoteMessageIds: {},
       seenEnvelopeSignatures: {}
     },
+    // Preserve ratchet chain state so forward-secrecy guarantees are not invalidated
+    // by an import that would otherwise reset our position in the chain.
+    sendingChain: existingConversation?.sendingChain ?? null,
+    receivingChains: existingConversation?.receivingChains ?? {},
     messages: Array.isArray(conversation.messages)
       ? mergeStoredMessages(existingConversation?.messages || [], conversation.messages.map((message) => {
           let plaintext = null;
           let control = null;
 
           try {
+            // Legacy messages from the server can be decrypted with the conversation key.
+            // Ratcheted messages from the server cannot be re-decrypted here (forward
+            // secrecy); their plaintextCache will be preserved by mergeStoredMessages if
+            // the message is already in the local store.
             plaintext = decryptPayload({
               conversationKey,
               ciphertext: message.ciphertext,
@@ -766,7 +914,8 @@ export function importConversation({ userId, username, conversation }) {
             signature: message.signature ?? null,
             createdAt: message.createdAt,
             direction: Number(message.senderUserId) === Number(userId) ? "outgoing" : "incoming",
-            control
+            control,
+            ...(plaintext ? { plaintextCache: JSON.stringify(plaintext) } : {})
           };
         }))
       : existingConversation?.messages || []
@@ -805,17 +954,36 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
         kind: "message",
         createdAt
       };
+  // ── Ratchet: advance the sending chain and obtain a single-use message key ──
+  //
+  // ensureSendingChain re-initialises the chain automatically if the conversation
+  // key has been rotated since the last send (the chainId encodes the epoch).
+  // After this block `messageKey` must not be stored or referenced again.
+  const sendingChain = ensureSendingChain(conversation, userState.device);
+  const messageIndex = sendingChain.messageIndex;
+  const { nextChainKey, messageKey } = advanceChainStep(sendingChain.chainKey);
+
+  // Advance the stored chain state BEFORE encrypting so that even if the process
+  // crashes mid-send the key is not reused on the next attempt.
+  sendingChain.chainKey = nextChainKey;
+  sendingChain.messageIndex = messageIndex + 1;
+
   const envelope = encryptPayload({
-    conversationKey: conversation.conversationKey,
+    conversationKey: messageKey,          // single-use key derived from the chain
     plaintext: plaintextPayload,
     aad: {
-      version: 1,
+      version: 2,
+      ratchetVersion: 1,
+      chainId: sendingChain.chainId,      // epoch identifier — changes on key rotation
       conversationId,
       messageId,
+      messageIndex,
       senderUserId: Number(senderUserId),
       senderDeviceId: userState.device.deviceId
     }
   });
+  // messageKey is now out of scope and will be GC'd — it is not persisted.
+
   const control = buildControlMetadata(plaintextPayload);
   const signature = signMessageEnvelope({
     conversationId,
@@ -840,7 +1008,9 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
     signature,
     createdAt,
     direction: "outgoing",
-    control
+    control,
+    // Plaintext cache: the only way to re-read this message after the key advances.
+    plaintextCache: JSON.stringify(plaintextPayload)
   };
 
   conversation.messages.push(storedMessage);
@@ -858,7 +1028,8 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
     nonce: envelope.nonce,
     aad: envelope.aad,
     tag: envelope.tag,
-    signature
+    signature,
+    messageIndex
   };
 }
 
@@ -940,7 +1111,43 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
     throw new Error(`DM message signature verification failed for ${relayItem.messageId || "unknown-message"}`);
   }
 
-  const plaintext = decryptConversationEnvelope(conversation, relayItem);
+  // ── Ratchet: select the decryption path from the envelope AAD ───────────────
+  //
+  // The AAD is authenticated plaintext (not encrypted), so we can read
+  // ratchetVersion, chainId, and messageIndex before we decrypt the payload.
+  // If these fields are absent the message is legacy (shared conversation key).
+  const envelopeAad = parseEnvelopeAad(relayItem.aad);
+  const isRatchetMessage = Number(envelopeAad.ratchetVersion) >= 1
+    && typeof envelopeAad.messageIndex === "number"
+    && typeof envelopeAad.chainId === "string";
+
+  let plaintext;
+  let plaintextCache;
+
+  if (isRatchetMessage) {
+    // Locate (or initialise) the receiving chain for this sender epoch.
+    const chainState = resolveReceivingChain(
+      conversation,
+      String(relayItem.senderDeviceId),
+      envelopeAad.chainId
+    );
+    // Advance the chain to the correct position and obtain the single-use key.
+    const messageKey = advanceReceivingChain(chainState, envelopeAad.messageIndex);
+
+    plaintext = decryptPayload({
+      conversationKey: messageKey,
+      ciphertext: relayItem.ciphertext,
+      nonce: relayItem.nonce,
+      aad: relayItem.aad,
+      tag: relayItem.tag
+    });
+    // messageKey is not stored — the only retained artefact is the updated chainState.
+    plaintextCache = JSON.stringify(plaintext);
+  } else {
+    // Legacy path: try shared conversation key(s).
+    plaintext = decryptConversationEnvelope(conversation, relayItem);
+  }
+
   const control = buildControlMetadata(plaintext);
   const replayState = ensureConversationReplayState(conversation);
 
@@ -983,7 +1190,10 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
       senderBundleVerified,
       createdAt: plaintext.createdAt,
       direction: "incoming",
-      control
+      control,
+      // Required for ratcheted messages — the message key is not retained, so this
+      // cache (inside the encrypted-at-rest store) is the only copy of the plaintext.
+      ...(plaintextCache !== undefined ? { plaintextCache } : {})
     });
     recordReplayProofs(conversation, conversation.messages[conversation.messages.length - 1]);
     writeSecureDmStore(store);
@@ -1015,7 +1225,15 @@ function buildVisibleMessages({ conversation, userId }) {
   const visibleMessageMap = new Map();
 
   conversation.messages.forEach((message) => {
-    const plaintext = decryptConversationEnvelope(conversation, message);
+    let plaintext;
+    try {
+      plaintext = decryptConversationEnvelope(conversation, message);
+    } catch {
+      // Skip messages that cannot be decrypted: ratcheted messages received on
+      // another device (no local plaintextCache), or messages with corrupted
+      // ciphertext.  Forward secrecy intentionally makes these unrecoverable.
+      return;
+    }
     const control = message.control || buildControlMetadata(plaintext);
     const visibleMessageId = plaintext.id || message.messageId;
     const storageMessageId = message.messageId;
@@ -1304,6 +1522,8 @@ export function importConversationPackage({ userId, username, conversation, wrap
       seenRemoteMessageIds: {},
       seenEnvelopeSignatures: {}
     },
+    sendingChain: existingConversation?.sendingChain ?? null,
+    receivingChains: existingConversation?.receivingChains ?? {},
     messages: Array.isArray(conversation.messages)
       ? mergeStoredMessages(existingConversation?.messages || [], conversation.messages.map((message) => {
           let plaintext = null;
@@ -1334,7 +1554,8 @@ export function importConversationPackage({ userId, username, conversation, wrap
             signature: message.signature ?? null,
             createdAt: message.createdAt,
             direction: Number(message.senderUserId) === Number(userId) ? "outgoing" : "incoming",
-            control
+            control,
+            ...(plaintext ? { plaintextCache: JSON.stringify(plaintext) } : {})
           };
         }))
       : existingConversation?.messages || []
