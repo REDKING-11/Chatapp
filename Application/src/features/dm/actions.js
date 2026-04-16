@@ -774,16 +774,67 @@ export async function importRemoteConversation({ token, currentUser, conversatio
   );
   const data = await parseJsonResponse(res, "Failed to load DM conversation");
 
-  const messages = await window.secureDm.importConversation({
+  try {
+    const messages = await window.secureDm.importConversation({
+      userId: currentUser.id,
+      username: currentUser.username,
+      conversation: data.conversation
+    });
+
+    return {
+      conversation: data.conversation,
+      messages
+    };
+  } catch (error) {
+    // Surface missing-key failures as a structured result so the caller can
+    // offer a recovery flow rather than showing a generic error toast.
+    if (error?.code === "dm_missing_conversation_key") {
+      return {
+        conversation: data.conversation,
+        messages: null,
+        missingKey: true
+      };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Diagnose which conversations on this device are missing a decryption key,
+ * then attempt to recover each one by re-importing it from the server.
+ *
+ * Conversations that still fail after a server re-import — because the server
+ * holds no wrapped key for this device either — are returned in `unrecoverable`
+ * so the UI can prompt the user to use a device transfer package instead.
+ */
+export async function recoverMissingConversationKeys({ token, currentUser }) {
+  const diagnosis = await window.secureDm.diagnoseMissingKeys({
     userId: currentUser.id,
-    username: currentUser.username,
-    conversation: data.conversation
+    username: currentUser.username
   });
 
-  return {
-    conversation: data.conversation,
-    messages
-  };
+  const recovered = [];
+  const unrecoverable = [];
+
+  for (const entry of diagnosis.missing || []) {
+    try {
+      const result = await importRemoteConversation({
+        token,
+        currentUser,
+        conversationId: entry.conversationId
+      });
+
+      if (result.missingKey) {
+        unrecoverable.push({ ...entry, reason: "no_server_key" });
+      } else {
+        recovered.push(entry.conversationId);
+      }
+    } catch {
+      unrecoverable.push({ ...entry, reason: "fetch_failed" });
+    }
+  }
+
+  return { recovered, unrecoverable };
 }
 
 export async function sendDirectMessage({

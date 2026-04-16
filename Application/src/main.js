@@ -4,9 +4,14 @@ import {
   adoptConversationId,
   createConversation,
   createEncryptedMessage,
+  deleteConversation,
+  diagnoseMissingConversationKeys,
+  exportConversationPackage,
+  exportDeviceTransferPackage,
   getDeviceBundle,
   importConversation,
   importConversationPackage,
+  importDeviceTransferPackage,
   initializeDevice,
   listConversations,
   listMessages,
@@ -15,8 +20,6 @@ import {
   commitDeviceIdentityRotation,
   rollbackDeviceIdentityRotation,
   syncConversationMetadata,
-  exportConversationPackage,
-  deleteConversation,
   createWrappedKeyForConversation,
   verifyDeviceBundles,
   getConversationVerification,
@@ -112,7 +115,10 @@ const SECURE_DM_IPC_HANDLERS = Object.freeze({
   'secure-dm:commit-device-identity-rotation': commitDeviceIdentityRotation,
   'secure-dm:rollback-device-identity-rotation': rollbackDeviceIdentityRotation,
   'secure-dm:import-conversation-package': importConversationPackage,
-  'secure-dm:delete-conversation': deleteConversation
+  'secure-dm:delete-conversation': deleteConversation,
+  'secure-dm:diagnose-missing-keys': diagnoseMissingConversationKeys,
+  'secure-dm:export-device-transfer': exportDeviceTransferPackage,
+  'secure-dm:import-device-transfer': importDeviceTransferPackage
 });
 
 function assertSecureDmChannelPolicy(channel) {

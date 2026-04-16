@@ -44,7 +44,10 @@ exposeFrozenApi("secureDm", {
   rotateConversationKey: (payload) => ipcRenderer.invoke("secure-dm:rotate-conversation-key", payload),
   rotateDeviceIdentity: (payload) => ipcRenderer.invoke("secure-dm:rotate-device-identity", payload),
   importConversationPackage: (payload) => ipcRenderer.invoke("secure-dm:import-conversation-package", payload),
-  deleteConversation: (payload) => ipcRenderer.invoke("secure-dm:delete-conversation", payload)
+  deleteConversation: (payload) => ipcRenderer.invoke("secure-dm:delete-conversation", payload),
+  diagnoseMissingKeys: (payload) => ipcRenderer.invoke("secure-dm:diagnose-missing-keys", payload),
+  exportDeviceTransfer: (payload) => ipcRenderer.invoke("secure-dm:export-device-transfer", payload),
+  importDeviceTransfer: (payload) => ipcRenderer.invoke("secure-dm:import-device-transfer", payload)
 });
 
 exposeFrozenApi("desktopNotifications", {

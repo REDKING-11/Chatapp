@@ -1,17 +1,21 @@
 import {
   buildSafetyNumber,
   createConversationKey,
+  decryptFromSenderDevice,
   decryptPayload,
+  encryptForRecipientDevice,
   encryptPayload,
   fingerprintPublicKey,
   formatFingerprint,
   generateDeviceIdentity,
   hashPublicKey,
   randomId,
-  signMessageEnvelope,
   signDeviceBundle,
+  signJsonPayload,
+  signMessageEnvelope,
   unwrapConversationKeyForDevice,
   verifyDeviceBundleSignature,
+  verifyJsonPayload,
   verifyMessageEnvelopeSignature,
   wrapConversationKeyForRecipient
 } from "./crypto";
@@ -710,7 +714,11 @@ export function importConversation({ userId, username, conversation }) {
   );
 
   if (!wrappedKey) {
-    throw new Error("No wrapped conversation key exists for this device");
+    // Use a stable code so callers can detect this specific failure without
+    // fragile message-string matching across the IPC boundary.
+    const err = new Error("No wrapped conversation key exists for this device");
+    err.code = "dm_missing_conversation_key";
+    throw err;
   }
 
   const conversationKey = unwrapConversationKeyForDevice({
@@ -1402,5 +1410,227 @@ export function deleteConversation({ userId, conversationId }) {
   return {
     ok: true,
     conversationId
+  };
+}
+
+// ─── Device Transfer & Recovery ───────────────────────────────────────────────
+
+/**
+ * Scan the local store and return every conversation where this device is
+ * missing a wrapped key or has no usable conversation key. The result gives
+ * the UI enough information to surface targeted recovery options without
+ * exposing any raw key material.
+ */
+export function diagnoseMissingConversationKeys({ userId, username }) {
+  const { userState } = ensureDevice(userId, username);
+  const deviceId = userState.device.deviceId;
+  const missing = [];
+
+  for (const [conversationId, conversation] of Object.entries(userState.conversations)) {
+    const hasConversationKey = Boolean(conversation.conversationKey);
+    const hasWrappedKey = (conversation.wrappedKeys || []).some(
+      (entry) => entry.deviceId === deviceId
+    );
+
+    if (!hasConversationKey || !hasWrappedKey) {
+      missing.push({
+        conversationId,
+        title: conversation.title || null,
+        participantUserIds: conversation.participantUserIds || [],
+        hasConversationKey,
+        hasWrappedKey,
+        messageCount: (conversation.messages || []).length
+      });
+    }
+  }
+
+  return { missing, deviceId };
+}
+
+/**
+ * Build an encrypted + Ed25519-signed device transfer package containing all
+ * conversation keys and message histories for this user. The payload is
+ * encrypted with X25519-ECDH so only the intended recipient device can open
+ * it, and the signature lets the recipient verify authenticity before
+ * installing any data.
+ *
+ * The plaintext header is intentionally minimal — the signed, encrypted
+ * payload carries the tamper-evident guarantee.
+ */
+export function exportDeviceTransferPackage({ userId, username, recipientDeviceId, recipientPublicKey }) {
+  const { userState } = ensureDevice(userId, username);
+  const device = userState.device;
+  const exportedAt = new Date().toISOString();
+
+  const conversations = {};
+  for (const [conversationId, conversation] of Object.entries(userState.conversations)) {
+    conversations[conversationId] = {
+      conversationId,
+      title: conversation.title || null,
+      participantUserIds: conversation.participantUserIds || [],
+      createdAt: conversation.createdAt || null,
+      conversationKey: conversation.conversationKey || null,
+      legacyConversationKeys: conversation.legacyConversationKeys || [],
+      messages: (conversation.messages || []).map((message) => ({
+        messageId: message.messageId,
+        remoteMessageId: message.remoteMessageId ?? null,
+        senderUserId: message.senderUserId,
+        senderDeviceId: message.senderDeviceId,
+        ciphertext: message.ciphertext,
+        nonce: message.nonce,
+        aad: message.aad,
+        tag: message.tag,
+        signature: message.signature ?? null,
+        createdAt: message.createdAt,
+        direction: message.direction,
+        control: message.control ?? null
+      }))
+    };
+  }
+
+  const transferPayload = {
+    version: 1,
+    sourceDeviceId: device.deviceId,
+    sourceUserId: Number(userId),
+    recipientDeviceId: String(recipientDeviceId),
+    exportedAt,
+    conversations
+  };
+
+  // Sign before encrypting so the recipient can verify after decrypting.
+  const payloadSignature = signJsonPayload(transferPayload, device.signingPrivateKey);
+
+  const header = {
+    version: 1,
+    sourceDeviceId: device.deviceId,
+    sourceUserId: Number(userId),
+    recipientDeviceId: String(recipientDeviceId),
+    exportedAt,
+    signingPublicKey: device.signingPublicKey,
+    payloadSignature
+  };
+
+  const encryptedPayload = encryptForRecipientDevice({
+    payload: Buffer.from(JSON.stringify(transferPayload), "utf8"),
+    recipientPublicKey: String(recipientPublicKey)
+  });
+
+  return { header, encryptedPayload };
+}
+
+/**
+ * Receive a transfer package produced by `exportDeviceTransferPackage`,
+ * verify its Ed25519 signature, decrypt it with this device's X25519 private
+ * key, and merge the conversation data into the local store.
+ *
+ * Returns a safe summary — no raw key material crosses the IPC boundary.
+ */
+export function importDeviceTransferPackage({ userId, username, transferPackage }) {
+  const { store, userState } = ensureDevice(userId, username);
+  const { header, encryptedPayload } = transferPackage || {};
+
+  if (!header || !encryptedPayload) {
+    throw new Error("Invalid transfer package: missing header or encryptedPayload");
+  }
+
+  if (String(header.recipientDeviceId) !== String(userState.device.deviceId)) {
+    throw new Error("Transfer package is not addressed to this device");
+  }
+
+  let payloadBuffer;
+  try {
+    payloadBuffer = decryptFromSenderDevice({
+      encryptedPayload,
+      recipientPrivateKey: userState.device.encryptionPrivateKey
+    });
+  } catch {
+    throw new Error("Failed to decrypt transfer package — wrong device or corrupted data");
+  }
+
+  let transferPayload;
+  try {
+    transferPayload = JSON.parse(payloadBuffer.toString("utf8"));
+  } catch {
+    throw new Error("Transfer package payload is not valid JSON");
+  }
+
+  const signatureValid = verifyJsonPayload(
+    transferPayload,
+    String(header.signingPublicKey || ""),
+    String(header.payloadSignature || "")
+  );
+  if (!signatureValid) {
+    throw new Error("Transfer package signature verification failed — data may be tampered");
+  }
+
+  if (
+    String(transferPayload.sourceDeviceId) !== String(header.sourceDeviceId) ||
+    Number(transferPayload.sourceUserId) !== Number(header.sourceUserId)
+  ) {
+    throw new Error("Transfer package header does not match payload — data may be tampered");
+  }
+
+  const installedConversationIds = [];
+
+  for (const [conversationId, convData] of Object.entries(transferPayload.conversations || {})) {
+    const existing = userState.conversations[conversationId] || null;
+
+    // Prefer a key this device already resolved; otherwise take the transferred one.
+    const resolvedConversationKey = existing?.conversationKey || convData.conversationKey || null;
+
+    // Merge legacy keys from both sides, demoting the transferred current key if
+    // this device already has a newer one installed.
+    const allLegacyKeys = Array.from(new Set([
+      ...(existing?.legacyConversationKeys || []),
+      ...(convData.legacyConversationKeys || []),
+      ...(convData.conversationKey && resolvedConversationKey !== convData.conversationKey
+        ? [convData.conversationKey]
+        : [])
+    ])).filter(Boolean);
+
+    userState.conversations[conversationId] = {
+      ...(existing || {}),
+      conversationId,
+      title: convData.title || existing?.title || null,
+      participantUserIds: convData.participantUserIds || existing?.participantUserIds || [],
+      createdAt: convData.createdAt || existing?.createdAt || new Date().toISOString(),
+      conversationKey: resolvedConversationKey,
+      legacyConversationKeys: allLegacyKeys,
+      wrappedKeys: existing?.wrappedKeys || [],
+      deviceTrust: existing?.deviceTrust || { verifiedDeviceIds: {} },
+      replayProtection: existing?.replayProtection || {
+        seenMessageIds: {},
+        seenRemoteMessageIds: {},
+        seenEnvelopeSignatures: {}
+      },
+      messages: mergeStoredMessages(
+        existing?.messages || [],
+        (convData.messages || []).map((message) => ({
+          messageId: message.messageId,
+          remoteMessageId: message.remoteMessageId ?? null,
+          senderUserId: message.senderUserId,
+          senderDeviceId: message.senderDeviceId,
+          ciphertext: message.ciphertext,
+          nonce: message.nonce,
+          aad: message.aad,
+          tag: message.tag,
+          signature: message.signature ?? null,
+          createdAt: message.createdAt,
+          direction: message.direction,
+          control: message.control ?? null
+        }))
+      )
+    };
+
+    installedConversationIds.push(conversationId);
+  }
+
+  writeSecureDmStore(store);
+
+  return {
+    ok: true,
+    sourceDeviceId: header.sourceDeviceId,
+    installedConversationCount: installedConversationIds.length,
+    installedConversationIds
   };
 }
