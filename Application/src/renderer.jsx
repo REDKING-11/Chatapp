@@ -94,6 +94,8 @@ function App() {
     const [clientSettings, setClientSettings] = useState(() => loadClientSettings());
     const [onboardingState, setOnboardingState] = useState(() => loadOnboardingState());
     const [hasSeenShortcutInfo, setHasSeenShortcutInfo] = useState(false);
+    const [updateInfo, setUpdateInfo] = useState(null);
+    const [updateDismissed, setUpdateDismissed] = useState(false);
 
     const serverThemeRef = useRef(null);
     const serverCustomCssRef = useRef(null);
@@ -140,6 +142,22 @@ function App() {
         }
 
         restoreSession();
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        async function checkForUpdate() {
+            try {
+                const result = await window.appUpdates.check();
+                if (!cancelled && result?.hasUpdate) {
+                    setUpdateInfo(result);
+                }
+            } catch {
+                // silently ignore — update check is best-effort
+            }
+        }
+        checkForUpdate();
+        return () => { cancelled = true; };
     }, []);
 
     useEffect(() => {
@@ -962,6 +980,27 @@ function App() {
                     <button onClick={() => setShowClientSettings(true)}>Client Settings</button>
                 </div>
             </div>
+
+            {updateInfo?.hasUpdate && !updateDismissed && (
+                <div className="update-banner">
+                    <span className="update-banner-text">
+                        <strong>{updateInfo.latestVersion}</strong> is available &mdash; {updateInfo.releaseName || "New release"}
+                    </span>
+                    <button
+                        className="update-banner-download"
+                        onClick={() => window.appUpdates.openReleasesPage()}
+                    >
+                        Download
+                    </button>
+                    <button
+                        className="update-banner-dismiss"
+                        onClick={() => setUpdateDismissed(true)}
+                        aria-label="Dismiss update notification"
+                    >
+                        &times;
+                    </button>
+                </div>
+            )}
 
             <div className="app-shell">
                 <JoinedServersSidebar

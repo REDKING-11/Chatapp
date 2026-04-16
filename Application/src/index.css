@@ -254,6 +254,67 @@ body {
     font-size: 15px;
 }
 
+.update-banner {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    height: 38px;
+    background: color-mix(in srgb, var(--shell-accent) 18%, var(--shell-surface));
+    border-top: 1px solid color-mix(in srgb, var(--shell-accent) 50%, transparent);
+    color: var(--shell-text);
+    font-size: 13px;
+}
+
+.update-banner-text {
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.update-banner-download {
+    flex-shrink: 0;
+    padding: 4px 14px;
+    border-radius: 8px;
+    border: none;
+    background: var(--shell-accent);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.update-banner-download:hover {
+    background: color-mix(in srgb, var(--shell-accent) 80%, white);
+}
+
+.update-banner-dismiss {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--shell-text-muted);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.update-banner-dismiss:hover {
+    background: var(--shell-surface-alt);
+    color: var(--shell-text);
+}
+
 .app-shell {
     display: flex;
     width: 100vw;
@@ -5318,6 +5379,60 @@ body[data-high-contrast="true"] .client-settings-section {
 .client-settings-error {
     margin: 0;
     color: #fca5a5;
+}
+
+.client-settings-btn {
+    border: 1px solid color-mix(in srgb, var(--shell-border) 88%, transparent);
+    border-radius: calc(12px * var(--client-radius-multiplier));
+    min-height: 38px;
+    padding: 0 14px;
+    background: var(--shell-accent);
+    color: white;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.client-settings-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.client-settings-action-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.client-settings-field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.client-settings-field-label {
+    font-weight: 600;
+    font-size: 0.9em;
+    color: var(--shell-text);
+}
+
+.client-settings-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 88%, transparent);
+    border-radius: calc(10px * var(--client-radius-multiplier));
+    background: var(--shell-surface-alt);
+    color: var(--shell-text);
+    font-family: monospace;
+    font-size: 0.8em;
+    resize: vertical;
+}
+
+.client-settings-textarea:focus {
+    outline: none;
+    border-color: var(--shell-accent);
 }
 
 .client-tag-folder-list {
