@@ -10,7 +10,18 @@ import MarkdownPreview from "../../../components/MarkdownPreview";
 import MessageReactions from "../../../components/MessageReactions";
 import { buildAppLinkContext } from "../../../lib/appLinks";
 import { applyComposerEntitySuggestion, getComposerEntitySuggestions } from "../../../lib/composerEntities";
+import { isDebugModeEnabled } from "../../../lib/debug";
 import { loadPinnedMessages, savePinnedMessages } from "../../../lib/messagePins";
+import {
+    filterReferencedInlineImageEmbeds,
+    getLegacyInlineImageEmbeds,
+    replaceInlineImageMarkdownWithPlainText
+} from "../../dm/inlineEmbeds.js";
+import {
+    inspectInlineImageEmbedRenderable
+} from "../../dm/inlineEmbedContracts.js";
+import { traceInlineImageDiagnostic } from "../../dm/inlineEmbedTracing.js";
+import { resolvePresenceMeta } from "../../presence";
 
 function EmptyState({ title, description }) {
     return (
@@ -143,7 +154,9 @@ function getMessageSenderUserId({ message, currentUser, directFriend }) {
 }
 
 function getReplyPreviewBody(text) {
-    const normalizedText = text && typeof text === "object" ? text.body : text;
+    const normalizedText = replaceInlineImageMarkdownWithPlainText(
+        text && typeof text === "object" ? text.body : text
+    );
     const trimmed = String(normalizedText || "").trim();
 
     if (!trimmed) {
@@ -155,6 +168,13 @@ function getReplyPreviewBody(text) {
 
 function getMessageBody(text) {
     const normalizedText = text && typeof text === "object" ? text.body : text;
+    return String(normalizedText || "").trim();
+}
+
+function getMessageSearchBody(text) {
+    const normalizedText = replaceInlineImageMarkdownWithPlainText(
+        text && typeof text === "object" ? text.body : text
+    );
     return String(normalizedText || "").trim();
 }
 
@@ -303,6 +323,168 @@ function PendingAttachmentList({ attachments, onRemove }) {
                         x
                     </button>
                 </div>
+            ))}
+        </div>
+    );
+}
+
+function useInlineImageRenderability(embed) {
+    return useMemo(
+        () => inspectInlineImageEmbedRenderable(embed),
+        [embed?.dataBase64, embed?.id, embed?.mimeType]
+    );
+}
+
+function InlineImageEmbedFigure({ embed, pending = false, onRemove = null, diagnosticContext = null }) {
+    const renderability = useInlineImageRenderability(embed);
+    const imageSrc = renderability.imageSrc;
+    const [renderFailed, setRenderFailed] = useState(false);
+    const debugMode = isDebugModeEnabled();
+    const altText = String(embed?.alt || "Image");
+    const metaText = [
+        formatFileSize(embed?.byteLength),
+        embed?.width && embed?.height ? `${embed.width}x${embed.height}` : ""
+    ]
+        .filter(Boolean)
+        .join(" · ");
+
+    useEffect(() => {
+        setRenderFailed(false);
+    }, [imageSrc]);
+
+    useEffect(() => {
+        if (renderability.ok) {
+            if (pending) {
+                traceInlineImageDiagnostic({
+                    level: "info",
+                    debugMode,
+                    onceKey: `preview.pending:${String(embed?.id || "")}`,
+                    stage: "preview.pending",
+                    reason: "trace",
+                    message: "Pending DM inline image preview resolved a usable image source.",
+                    embed,
+                    embedId: embed?.id,
+                    body: String(diagnosticContext?.body || ""),
+                    embeds: diagnosticContext?.embeds || [embed],
+                    conversationId: diagnosticContext?.conversationId || "",
+                    messageId: diagnosticContext?.messageId || "",
+                    surface: diagnosticContext?.surface || "pending-preview"
+                });
+            }
+            return;
+        }
+
+        traceInlineImageDiagnostic({
+            level: "warning",
+            stage: pending ? "preview.pending" : "preview.inlineEmbed",
+            reason: pending ? "preview-source-missing" : "invalid-image-src",
+            message: "DM inline image preview is missing a usable image source.",
+            embed,
+            embedId: embed?.id,
+            body: String(diagnosticContext?.body || ""),
+            embeds: diagnosticContext?.embeds || [embed],
+            conversationId: diagnosticContext?.conversationId || "",
+            messageId: diagnosticContext?.messageId || "",
+            surface: diagnosticContext?.surface || (pending ? "pending-preview" : "inline-embed"),
+            extraDetails: {
+                renderabilityReason: renderability.reason
+            }
+        });
+    }, [
+        debugMode,
+        diagnosticContext?.body,
+        diagnosticContext?.conversationId,
+        diagnosticContext?.embeds,
+        diagnosticContext?.messageId,
+        diagnosticContext?.surface,
+        embed,
+        pending,
+        renderability.ok,
+        renderability.reason
+    ]);
+
+    return (
+        <figure className={`inline-image-embed ${pending ? "is-pending" : ""}`.trim()}>
+            {imageSrc && !renderFailed ? (
+                <img
+                    src={imageSrc}
+                    alt={altText}
+                    loading="lazy"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
+                    onError={() => {
+                        setRenderFailed(true);
+                        traceInlineImageDiagnostic({
+                            level: "warning",
+                            stage: pending ? "preview.pending" : "preview.inlineEmbed",
+                            reason: "render-error",
+                            message: "DM inline image preview failed while the browser tried to render it.",
+                            embed,
+                            embedId: embed?.id,
+                            body: String(diagnosticContext?.body || ""),
+                            embeds: diagnosticContext?.embeds || [embed],
+                            conversationId: diagnosticContext?.conversationId || "",
+                            messageId: diagnosticContext?.messageId || "",
+                            surface: diagnosticContext?.surface || (pending ? "pending-preview" : "inline-embed")
+                        });
+                    }}
+                />
+            ) : (
+                <div className="inline-image-embed-fallback">
+                    <strong>{altText}</strong>
+                    <span>Could not render image.</span>
+                </div>
+            )}
+            {pending ? (
+                <figcaption className="inline-image-embed-caption">
+                    <div className="inline-image-embed-meta">
+                        <strong title={altText}>{altText}</strong>
+                        {metaText ? <small>{metaText}</small> : null}
+                    </div>
+                    {onRemove ? (
+                        <button type="button" onClick={() => onRemove?.(embed?.id)} aria-label={`Remove ${altText}`}>
+                            x
+                        </button>
+                    ) : null}
+                </figcaption>
+            ) : null}
+        </figure>
+    );
+}
+
+function MessageInlineEmbedList({ embeds, diagnosticContext = null }) {
+    if (!Array.isArray(embeds) || embeds.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="message-inline-embed-list">
+            {embeds.map((embed, index) => (
+                <InlineImageEmbedFigure
+                    key={String(embed?.id || index)}
+                    embed={embed}
+                    diagnosticContext={diagnosticContext}
+                />
+            ))}
+        </div>
+    );
+}
+
+function PendingInlineEmbedList({ embeds, onRemove, diagnosticContext = null }) {
+    if (!Array.isArray(embeds) || embeds.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="composer-inline-embed-list">
+            {embeds.map((embed, index) => (
+                <InlineImageEmbedFigure
+                    key={String(embed?.id || index)}
+                    embed={embed}
+                    pending
+                    onRemove={onRemove}
+                    diagnosticContext={diagnosticContext}
+                />
             ))}
         </div>
     );
@@ -463,7 +645,7 @@ function messageMatchesSearch({ message, query, displayName = "" }) {
     const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
     const searchText = [
         displayName,
-        getMessageBody(message?.body),
+        getMessageSearchBody(message?.body),
         getReplyPreviewBody(message?.replyTo?.body),
         ...attachments.map((attachment) => attachment?.fileName || "")
     ]
@@ -520,7 +702,9 @@ function MessageList({
     selectedMessageId = null,
     onSelectMessage = null,
     reactionPickerRequest = null,
-    markdownLinkContext = null
+    markdownLinkContext = null,
+    secureDmImageMode = false,
+    conversationId = ""
 }) {
     const pinnedMessageIdSet = useMemo(
         () => new Set((Array.isArray(pinnedMessageIds) ? pinnedMessageIds : []).map(String)),
@@ -554,11 +738,19 @@ function MessageList({
                     const compactLabel = groupInitialsByUserId[senderUserId] || getInitials(displayName);
                     const messageBody = getMessageBody(message.body);
                     const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+                    const embeds = Array.isArray(message.embeds) ? message.embeds : [];
+                    const legacyEmbeds = secureDmImageMode
+                        ? getLegacyInlineImageEmbeds(messageBody, embeds)
+                        : embeds;
                     const repliedMessage = message.replyTo?.messageId
                         ? messageMap[String(message.replyTo.messageId)]
                         : null;
                     const deliveryMeta = isOutgoing
-                        ? getOutgoingDeliveryMeta(messageDeliveryById?.[String(message.messageId)] || "sent")
+                        ? getOutgoingDeliveryMeta(
+                            messageDeliveryById?.[String(message.messageId)]
+                                || message.deliveryState
+                                || "sent"
+                        )
                         : null;
                     const replyAuthor = message.replyTo?.author
                         || (repliedMessage
@@ -605,15 +797,36 @@ function MessageList({
                                                 className="markdown-inline"
                                                 inline
                                                 value={getReplyPreviewBody(message.replyTo.body || repliedMessage?.body)}
+                                                allowImages={false}
                                                 linkContext={markdownLinkContext}
                                             />
                                         </div>
+                                    ) : null}
+                                    {!message.isDeleted ? (
+                                        <MessageInlineEmbedList
+                                            embeds={legacyEmbeds}
+                                            diagnosticContext={{
+                                                body: messageBody,
+                                                embeds,
+                                                conversationId,
+                                                messageId: message.messageId,
+                                                surface: "message-legacy-embed"
+                                            }}
+                                        />
                                     ) : null}
                                     {messageBody || message.isDeleted ? (
                                         <MarkdownContent
                                             as="div"
                                             className={`${message.isDeleted ? "friend-message-deleted" : ""} markdown-body`.trim()}
                                             value={messageBody}
+                                            allowImages={false}
+                                            secureDmImageMode={secureDmImageMode}
+                                            secureDmEmbeds={secureDmImageMode ? embeds : null}
+                                            secureDmDiagnosticContext={secureDmImageMode ? {
+                                                conversationId,
+                                                messageId: message.messageId,
+                                                surface: "message-markdown"
+                                            } : null}
                                             linkContext={markdownLinkContext}
                                         />
                                     ) : null}
@@ -771,11 +984,13 @@ function GroupConversationView({
     clientSettings,
     selectedGroupConversation,
     activeGroupParticipantNames,
+    shouldShowMissingGroupConversationAccessNotice,
     groupMessages,
     groupComposer,
     groupReplyTo,
     groupEditingMessage,
     submitting,
+    canComposeGroupMessage,
     messageListRef,
     onGroupComposerChange,
     onSendGroupMessage,
@@ -796,6 +1011,7 @@ function GroupConversationView({
     const [fileShortcutSignal, setFileShortcutSignal] = useState(0);
     const [cursorPosition, setCursorPosition] = useState(0);
     const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
+    const canSubmitGroupMessage = canComposeGroupMessage && (Boolean(groupComposer.trim()) || groupAttachments.length > 0);
     const [searchQuery, setSearchQuery] = useState("");
     const [pinsMenuOpen, setPinsMenuOpen] = useState(false);
     const pinnedScopeKey = useMemo(
@@ -1045,6 +1261,12 @@ function GroupConversationView({
                 </span>
             </div>
 
+            {shouldShowMissingGroupConversationAccessNotice ? (
+                <InlineNotice>
+                    This device has not unlocked the active group conversation yet. Wait for the next message to sync it here, or import your DM device transfer package if this is a new device.
+                </InlineNotice>
+            ) : null}
+
             <MessageList
                 messages={filteredGroupMessages}
                 emptyText={normalizeConversationSearchQuery(searchQuery)
@@ -1071,6 +1293,7 @@ function GroupConversationView({
                 onSelectMessage={(message) => setSelectedMessageId(message.messageId)}
                 reactionPickerRequest={reactionPickerRequest}
                 markdownLinkContext={markdownLinkContext}
+                conversationId={selectedGroupConversation?.id || ""}
             />
 
             <MessageActionBanner
@@ -1080,14 +1303,14 @@ function GroupConversationView({
             />
 
             <form className="friend-composer" onSubmit={onSendGroupMessage}>
-                <MarkdownPreview value={groupComposer} label="Message preview" linkContext={markdownLinkContext} />
+                <MarkdownPreview value={groupComposer} label="Message preview" allowImages={false} linkContext={markdownLinkContext} />
                 <PendingAttachmentList attachments={groupAttachments} onRemove={onGroupRemoveAttachment} />
                 <div className="friend-compose-row">
                     <ComposerTools
                         value={groupComposer}
                         onChange={onGroupComposerChange}
                         inputRef={composerRef}
-                        disabled={submitting}
+                        disabled={!canComposeGroupMessage}
                         tools={groupEditingMessage ? [] : ["file"]}
                         iconOnly
                         className="composer-tools-left"
@@ -1171,26 +1394,27 @@ function GroupConversationView({
                                     return;
                                 }
 
-                                if (event.ctrlKey && event.key === "Enter" && groupComposer.trim()) {
+                                if (event.ctrlKey && event.key === "Enter" && (groupComposer.trim() || groupAttachments.length > 0)) {
                                     event.preventDefault();
                                     onSendGroupMessage?.(event);
                                 }
                             }}
                             placeholder={groupEditingMessage ? "Update message..." : groupReplyTo ? "Write reply..." : `Message ${selectedGroupConversation.title}`}
                             rows={3}
+                            disabled={!canComposeGroupMessage}
                         />
                         <ComposerTools
                             value={groupComposer}
                             onChange={onGroupComposerChange}
                             inputRef={composerRef}
-                            disabled={submitting}
+                            disabled={!canComposeGroupMessage}
                             tools={["emoji"]}
                             iconOnly
                             className="composer-tools-inline"
                             shortcutScope="group"
                         />
                     </div>
-                    <button type="submit" className="friend-send-button" disabled={submitting || !groupComposer.trim()}>
+                    <button type="submit" className="friend-send-button" disabled={!canSubmitGroupMessage}>
                         {groupEditingMessage ? "Save" : "Send"}
                     </button>
                 </div>
@@ -1224,6 +1448,8 @@ function DirectConversationView({
     encryptChatError,
     messages,
     composer,
+    directAttachments,
+    directInlineEmbeds,
     directReplyTo,
     directEditingMessage,
     isDirectConversationEncrypted,
@@ -1245,10 +1471,11 @@ function DirectConversationView({
     onDirectToggleReaction,
     onDirectPickAttachment,
     onDirectRemoveAttachment,
+    onDirectRemoveInlineEmbed,
     onDirectDownloadAttachment,
-    directAttachments,
     messageDeliveryById,
     transferStates,
+    onDirectComposerPaste,
     onCancelDirectAction
 }) {
     const composerRef = useRef(null);
@@ -1294,8 +1521,18 @@ function DirectConversationView({
         () => resolvePinnedMessages(messages, pinnedMessages),
         [messages, pinnedMessages]
     );
-    const selectedFriendPresenceState = presenceByUserId?.[String(selectedFriend?.friendUserId)] || "offline";
-    const selectedFriendPresenceLabel = selectedFriendPresenceState === "online" ? "Online" : "Offline";
+    const selectedFriendPresence = resolvePresenceMeta(
+        presenceByUserId?.[String(selectedFriend?.friendUserId)] || null
+    );
+    const referencedDirectInlineEmbeds = useMemo(
+        () => filterReferencedInlineImageEmbeds(composer, directInlineEmbeds),
+        [composer, directInlineEmbeds]
+    );
+    const canSubmitDirectMessage = canComposeDirectMessage && (
+        Boolean(composer.trim())
+        || directAttachments.length > 0
+        || referencedDirectInlineEmbeds.length > 0
+    );
     const filteredMessages = useMemo(() => {
         const normalizedQuery = normalizeConversationSearchQuery(searchQuery);
 
@@ -1460,13 +1697,13 @@ function DirectConversationView({
                 <div>
                     <div className="friends-user-presence">
                         <span
-                            className={`friends-user-presence-dot is-${selectedFriendPresenceState}`.trim()}
+                            className={`friends-user-presence-dot is-${selectedFriendPresence.tone}`.trim()}
                             aria-hidden="true"
                         />
                         <div className="friends-user-presence-copy">
                             <h2>{selectedFriend.friendUsername}</h2>
-                            <span className={`friends-user-presence-label is-${selectedFriendPresenceState}`.trim()}>
-                                {selectedFriendPresenceLabel}
+                            <span className={`friends-user-presence-label is-${selectedFriendPresence.tone}`.trim()}>
+                                {selectedFriendPresence.label}
                             </span>
                         </div>
                     </div>
@@ -1665,7 +1902,7 @@ function DirectConversationView({
                     />
                 </div>
             ) : (
-                <MessageList
+            <MessageList
                     messages={filteredMessages}
                     emptyText={normalizeConversationSearchQuery(searchQuery)
                         ? "No messages match your search."
@@ -1691,6 +1928,8 @@ function DirectConversationView({
                     onSelectMessage={(message) => setSelectedMessageId(message.messageId)}
                     reactionPickerRequest={reactionPickerRequest}
                     markdownLinkContext={markdownLinkContext}
+                    secureDmImageMode
+                    conversationId={selectedFriend?.conversationId || ""}
                 />
             )}
 
@@ -1703,7 +1942,30 @@ function DirectConversationView({
                     />
 
                     <form className="friend-composer" onSubmit={onSendMessage}>
-                        <MarkdownPreview value={composer} label="Message preview" linkContext={markdownLinkContext} />
+                        {!directEditingMessage ? (
+                            <PendingInlineEmbedList
+                                embeds={directInlineEmbeds}
+                                onRemove={onDirectRemoveInlineEmbed}
+                                diagnosticContext={{
+                                    body: composer,
+                                    embeds: directInlineEmbeds,
+                                    conversationId: selectedFriend?.conversationId || "",
+                                    surface: "pending-preview"
+                                }}
+                            />
+                        ) : null}
+                        <MarkdownPreview
+                            value={composer}
+                            label="Message preview"
+                            allowImages={false}
+                            secureDmImageMode
+                            secureDmEmbeds={directInlineEmbeds}
+                            secureDmDiagnosticContext={{
+                                conversationId: selectedFriend?.conversationId || "",
+                                surface: "composer-preview"
+                            }}
+                            linkContext={markdownLinkContext}
+                        />
                         <PendingAttachmentList attachments={directAttachments} onRemove={onDirectRemoveAttachment} />
                         <div className="friend-compose-row">
                             <ComposerTools
@@ -1714,7 +1976,10 @@ function DirectConversationView({
                                 tools={directEditingMessage ? [] : ["file"]}
                                 iconOnly
                                 className="composer-tools-left"
-                                onPickFile={onDirectPickAttachment}
+                                onPickFile={(file) => onDirectPickAttachment?.(file, {
+                                    selectionStart: composerRef.current?.selectionStart ?? cursorPosition,
+                                    selectionEnd: composerRef.current?.selectionEnd ?? cursorPosition
+                                })}
                                 shortcutScope="direct"
                                 openFileSignal={fileShortcutSignal}
                             />
@@ -1747,6 +2012,22 @@ function DirectConversationView({
                                     }}
                                     onClick={(event) => setCursorPosition(event.currentTarget.selectionStart ?? 0)}
                                     onKeyUp={(event) => setCursorPosition(event.currentTarget.selectionStart ?? 0)}
+                                    onPaste={(event) => {
+                                        Promise.resolve(onDirectComposerPaste?.(event, {
+                                            selectionStart: event.currentTarget.selectionStart ?? cursorPosition,
+                                            selectionEnd: event.currentTarget.selectionEnd ?? cursorPosition
+                                        })).then((result) => {
+                                            if (result?.selectionStart == null || result?.selectionEnd == null) {
+                                                return;
+                                            }
+
+                                            window.requestAnimationFrame(() => {
+                                                composerRef.current?.focus();
+                                                composerRef.current?.setSelectionRange(result.selectionStart, result.selectionEnd);
+                                                setCursorPosition(result.selectionStart);
+                                            });
+                                        });
+                                    }}
                                     onKeyDown={(event) => {
                                         if (entitySuggestions?.items?.length) {
                                             if (event.key === "ArrowDown") {
@@ -1794,7 +2075,7 @@ function DirectConversationView({
                                             return;
                                         }
 
-                                        if (event.ctrlKey && event.key === "Enter" && composer.trim()) {
+                                        if (event.ctrlKey && event.key === "Enter" && (composer.trim() || directAttachments.length > 0 || referencedDirectInlineEmbeds.length > 0)) {
                                             event.preventDefault();
                                             onSendMessage?.(event);
                                         }
@@ -1814,7 +2095,7 @@ function DirectConversationView({
                                     shortcutScope="direct"
                                 />
                             </div>
-                            <button type="submit" className="friend-send-button" disabled={!canComposeDirectMessage || !composer.trim()}>
+                            <button type="submit" className="friend-send-button" disabled={!canSubmitDirectMessage}>
                                 {directEditingMessage ? "Save" : "Send"}
                             </button>
                         </div>

@@ -1,3 +1,8 @@
+import {
+    DEFAULT_PRESENCE_STATUS,
+    PRESENCE_STATUS_IDS
+} from "./presence";
+
 const STORAGE_KEY = "clientSettings:v1";
 const EXPORT_KIND = "chatapp-client-settings";
 const EXPORT_VERSION = 1;
@@ -135,7 +140,7 @@ export const THEME_PRESETS = {
 
 export const CLIENT_SETTINGS_DEFAULTS = {
     themePreset: "midnight",
-    presenceStatus: "online",
+    presenceStatus: DEFAULT_PRESENCE_STATUS,
     fontScale: 1,
     lineHeight: 1.5,
     uiDensity: "comfortable",
@@ -265,7 +270,7 @@ function sanitizeSettings(raw) {
         ...raw
     };
 
-    if (!["online", "free", "busy", "off", "chilling"].includes(next.presenceStatus)) {
+    if (!PRESENCE_STATUS_IDS.includes(next.presenceStatus)) {
         next.presenceStatus = CLIENT_SETTINGS_DEFAULTS.presenceStatus;
     }
 

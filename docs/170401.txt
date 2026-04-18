@@ -1,0 +1,139 @@
+**Desktop App Changes**
+- I enforced TLS-only networking in the client by adding [transportPolicy.mjs](C:/Users/REDKING/Projects/Chatapp/Application/src/lib/transportPolicy.mjs:1). It now rejects `http://` backend URLs and `ws://` realtime URLs, and derives realtime as `wss://<core>/ws/`.
+- I wired that policy into [env.js](C:/Users/REDKING/Projects/Chatapp/Application/src/lib/env.js:1), so `VITE_CORE_API_BASE` must be `https://...`, `VITE_REALTIME_WS_BASE` must be `wss://...` if set, and self-host defaults are optional but still secure.
+- I updated [JoinServerModal.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/components/JoinServerModal.jsx:1) so it no longer hardcodes `server.localhost`; it now uses env when present and otherwise expects a secure URL.
+- I restored tracked [Application/.env](C:/Users/REDKING/Projects/Chatapp/Application/.env:1) to secure local-dev defaults and, importantly, removed the hardcoded `VITE_REALTIME_WS_BASE=wss://core.localhost/ws/` so your `.env.local` remote core URL can correctly derive `wss://56.228.2.7/ws/`.
+- I added resilience to joined-server loading in [servers/actions.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/servers/actions.js:1). Legacy/insecure joined-server rows are now skipped with a warning instead of crashing the whole joined-servers view.
+- I tightened auth/session restoration in [renderer.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/renderer.jsx:1), [auth/actions.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/auth/actions.js:1), [session/actions.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/session/actions.js:1), and [api.js](C:/Users/REDKING/Projects/Chatapp/Application/src/lib/api.js:1) so stale tokens don’t spam protected endpoints and local secure-endpoint connection failures produce clearer errors.
+- I reduced realtime noise and improved fallback behavior in [dm/actions.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/dm/actions.js:1), [FriendsHome.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/pages/FriendsHome.jsx:1), and [renderer.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/renderer.jsx:1). The app now backs off reconnect attempts, suppresses duplicate presence-subscribe spam, and falls back to relay sync if realtime is unavailable.
+- I added a one-time secure-DM repair path in [renderer.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/renderer.jsx:1) so a bad current device bundle triggers a key-rotation repair attempt instead of just hard failing.
+- I addressed Electron CSP issues in [main.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main.js:1) and [index.html](C:/Users/REDKING/Projects/Chatapp/Application/index.html:1) so the packaged app gets a real CSP header and the local meta-CSP warning is reduced.
+- I added a regression test file at [transport-policy.test.mjs](C:/Users/REDKING/Projects/Chatapp/Application/tests/transport-policy.test.mjs:1) and kept [Application/package.json](C:/Users/REDKING/Projects/Chatapp/Application/package.json:1) aligned with running that test.
+
+**Core / Backend Fixes**
+- I fixed the main auth mismatch in [auth_required.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/auth_required.php:1). `auth/me.php` was already using hashed session lookup, but many protected routes were still validating against raw `sessions.token`. I switched shared auth to the hashed-session helpers so the app stopped getting `401 Invalid token` everywhere after login.
+- I updated [db.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/db.php:1) to better support secure localhost-origin development through subdomains like `core.localhost`.
+- I fixed the secure-DM device bundle handling on the backend in:
+  - [chatapp-core/keys/_bootstrap.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/keys/_bootstrap.php:1)
+  - [chatapp-core/dm/_bootstrap.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/dm/_bootstrap.php:1)
+  - [keys/devices/register.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/keys/devices/register.php:1)
+  - [dm/devices/register.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/dm/devices/register.php:1)
+  - [keys/devices/list.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/keys/devices/list.php:1)
+  - [dm/devices/list.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/dm/devices/list.php:1)
+  - [keys/devices/approve.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/keys/devices/approve.php:1)
+  - [keys/devices/revoke.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/keys/devices/revoke.php:1)
+  - [dm/devices/revoke.php](C:/Users/REDKING/Projects/Chatapp/chatapp-core/dm/devices/revoke.php:1)
+- The core DM bug there was that the backend was mutating signed bundle fields, especially PEM/newline-sensitive data, which caused signature verification failures after registration. I changed registration/list/revoke/approve handling to preserve or canonicalize bundle data instead of breaking signatures.
+
+**Realtime Service Changes**
+- I updated [chatapp-realtime/app.js](C:/Users/REDKING/Projects/Chatapp/chatapp-realtime/app.js:1) so realtime socket auth matches the core auth layer and uses hashed sessions when the `token_hash` schema exists.
+- I updated [chatapp-realtime/.env](C:/Users/REDKING/Projects/Chatapp/chatapp-realtime/.env:1) for the secure production target.
+- I added the missing [chatapp-realtime/package.json](C:/Users/REDKING/Projects/Chatapp/chatapp-realtime/package.json:1) so the realtime service can actually install `dotenv`, `express`, `mysql2`, and `ws` cleanly on the server. That was a real deployment gap we discovered while bringing `3010` up.
+
+**SelfHServer Changes**
+- I removed the insecure `http://localhost:4000` style fallback from [SelfHServer/services/auth.service.js](C:/Users/REDKING/Projects/Chatapp/SelfHServer/services/auth.service.js:1) so service-to-service auth also stays HTTPS-only.
+
+**Deployment / Docs Changes**
+- I added a local TLS development proxy config at [Caddyfile](C:/Users/REDKING/Projects/Chatapp/Caddyfile:1) for `core.localhost`, `server.localhost`, and realtime websocket testing.
+- For Lightsail, I added:
+  - [deploy/Caddyfile.lightsail](C:/Users/REDKING/Projects/Chatapp/deploy/Caddyfile.lightsail:1)
+  - [deploy/nginx-chatapp-core.lightsail.conf](C:/Users/REDKING/Projects/Chatapp/deploy/nginx-chatapp-core.lightsail.conf:1)
+  - [docs/LIGHTSAIL_HTTPS.md](C:/Users/REDKING/Projects/Chatapp/docs/LIGHTSAIL_HTTPS.md:1)
+- I also updated [README.md](C:/Users/REDKING/Projects/Chatapp/README.md:1), [docs/command.txt](C:/Users/REDKING/Projects/Chatapp/docs/command.txt:1), and [docs/SECURITY.md](C:/Users/REDKING/Projects/Chatapp/docs/SECURITY.md:1) so the repo now describes:
+  - TLS-only app behavior
+  - local Caddy-based dev
+  - Lightsail deployment using Nginx on `127.0.0.1:8080`
+  - realtime on `127.0.0.1:3010`
+  - Caddy on public `80/443`
+  - `SelfHServer` not being part of the central core/realtime Lightsail host
+- I later corrected the Lightsail Caddy template to match what actually worked on your server:
+  - certs loaded from `/etc/caddy/certs/...`
+  - `default_sni 56.228.2.7` set at the top, because raw IP HTTPS clients often omit SNI
+
+**What We Configured On Your Lightsail Server**
+- I did not directly run the server commands myself; you executed them on the box, and I guided the sequence.
+- We discovered your server uses Nginx, not Apache.
+- We moved Nginx off public `80` and onto `127.0.0.1:8080` for `chatapp-core`.
+- We got `chatapp-realtime` installed and running on `3010` with PM2.
+- We obtained a Certbot IP certificate for `56.228.2.7`.
+- We copied that certificate to `/etc/caddy/certs/` with permissions Caddy can read.
+- We got Caddy running on public `80` and `443`, reverse proxying:
+  - `/ws/*` -> `127.0.0.1:3010`
+  - everything else -> `127.0.0.1:8080`
+- We fixed several deployment blockers along the way:
+  - Nginx still owning port `80`
+  - Caddy cert permission errors
+  - Caddy not knowing what cert to serve for raw IP HTTPS until `default_sni 56.228.2.7` was added
+- We verified the public edge works because `curl -I https://56.228.2.7/auth/me.php` returned `HTTP/2 401` with `via: 1.1 Caddy`, which is exactly the expected unauthenticated response through the TLS proxy.
+
+**What I Tested**
+- I ran `npm test` in [Application](C:/Users/REDKING/Projects/Chatapp/Application:1) after the transport-policy and env fixes, and it passed.
+- We also used live runtime checks on the server to confirm:
+  - `chatapp-core` answered on `127.0.0.1:8080`
+  - realtime health answered on `127.0.0.1:3010/health`
+  - Caddy listened on `:80` and `:443`
+  - public HTTPS reached core correctly
+
+**What’s Working Now**
+- The desktop app can authenticate against `https://56.228.2.7`.
+- Secure DM can fall back gracefully if realtime is temporarily unavailable.
+- Realtime should now derive from your secure core base instead of incorrectly using `wss://core.localhost/ws/`.
+- The app no longer dies when one old joined-server row is insecure.
+
+**What Is Still Left**
+- You still have a stale joined-server row in core:
+  - `id: 3`
+  - `Local Test Server`
+  - `http://localhost:3000`
+- The app now skips it and logs a warning instead of breaking.
+- If you want a clean joined-server list, that row should be updated to `https://...` or deleted from the database.
+- PM2 reboot persistence for `chatapp-realtime` still needs to be fully finalized if you haven’t already run `pm2 startup` and the printed `sudo ...` command.
+
+**App And Backend Fixes**
+- Fixed the main auth mismatch where some core routes and realtime were validating sessions differently, so login worked but protected endpoints still acted like the token was invalid.
+- Fixed secure-DM device bundle handling so signed bundle data stopped getting mutated in ways that broke signature verification.
+- Fixed the realtime service so it can install and run properly by adding the missing `chatapp-realtime/package.json`.
+- Fixed the desktop app’s transport rules so it consistently uses `https://` and `wss://` instead of falling back to insecure or wrong localhost values.
+- Removed the bad hardcoded realtime override that kept trying `wss://core.localhost/ws/` even when you were pointed at the Lightsail server.
+- Made joined-server loading skip stale insecure server rows instead of crashing the whole list.
+- Fixed the secure-DM ratchet code bug where `deriveChainId` and related imports were missing, which broke DM send locally.
+- Improved secure-DM receive/send handling so missing sender bundles, relay ack failures, and realtime failures produce real structured errors instead of vague “something went wrong” messages.
+- Added fallback device-list logic so the client can read both the newer and legacy device registries when needed.
+- Added sender bundle snapshots to relay data paths so old lookup mismatches are less likely to break message verification.
+
+**Diagnostics And UX Fixes**
+- Added a full diagnostics layer with stable codes, stored recent events, structured causes, and a copy-to-clipboard debug panel in Client Settings.
+- Changed Friends/DM errors so they now show a stable code instead of collapsing into generic UI failures.
+- Preserved inner causes across error wrapping so we could actually trace the true source of failures.
+- Added targeted DM error codes for relay polling, realtime auth, device registration, recipient-device state, message receive, and IPC failures.
+- Made startup and relay sync treat blocked-device states as explicit device-state problems instead of random transport errors.
+- Improved Client Settings so DM devices now show clearer states like `Active`, `Current`, `Revoked`, and blocked secure-DM state.
+
+**Trust Model Fixes**
+- Removed the old “new device usually waits for approval” behavior as the normal path.
+- Changed secure-DM registration so a normal successful login authorizes the device by default.
+- Kept revocation as the special case: revoked devices stay signed in but secure DMs are blocked.
+- Added explicit MFA-based device re-authorization for revoked devices with a new backend endpoint.
+- Changed backend DM/realtime/send endpoints to clearly distinguish:
+  - `DEVICE_NOT_REGISTERED`
+  - `DEVICE_REAUTH_REQUIRED`
+- Updated the client so revoked devices no longer look like mysterious relay/auth failures and instead point you toward re-authorization.
+
+**Server And Deployment Fixes**
+- Brought `chatapp-realtime` up on port `3010` and verified its health endpoint.
+- Moved Nginx to internal `127.0.0.1:8080` for core traffic.
+- Put Caddy in front on public `80/443` for HTTPS and websocket proxying.
+- Fixed the Nginx/Caddy port conflict on `:80`.
+- Fixed certificate permissions so Caddy could actually read the cert and key.
+- Fixed raw-IP HTTPS behavior with `default_sni` so `https://56.228.2.7` worked properly.
+- Verified public HTTPS reached core through Caddy and returned the expected `401` instead of failing TLS.
+- Found the PM2 reboot gap where realtime did not come back after restart because startup persistence was not fully installed yet.
+
+**State And Data Problems We Identified**
+- Found stale joined-server data pointing at `http://localhost:3000`.
+- Found broken relay rows tied to old sender device IDs.
+- Found current device trust state getting stuck in a bad server-side state, which caused:
+  - relay `404`
+  - realtime auth failures
+  - DM send `409`
+- Found that the old trust flow was confusing enough that it felt like login should have been enough, which is why we redesigned it.

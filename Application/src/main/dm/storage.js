@@ -1,17 +1,43 @@
-import { app, safeStorage } from "electron";
+import { safeStorage } from "electron";
 import fs from "node:fs";
-import path from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { copyStorageFiles, listStoragePathCandidates } from "../storagePaths.js";
 
-// DM secrets are only allowed to persist inside this encrypted store.
-// Do not duplicate DM key material or decrypted conversation data into logs,
-// localStorage, plain JSON files, exports, or any other weaker storage path.
-const STORE_DIR = path.join(app.getPath("userData"), "secure-dm");
-const MASTER_KEY_PATH = path.join(STORE_DIR, "master-key.bin");
-const STORE_PATH = path.join(STORE_DIR, "store.json.enc");
+const SECURE_DM_FILE_NAMES = Object.freeze([
+  "master-key.bin",
+  "store.json.enc"
+]);
 
-function ensureDir() {
-  fs.mkdirSync(STORE_DIR, { recursive: true });
+function getDmStoreCandidates() {
+  return listStoragePathCandidates("secure-dm", SECURE_DM_FILE_NAMES);
+}
+
+function getStableDmStoreCandidate() {
+  return getDmStoreCandidates()[0];
+}
+
+function ensureDir(dirPath = getStableDmStoreCandidate().storeDir) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function hasExistingFiles(filePaths) {
+  return filePaths.some((filePath) => fs.existsSync(filePath));
+}
+
+function quarantineStoreFiles(filePaths) {
+  const suffix = `.corrupt-${Date.now()}`;
+
+  filePaths.forEach((filePath) => {
+    if (!fs.existsSync(filePath)) {
+      return;
+    }
+
+    try {
+      fs.renameSync(filePath, `${filePath}${suffix}`);
+    } catch {
+      // Best-effort quarantine only.
+    }
+  });
 }
 
 function encryptJson(payload, key) {
@@ -45,46 +71,150 @@ function decryptJson(payload, key) {
   return JSON.parse(plaintext.toString("utf8"));
 }
 
-function getMasterKey() {
-  ensureDir();
-
+function assertSecureStorageAvailable() {
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error("OS-backed secure storage is not available for local DM encryption");
   }
+}
 
-  if (fs.existsSync(MASTER_KEY_PATH)) {
-    return safeStorage.decryptString(fs.readFileSync(MASTER_KEY_PATH));
+function readStoredMasterKey(masterKeyPath) {
+  const key = safeStorage.decryptString(fs.readFileSync(masterKeyPath));
+  const normalizedKey = String(key || "").trim();
+
+  if (!normalizedKey) {
+    throw new Error("Stored secure DM master key is empty.");
+  }
+
+  return normalizedKey;
+}
+
+function validateDmStoreCandidate(candidate) {
+  const [masterKeyPath, storePath] = candidate.filePaths;
+
+  if (!hasExistingFiles(candidate.filePaths)) {
+    return false;
+  }
+
+  assertSecureStorageAvailable();
+
+  if (!fs.existsSync(masterKeyPath)) {
+    throw new Error("Secure DM master key is missing.");
+  }
+
+  const masterKey = readStoredMasterKey(masterKeyPath);
+
+  if (fs.existsSync(storePath)) {
+    decryptJson(JSON.parse(fs.readFileSync(storePath, "utf8")), Buffer.from(masterKey, "base64"));
+  }
+
+  return true;
+}
+
+function getDmStorePaths() {
+  const [stableCandidate, ...legacyCandidates] = getDmStoreCandidates();
+  ensureDir(stableCandidate.storeDir);
+  let stableError = null;
+
+  try {
+    if (validateDmStoreCandidate(stableCandidate)) {
+      return {
+        storeDir: stableCandidate.storeDir,
+        masterKeyPath: stableCandidate.filePaths[0],
+        storePath: stableCandidate.filePaths[1]
+      };
+    }
+  } catch (error) {
+    stableError = error;
+  }
+
+  for (const legacyCandidate of legacyCandidates) {
+    try {
+      if (!validateDmStoreCandidate(legacyCandidate)) {
+        continue;
+      }
+
+      copyStorageFiles(legacyCandidate.filePaths, stableCandidate.filePaths, {
+        overwrite: true
+      });
+
+      return {
+        storeDir: stableCandidate.storeDir,
+        masterKeyPath: stableCandidate.filePaths[0],
+        storePath: stableCandidate.filePaths[1]
+      };
+    } catch {
+      // Keep looking for the first readable legacy candidate.
+    }
+  }
+
+  if (stableError) {
+    console.warn("Secure DM store is unreadable. Quarantining the local secure DM files.", stableError);
+    quarantineStoreFiles(stableCandidate.filePaths);
+  }
+
+  return {
+    storeDir: stableCandidate.storeDir,
+    masterKeyPath: stableCandidate.filePaths[0],
+    storePath: stableCandidate.filePaths[1]
+  };
+}
+
+function getMasterKey() {
+  const { masterKeyPath, storePath, storeDir } = getDmStorePaths();
+  ensureDir(storeDir);
+  assertSecureStorageAvailable();
+
+  if (fs.existsSync(masterKeyPath)) {
+    try {
+      return readStoredMasterKey(masterKeyPath);
+    } catch (error) {
+      console.warn("Stored secure DM master key could not be decrypted. Quarantining the local secure DM files.", error);
+      quarantineStoreFiles([masterKeyPath, storePath]);
+    }
   }
 
   const key = randomBytes(32).toString("base64");
-  fs.writeFileSync(MASTER_KEY_PATH, safeStorage.encryptString(key));
+  fs.writeFileSync(masterKeyPath, safeStorage.encryptString(key));
   return key;
 }
 
 function writeEncryptedStoreFile(store, masterKey) {
+  const { storePath } = getDmStorePaths();
   const encryptedPayload = JSON.stringify(encryptJson(store, masterKey), null, 2);
-  const tempPath = `${STORE_PATH}.tmp`;
+  const tempPath = `${storePath}.tmp`;
 
   fs.writeFileSync(tempPath, encryptedPayload, "utf8");
-  fs.renameSync(tempPath, STORE_PATH);
+  fs.renameSync(tempPath, storePath);
+}
+
+function createEmptySecureDmStore() {
+  return {
+    version: 1,
+    users: {}
+  };
 }
 
 export function readSecureDmStore() {
-  ensureDir();
+  const { storeDir, storePath } = getDmStorePaths();
+  ensureDir(storeDir);
   const masterKey = Buffer.from(getMasterKey(), "base64");
 
-  if (!fs.existsSync(STORE_PATH)) {
-    return {
-      version: 1,
-      users: {}
-    };
+  if (!fs.existsSync(storePath)) {
+    return createEmptySecureDmStore();
   }
 
-  return decryptJson(JSON.parse(fs.readFileSync(STORE_PATH, "utf8")), masterKey);
+  try {
+    return decryptJson(JSON.parse(fs.readFileSync(storePath, "utf8")), masterKey);
+  } catch (error) {
+    console.warn("Secure DM store payload is unreadable. Quarantining the local secure DM store file.", error);
+    quarantineStoreFiles([storePath]);
+    return createEmptySecureDmStore();
+  }
 }
 
 export function writeSecureDmStore(store) {
-  ensureDir();
+  const { storeDir } = getDmStorePaths();
+  ensureDir(storeDir);
   const masterKey = Buffer.from(getMasterKey(), "base64");
   writeEncryptedStoreFile(store, masterKey);
 }

@@ -8,12 +8,12 @@ $data = readJsonInput();
 dmEnsureBundleSignatureColumn($db, 'dm_devices');
 dmEnsureDeviceApprovalTable($db);
 
-$deviceId = dmRequireString($data, 'deviceId', 'deviceId is required');
-$deviceName = dmTrimmedString($data['deviceName'] ?? null) ?? 'Desktop';
-$encryptionPublicKey = dmRequireString($data, 'encryptionPublicKey', 'encryptionPublicKey is required');
-$signingPublicKey = dmTrimmedString($data['signingPublicKey'] ?? null);
+$deviceId = dmRequirePreservedString($data, 'deviceId', 'deviceId is required');
+$deviceName = dmPreservedString($data['deviceName'] ?? null) ?? 'Desktop';
+$encryptionPublicKey = dmNormalizePem(dmRequirePreservedString($data, 'encryptionPublicKey', 'encryptionPublicKey is required'));
+$signingPublicKey = dmNormalizePem(dmPreservedString($data['signingPublicKey'] ?? null));
 $keyVersion = max(1, (int)($data['keyVersion'] ?? 1));
-$bundleSignature = dmRequireString($data, 'bundleSignature', 'bundleSignature is required');
+$bundleSignature = dmRequirePreservedString($data, 'bundleSignature', 'bundleSignature is required');
 $userId = (int)$user['id'];
 $mirrorPublicKeys = dmTableExists($db, 'device_public_keys');
 
@@ -28,20 +28,7 @@ $existingDeviceStmt->execute([$userId, $deviceId]);
 $existingDevice = $existingDeviceStmt->fetch();
 
 $buildDevicePayload = static function (array $row): array {
-    return [
-        'userId' => (int)$row['user_id'],
-        'deviceId' => $row['device_id'],
-        'deviceName' => $row['device_name'],
-        'encryptionPublicKey' => $row['encryption_public_key'],
-        'signingPublicKey' => $row['signing_public_key'],
-        'keyVersion' => (int)$row['key_version'],
-        'algorithm' => 'x25519-aes-256-gcm',
-        'signingAlgorithm' => 'ed25519',
-        'bundleSignature' => $row['bundle_signature'],
-        'createdAt' => $row['created_at'],
-        'updatedAt' => $row['updated_at'],
-        'revokedAt' => $row['revoked_at']
-    ];
+    return dmBuildPublishedDevicePayload($row);
 };
 
 $persistDeviceStmt = $db->prepare('
@@ -104,20 +91,20 @@ $fetchStmt = $db->prepare('
 ');
 
 $bundleMatchesExisting = $existingDevice
-    && (string)$existingDevice['device_name'] === $deviceName
-    && (string)$existingDevice['encryption_public_key'] === $encryptionPublicKey
-    && (string)($existingDevice['signing_public_key'] ?? '') === (string)($signingPublicKey ?? '')
+    && dmComparableBundleString($existingDevice['device_name'] ?? null) === dmComparableBundleString($deviceName)
+    && dmComparablePem($existingDevice['encryption_public_key'] ?? null) === dmComparablePem($encryptionPublicKey)
+    && dmComparablePem($existingDevice['signing_public_key'] ?? null) === dmComparablePem($signingPublicKey)
     && (string)$existingDevice['bundle_signature'] === $bundleSignature;
 $signatureRefreshAllowed = $existingDevice
-    && (string)$existingDevice['device_name'] === $deviceName
-    && (string)$existingDevice['encryption_public_key'] === $encryptionPublicKey
-    && (string)($existingDevice['signing_public_key'] ?? '') === (string)($signingPublicKey ?? '');
+    && dmComparableBundleString($existingDevice['device_name'] ?? null) === dmComparableBundleString($deviceName)
+    && dmComparablePem($existingDevice['encryption_public_key'] ?? null) === dmComparablePem($encryptionPublicKey)
+    && dmComparablePem($existingDevice['signing_public_key'] ?? null) === dmComparablePem($signingPublicKey);
 $legacyBundleBackfillAllowed = $existingDevice
-    && (string)$existingDevice['device_name'] === $deviceName
-    && (string)$existingDevice['encryption_public_key'] === $encryptionPublicKey
+    && dmComparableBundleString($existingDevice['device_name'] ?? null) === dmComparableBundleString($deviceName)
+    && dmComparablePem($existingDevice['encryption_public_key'] ?? null) === dmComparablePem($encryptionPublicKey)
     && (
-        (string)($existingDevice['signing_public_key'] ?? '') === (string)($signingPublicKey ?? '')
-        || (string)($existingDevice['signing_public_key'] ?? '') === ''
+        dmComparablePem($existingDevice['signing_public_key'] ?? null) === dmComparablePem($signingPublicKey)
+        || dmComparablePem($existingDevice['signing_public_key'] ?? null) === ''
     )
     && trim((string)($existingDevice['bundle_signature'] ?? '')) === '';
 

@@ -120,7 +120,7 @@ This allows sessions to persist across restarts.
 User provides backend URL:
 
 ```
-http://localhost:3000
+https://chat.example.com
 ```
 
 Flow:
@@ -265,7 +265,7 @@ The client will support:
 Server owners:
 
 * run their own backend instance
-* expose it via HTTPS URL for remote access (e.g. `https://chat.example.com`) (`http://localhost:3000` is fine only for local development)
+* expose it via HTTPS URL for remote access (e.g. `https://chat.example.com`)
 
 Optional enhancements:
 
@@ -274,6 +274,54 @@ Optional enhancements:
 * tunneling services
 
 (if i figure it out)
+
+---
+
+# Local TLS Development
+
+Chatapp now expects TLS for every app-facing endpoint, including local development.
+
+Use the repo `Caddyfile` to terminate TLS locally:
+
+* `https://core.localhost` -> `chatapp-core`
+* `wss://core.localhost/ws/` -> `chatapp-realtime`
+* `https://server.localhost` -> `SelfHServer`
+
+Recommended local loopback services behind the proxy:
+
+* `127.0.0.1:4000` -> `chatapp-core`
+* `127.0.0.1:3010` -> `chatapp-realtime`
+* `127.0.0.1:3000` -> `SelfHServer`
+
+Start the proxy with:
+
+```bash
+caddy run --config Caddyfile
+```
+
+---
+
+# Lightsail HTTPS/WSS Deployment
+
+For the desktop app to talk to the Lightsail server over HTTPS/WSS, create an untracked `Application/.env.local`:
+
+```env
+VITE_CORE_API_BASE=https://56.228.2.7
+```
+
+Leave `VITE_REALTIME_WS_BASE` unset so the client derives `wss://56.228.2.7/ws/`.
+Leave `VITE_SELFHOST_API_BASE` unset unless you want to prefill a specific community-server URL in the Join Server modal.
+
+At the Lightsail edge, terminate TLS with Caddy and split traffic like this:
+
+* `/ws/*` -> `chatapp-realtime` on `127.0.0.1:3010`
+* all other HTTPS paths -> `chatapp-core` on `127.0.0.1:8080`
+
+The Lightsail Caddy template also sets `default_sni 56.228.2.7` so clients that omit SNI for raw-IP HTTPS can still receive the loaded IP certificate.
+
+Use the repo templates in [deploy/Caddyfile.lightsail](C:/Users/REDKING/Projects/Chatapp/deploy/Caddyfile.lightsail:1) and [deploy/nginx-chatapp-core.lightsail.conf](C:/Users/REDKING/Projects/Chatapp/deploy/nginx-chatapp-core.lightsail.conf:1), and follow the full guide in [docs/LIGHTSAIL_HTTPS.md](C:/Users/REDKING/Projects/Chatapp/docs/LIGHTSAIL_HTTPS.md:1).
+
+`SelfHServer` is still for community servers and is not required on the central Lightsail core/realtime host.
 
 ---
 

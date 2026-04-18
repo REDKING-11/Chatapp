@@ -8,6 +8,11 @@ import FriendsCreateGroupModal from "../components/FriendsCreateGroupModal";
 import FriendsHeader from "../components/FriendsHeader";
 import FriendsRail from "../components/FriendsRail";
 import { formatAppError, isDebugModeEnabled } from "../../../lib/debug";
+import {
+    createAppDiagnosticError,
+    normalizeAppDiagnosticError,
+    recordAppDiagnostic
+} from "../../../lib/diagnostics.js";
 import { loadClientSettings, saveClientSettings } from "../../clientSettings";
 import {
     acceptFriendDisappearingMessages,
@@ -30,7 +35,34 @@ import {
     sendFriendRequest,
     toggleFriendDirectReaction
 } from "../actions";
-import { DISAPPEARING_MESSAGE_OPTIONS, RELAY_RETENTION_OPTIONS, sendSecureDmRealtimeEvent, subscribeSecureDmPresence } from "../../dm/actions";
+import {
+    DISAPPEARING_MESSAGE_OPTIONS,
+    RELAY_RETENTION_OPTIONS,
+    getSecureDmConversationAccess,
+    importRemoteConversation,
+    isRealtimeConnectionUnavailableError,
+    sendSecureDmRealtimeEvent,
+    subscribeSecureDmPresence
+} from "../../dm/actions";
+import {
+    canReadConversationLocally,
+    isConversationMissingKey,
+    isConversationMissingLocal
+} from "../../dm/conversationAccess.js";
+import { createBackgroundConversationImportTracker } from "../../dm/backgroundConversationImportTracker.js";
+import {
+    applyOutgoingDeliveryStateUpdate,
+    indexOutgoingDeliveryStates
+} from "../../dm/deliveryState.js";
+import {
+    buildInlineImageEmbedFromFile,
+    classifyInlineImageEmbedCandidate,
+    filterReferencedInlineImageEmbeds,
+    insertInlineImageEmbedMarkdownReference,
+    removeInlineImageEmbedReferences
+} from "../../dm/inlineEmbeds.js";
+import { inspectInlineImageEmbedRenderable } from "../../dm/inlineEmbedContracts.js";
+import { traceInlineImageDiagnostic } from "../../dm/inlineEmbedTracing.js";
 import { getStoredAuthToken } from "../../session/actions";
 import {
     createGroupConversation,
@@ -45,6 +77,7 @@ import {
     declineGroupInvite
 } from "../../groups/actions";
 import {
+    getMessagePreviewText,
     getLatestIncomingMessageByTimestamp,
     getLatestMessageByTimestamp,
     getMessageTimestamp,
@@ -53,6 +86,7 @@ import {
     truncateNotificationBody,
     truncatePreview
 } from "../utils/messagePreviews";
+import { normalizeExternalPresence } from "../../presence";
 
 export default function FriendsHome({
     currentUser,
@@ -64,6 +98,7 @@ export default function FriendsHome({
     onLogout
 }) {
     const FILE_TRANSFER_CHUNK_BYTES = 64 * 1024;
+    const PRESENCE_RESUBSCRIBE_DELAY_MS = 60000;
     const [friendsState, setFriendsState] = useState({
         friends: [],
         incomingRequests: [],
@@ -89,12 +124,15 @@ export default function FriendsHome({
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState("");
+    const [errorCode, setErrorCode] = useState("");
+    const [errorTraceId, setErrorTraceId] = useState("");
     const [errorDebugDetails, setErrorDebugDetails] = useState("");
     const [encryptChatError, setEncryptChatError] = useState("");
     const [selectedRelayTtlSeconds, setSelectedRelayTtlSeconds] = useState(86400);
     const [selectedDisappearingTtlSeconds, setSelectedDisappearingTtlSeconds] = useState(0);
     const [conversationMeta, setConversationMeta] = useState(null);
     const [hasLocalConversationAccess, setHasLocalConversationAccess] = useState(true);
+    const [hasLocalGroupConversationAccess, setHasLocalGroupConversationAccess] = useState(true);
     const [showConversationSettings, setShowConversationSettings] = useState(false);
     const [historyAccessRequest, setHistoryAccessRequest] = useState(null);
     const [collapsedFriendFolders, setCollapsedFriendFolders] = useState({});
@@ -118,9 +156,11 @@ export default function FriendsHome({
     const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== "hidden");
     const [previewRefreshNonce, setPreviewRefreshNonce] = useState(0);
     const [directAttachments, setDirectAttachments] = useState([]);
+    const [directInlineEmbeds, setDirectInlineEmbeds] = useState([]);
     const [groupAttachments, setGroupAttachments] = useState([]);
     const [attachmentTransferStates, setAttachmentTransferStates] = useState({});
     const [presenceByUserId, setPresenceByUserId] = useState({});
+    const [presenceSubscriptionNonce, setPresenceSubscriptionNonce] = useState(0);
     const [messageDeliveryById, setMessageDeliveryById] = useState({});
     const messageListRef = useRef(null);
     const secureStatusRef = useRef(null);
@@ -133,6 +173,12 @@ export default function FriendsHome({
     const hasInitializedSeenBaselineRef = useRef(false);
     const sessionStartedAtRef = useRef(Date.now());
     const incomingDownloadTargetsRef = useRef({});
+    const presenceSubscriptionKeyRef = useRef("");
+    const presenceSubscriptionFailureRef = useRef({
+        key: "",
+        retryAt: 0
+    });
+    const backgroundConversationImportTrackerRef = useRef(createBackgroundConversationImportTracker());
 
     const legacyFriendTagsStorageKey = `friendTags:${currentUser.id}`;
     const collapsedFriendFoldersStorageKey = `collapsedFriendFolders:${currentUser.id}`;
@@ -142,32 +188,50 @@ export default function FriendsHome({
 
     function clearErrorState() {
         setError("");
+        setErrorCode("");
+        setErrorTraceId("");
         setErrorDebugDetails("");
         setEncryptChatError("");
     }
 
     function showError(errorValue, options = {}) {
+        recordAppDiagnostic(errorValue, {
+            source: options.source || errorValue?.source || "friends",
+            operation: options.operation || errorValue?.operation || "ui.error",
+            severity: options.severity || errorValue?.severity || "error"
+        });
         const formatted = formatAppError(errorValue, {
             fallbackMessage: "Something went wrong in Friends.",
             context: "Friends",
             ...options
         });
         setError(formatted.message);
+        setErrorCode(formatted.code || "");
+        setErrorTraceId(formatted.traceId || "");
         setErrorDebugDetails(formatted.debugMode ? formatted.debugDetails : "");
     }
 
     function showEncryptChatError(errorValue) {
+        recordAppDiagnostic(errorValue, {
+            source: errorValue?.source || "friends",
+            operation: errorValue?.operation || "encryptChat",
+            severity: errorValue?.severity || "error"
+        });
         const formatted = formatAppError(errorValue, {
             fallbackMessage: "Could not start the encrypted chat.",
             context: "Friends"
         });
         setError(formatted.message);
+        setErrorCode(formatted.code || "");
+        setErrorTraceId(formatted.traceId || "");
         setErrorDebugDetails(formatted.debugMode ? formatted.debugDetails : "");
         setEncryptChatError(formatted.message);
     }
 
-    function showStaticError(message, debugDetails = "") {
+    function showStaticError(message, debugDetails = "", options = {}) {
         setError(message);
+        setErrorCode(options.code || "");
+        setErrorTraceId(options.traceId || "");
         setErrorDebugDetails(isDebugModeEnabled() ? debugDetails : "");
     }
 
@@ -187,6 +251,7 @@ export default function FriendsHome({
 
     function clearComposerAttachments() {
         setDirectAttachments([]);
+        setDirectInlineEmbeds([]);
         setGroupAttachments([]);
     }
 
@@ -210,6 +275,74 @@ export default function FriendsHome({
         });
 
         return merged;
+    }
+
+    function applyOpenedFriendConversation(friendToLoad, data) {
+        setMessages(data?.messages || []);
+        setConversationMeta(data?.conversation || null);
+        setHasLocalConversationAccess(data?.hasLocalAccess !== false);
+        setSelectedRelayTtlSeconds(data?.conversation?.relayPolicy?.currentSeconds ?? 86400);
+        setSelectedDisappearingTtlSeconds(data?.conversation?.disappearingPolicy?.currentSeconds ?? 0);
+    }
+
+    function applyOpenedGroupConversation(data) {
+        setGroupMessages(data?.messages || []);
+        setGroupConversationMeta(data?.conversation || null);
+        setHasLocalGroupConversationAccess(data?.hasLocalAccess !== false);
+
+        if (data?.conversation?.id) {
+            upsertGroupConversation(data.conversation);
+        }
+    }
+
+    async function refreshFriendHistoryStatus(friendToLoad) {
+        if (friendToLoad?.conversationId) {
+            const historyStatus = await fetchHistoryAccessStatus({
+                friendUserId: friendToLoad.friendUserId,
+                conversationId: friendToLoad.conversationId
+            });
+            setHistoryAccessRequest(historyStatus.request);
+            return;
+        }
+
+        setHistoryAccessRequest(null);
+    }
+
+    async function loadFriendConversationForFriend(friendToLoad) {
+        if (!friendToLoad) {
+            setMessages([]);
+            setConversationMeta(null);
+            setHasLocalConversationAccess(true);
+            setShowConversationSettings(false);
+            setHistoryAccessRequest(null);
+            return null;
+        }
+
+        const data = await openFriendConversation({
+            currentUser,
+            friend: friendToLoad
+        });
+
+        applyOpenedFriendConversation(friendToLoad, data);
+        await refreshFriendHistoryStatus(friendToLoad);
+        return data;
+    }
+
+    async function loadGroupConversationForId(conversationId) {
+        if (!conversationId) {
+            setGroupMessages([]);
+            setGroupConversationMeta(null);
+            setHasLocalGroupConversationAccess(true);
+            return null;
+        }
+
+        const data = await openGroupConversation({
+            currentUser,
+            conversationId
+        });
+
+        applyOpenedGroupConversation(data);
+        return data;
     }
 
     async function maybeShowDesktopNotification({ conversationId, message }) {
@@ -243,9 +376,10 @@ export default function FriendsHome({
         );
 
         if (matchingFriend) {
+            const previewBody = getMessagePreviewText(message) || "New message";
             await window.desktopNotifications.show({
                 title: matchingFriend.friendUsername,
-                body: truncateNotificationBody(message.body || "New message")
+                body: truncateNotificationBody(previewBody)
             });
             return;
         }
@@ -255,9 +389,10 @@ export default function FriendsHome({
         );
 
         if (matchingGroup) {
+            const previewBody = getMessagePreviewText(message) || "New message";
             await window.desktopNotifications.show({
                 title: matchingGroup.title || "Group chat",
-                body: truncateNotificationBody(message.body || "New group message")
+                body: truncateNotificationBody(previewBody)
             });
         }
     }
@@ -283,8 +418,16 @@ export default function FriendsHome({
             }
         } catch (err) {
             if (!background) {
-                showError(err);
+                showError(err, {
+                    operation: "friends.load"
+                });
             } else {
+                recordAppDiagnostic(err, {
+                    code: "FRIENDS_LOAD_FAILED",
+                    source: "friends",
+                    operation: "friends.load.background",
+                    severity: "warning"
+                });
                 console.warn("Background friends refresh failed:", err);
             }
         } finally {
@@ -322,8 +465,15 @@ export default function FriendsHome({
             });
         } catch (err) {
             if (!background) {
-                showError(err);
+                showError(err, {
+                    operation: "groups.load"
+                });
             } else {
+                recordAppDiagnostic(err, {
+                    source: "friends",
+                    operation: "groups.load.background",
+                    severity: "warning"
+                });
                 console.warn("Background group refresh failed:", err);
             }
         }
@@ -334,8 +484,15 @@ export default function FriendsHome({
             setGroupInvites(await fetchPendingGroupInvites());
         } catch (err) {
             if (!background) {
-                showError(err);
+                showError(err, {
+                    operation: "groupInvites.load"
+                });
             } else {
+                recordAppDiagnostic(err, {
+                    source: "friends",
+                    operation: "groupInvites.load.background",
+                    severity: "warning"
+                });
                 console.warn("Background group invite refresh failed:", err);
             }
         }
@@ -397,7 +554,40 @@ export default function FriendsHome({
 
     useEffect(() => {
         setPresenceByUserId({});
+        presenceSubscriptionKeyRef.current = "";
+        presenceSubscriptionFailureRef.current = {
+            key: "",
+            retryAt: 0
+        };
+        setPresenceSubscriptionNonce(0);
     }, [currentUser?.id]);
+
+    useEffect(() => {
+        backgroundConversationImportTrackerRef.current = createBackgroundConversationImportTracker();
+        setHasLocalGroupConversationAccess(true);
+    }, [currentUser?.id]);
+
+    useEffect(() => {
+        function handleRealtimeConnected() {
+            presenceSubscriptionKeyRef.current = "";
+            presenceSubscriptionFailureRef.current = {
+                key: "",
+                retryAt: 0
+            };
+            setPresenceSubscriptionNonce((prev) => prev + 1);
+        }
+
+        function handleRealtimeDisconnected() {
+            presenceSubscriptionKeyRef.current = "";
+        }
+
+        window.addEventListener("secureDmRealtimeConnected", handleRealtimeConnected);
+        window.addEventListener("secureDmRealtimeDisconnected", handleRealtimeDisconnected);
+        return () => {
+            window.removeEventListener("secureDmRealtimeConnected", handleRealtimeConnected);
+            window.removeEventListener("secureDmRealtimeDisconnected", handleRealtimeDisconnected);
+        };
+    }, []);
 
     useEffect(() => {
         function handlePresenceSnapshot(event) {
@@ -411,7 +601,7 @@ export default function FriendsHome({
                         return;
                     }
 
-                    next[userId] = item?.state === "online" ? "online" : "offline";
+                    next[userId] = normalizeExternalPresence(item);
                 });
                 return next;
             });
@@ -425,7 +615,7 @@ export default function FriendsHome({
 
             setPresenceByUserId((prev) => ({
                 ...prev,
-                [userId]: event.detail?.state === "online" ? "online" : "offline"
+                [userId]: normalizeExternalPresence(event.detail)
             }));
         }
 
@@ -441,9 +631,22 @@ export default function FriendsHome({
         const token = getStoredAuthToken();
         const friendUserIds = (friendsState.friends || [])
             .map((friend) => Number(friend.friendUserId))
-            .filter((userId) => Number.isInteger(userId) && userId > 0);
+            .filter((userId) => Number.isInteger(userId) && userId > 0)
+            .sort((left, right) => left - right);
+        const subscriptionKey = friendUserIds.join(",");
 
         if (!currentUser?.id || !token || friendUserIds.length === 0) {
+            return;
+        }
+
+        if (presenceSubscriptionKeyRef.current === subscriptionKey) {
+            return;
+        }
+
+        if (
+            presenceSubscriptionFailureRef.current.key === subscriptionKey
+            && Date.now() < presenceSubscriptionFailureRef.current.retryAt
+        ) {
             return;
         }
 
@@ -451,10 +654,50 @@ export default function FriendsHome({
             token,
             currentUser,
             userIds: friendUserIds
+        }).then(() => {
+            presenceSubscriptionKeyRef.current = subscriptionKey;
+            presenceSubscriptionFailureRef.current = {
+                key: "",
+                retryAt: 0
+            };
         }).catch((error) => {
+            if (isRealtimeConnectionUnavailableError(error)) {
+                presenceSubscriptionFailureRef.current = {
+                    key: subscriptionKey,
+                    retryAt: Math.max(
+                        Number(error?.retryAt) || 0,
+                        Date.now() + PRESENCE_RESUBSCRIBE_DELAY_MS
+                    )
+                };
+                recordAppDiagnostic(error, {
+                    code: String(error?.code || "") || "FRIENDS_PRESENCE_SUBSCRIBE_FAILED",
+                    source: "friends",
+                    operation: "presence.subscribe",
+                    severity: "warning",
+                    details: {
+                        subscriptionKey,
+                        friendUserIds
+                    }
+                });
+                return;
+            }
+
+            recordAppDiagnostic(
+                normalizeAppDiagnosticError(error, {
+                    code: "FRIENDS_PRESENCE_SUBSCRIBE_FAILED",
+                    userMessage: "Could not subscribe to friend presence updates.",
+                    source: "friends",
+                    operation: "presence.subscribe",
+                    severity: "warning",
+                    details: {
+                        subscriptionKey,
+                        friendUserIds
+                    }
+                })
+            );
             console.warn("Failed to subscribe to friend presence updates:", error);
         });
-    }, [currentUser, friendsState.friends]);
+    }, [currentUser, friendsState.friends, presenceSubscriptionNonce]);
 
     useEffect(() => {
         if (!debugModeEnabled && errorDebugDetails) {
@@ -626,7 +869,9 @@ export default function FriendsHome({
 
     useEffect(() => {
         importPendingHistoryTransfers({ currentUser }).catch((err) => {
-            showError(err);
+            showError(err, {
+                operation: "history.import"
+            });
         });
     }, [currentUser]);
 
@@ -776,26 +1021,7 @@ export default function FriendsHome({
                 : selectedFriend;
 
             try {
-                const data = await openFriendConversation({
-                    currentUser,
-                    friend: friendToLoad
-                });
-
-                setMessages(data.messages);
-                setConversationMeta(data.conversation);
-                setHasLocalConversationAccess(data.hasLocalAccess !== false);
-                setSelectedRelayTtlSeconds(data.conversation?.relayPolicy?.currentSeconds ?? 86400);
-                setSelectedDisappearingTtlSeconds(data.conversation?.disappearingPolicy?.currentSeconds ?? 0);
-
-                if (friendToLoad.conversationId) {
-                    const historyStatus = await fetchHistoryAccessStatus({
-                        friendUserId: friendToLoad.friendUserId,
-                        conversationId: friendToLoad.conversationId
-                    });
-                    setHistoryAccessRequest(historyStatus.request);
-                } else {
-                    setHistoryAccessRequest(null);
-                }
+                await loadFriendConversationForFriend(friendToLoad);
             } catch (err) {
                 setHasLocalConversationAccess(true);
                 showError(err);
@@ -813,20 +1039,10 @@ export default function FriendsHome({
 
     useEffect(() => {
         async function loadSelectedGroupConversation() {
-            if (!selectedGroupConversationId) {
-                setGroupMessages([]);
-                setGroupConversationMeta(null);
-                return;
-            }
-
             try {
-                const data = await openGroupConversation({
-                    currentUser,
-                    conversationId: selectedGroupConversationId
-                });
-                setGroupMessages(data.messages);
-                setGroupConversationMeta(data.conversation);
+                await loadGroupConversationForId(selectedGroupConversationId);
             } catch (err) {
+                setHasLocalGroupConversationAccess(true);
                 showError(err);
             }
         }
@@ -854,13 +1070,7 @@ export default function FriendsHome({
                 && String(selectedGroupConversationId) === String(incomingConversationId)
             ) {
                 try {
-                    const data = await openGroupConversation({
-                        currentUser,
-                        conversationId: selectedGroupConversationId
-                    });
-
-                    setGroupMessages(data.messages);
-                    setGroupConversationMeta(data.conversation);
+                    await loadGroupConversationForId(selectedGroupConversationId);
                     await loadGroupConversationList(selectedGroupConversationId);
                 } catch (err) {
                     showError(err);
@@ -878,22 +1088,7 @@ export default function FriendsHome({
             }
 
             try {
-                const data = await openFriendConversation({
-                    currentUser,
-                    friend: effectiveSelectedFriend
-                });
-
-                setMessages(data.messages);
-                setConversationMeta(data.conversation);
-                setHasLocalConversationAccess(data.hasLocalAccess !== false);
-
-                if (effectiveSelectedFriend.conversationId) {
-                    const historyStatus = await fetchHistoryAccessStatus({
-                        friendUserId: effectiveSelectedFriend.friendUserId,
-                        conversationId: effectiveSelectedFriend.conversationId
-                    });
-                    setHistoryAccessRequest(historyStatus.request);
-                }
+                await loadFriendConversationForFriend(effectiveSelectedFriend);
             } catch (err) {
                 setHasLocalConversationAccess(true);
                 showError(err);
@@ -1073,6 +1268,15 @@ export default function FriendsHome({
             ) {
                 setHasLocalConversationAccess(false);
             }
+
+            if (
+                selectedGroupConversationIdRef.current
+                && String(selectedGroupConversationIdRef.current) === String(conversationId)
+            ) {
+                setHasLocalGroupConversationAccess(false);
+            }
+
+            setPreviewRefreshNonce((prev) => prev + 1);
         }
 
         window.addEventListener("secureDmConversationAccessRequired", handleConversationAccessRequired);
@@ -1128,22 +1332,35 @@ export default function FriendsHome({
     }, [currentUser?.id]);
 
     useEffect(() => {
+        const persistedDeliveryStates = {
+            ...indexOutgoingDeliveryStates(messages),
+            ...indexOutgoingDeliveryStates(groupMessages)
+        };
+        const persistedEntries = Object.entries(persistedDeliveryStates);
+
+        if (persistedEntries.length === 0) {
+            return;
+        }
+
+        setMessageDeliveryById((prev) => {
+            let changed = false;
+            const next = { ...prev };
+
+            persistedEntries.forEach(([messageId, deliveryState]) => {
+                if (next[messageId] !== deliveryState) {
+                    next[messageId] = deliveryState;
+                    changed = true;
+                }
+            });
+
+            return changed ? next : prev;
+        });
+    }, [messages, groupMessages]);
+
+    useEffect(() => {
         function handleRelayQueueState(event) {
             const detail = event.detail || {};
-            const messageId = detail.messageId != null ? String(detail.messageId) : "";
-            const hasDroppedRecipients = (detail.droppedRecipients || []).length > 0;
-            const hasOfflineRecipients = (detail.offlineRecipients || []).length > 0;
-
-            if (messageId) {
-                setMessageDeliveryById((prev) => ({
-                    ...prev,
-                    [messageId]: hasDroppedRecipients
-                        ? "failed"
-                        : hasOfflineRecipients
-                            ? "queued"
-                            : "sent"
-                }));
-            }
+            setMessageDeliveryById((prev) => applyOutgoingDeliveryStateUpdate(prev, detail));
 
             if ((detail.droppedRecipients || []).length > 0) {
                 showStaticError("Your friend is offline and this chat is set to no relay, so the message was not queued.", "Friends relay queue: dropped recipients while relay was disabled.");
@@ -1152,6 +1369,16 @@ export default function FriendsHome({
 
         window.addEventListener("secureDmRelayQueueState", handleRelayQueueState);
         return () => window.removeEventListener("secureDmRelayQueueState", handleRelayQueueState);
+    }, []);
+
+    useEffect(() => {
+        function handleDeliveryUpdate(event) {
+            const detail = event.detail || {};
+            setMessageDeliveryById((prev) => applyOutgoingDeliveryStateUpdate(prev, detail));
+        }
+
+        window.addEventListener("secureDmDeliveryUpdate", handleDeliveryUpdate);
+        return () => window.removeEventListener("secureDmDeliveryUpdate", handleDeliveryUpdate);
     }, []);
 
     useEffect(() => {
@@ -1167,6 +1394,31 @@ export default function FriendsHome({
 
     useEffect(() => {
         let cancelled = false;
+
+        async function repairMissingLocalConversation(conversationId) {
+            return backgroundConversationImportTrackerRef.current.run(conversationId, async () => {
+                try {
+                    const imported = await importRemoteConversation({
+                        token: getStoredAuthToken(),
+                        currentUser,
+                        conversationId
+                    });
+
+                    if (imported?.conversation?.id && imported.conversation.kind === "group") {
+                        upsertGroupConversation(imported.conversation);
+                    }
+
+                    if (!cancelled) {
+                        setPreviewRefreshNonce((prev) => prev + 1);
+                    }
+
+                    return imported;
+                } catch (error) {
+                    console.warn("Failed to repair local secure DM conversation preview:", error);
+                    return null;
+                }
+            });
+        }
 
         async function loadConversationPreviews() {
             if (!window.secureDm || !currentUser || !hasLoadedConversationSeenTimestamps) {
@@ -1190,16 +1442,47 @@ export default function FriendsHome({
 
             for (const conversationId of uniqueConversationIds) {
                 try {
+                    const access = await getSecureDmConversationAccess({
+                        currentUser,
+                        conversationId
+                    });
+
+                    if (!canReadConversationLocally(access)) {
+                        if (isConversationMissingLocal(access)) {
+                            repairMissingLocalConversation(conversationId);
+                            nextPreviews[conversationId] = {
+                                text: "Syncing encrypted chat",
+                                hasMessage: false,
+                                timestamp: null,
+                                direction: null,
+                                latestIncomingTimestamp: null
+                            };
+                            continue;
+                        }
+
+                        if (isConversationMissingKey(access)) {
+                            nextPreviews[conversationId] = {
+                                text: "Encrypted chat",
+                                hasMessage: false,
+                                timestamp: null,
+                                direction: null,
+                                latestIncomingTimestamp: null
+                            };
+                            continue;
+                        }
+                    }
+
                     const localMessages = await window.secureDm.listMessages({
                         userId: currentUser.id,
                         conversationId
                     });
                     const latestMessage = getLatestMessageByTimestamp(localMessages);
                     const latestIncomingMessage = getLatestIncomingMessageByTimestamp(localMessages);
+                    const latestPreviewText = getMessagePreviewText(latestMessage);
 
-                    nextPreviews[conversationId] = latestMessage?.body
+                    nextPreviews[conversationId] = latestPreviewText
                         ? {
-                            text: truncatePreview(latestMessage.body),
+                            text: truncatePreview(latestPreviewText),
                             hasMessage: true,
                             timestamp: latestMessage.createdAt || null,
                             direction: latestMessage.direction || null,
@@ -1212,7 +1495,8 @@ export default function FriendsHome({
                             direction: null,
                             latestIncomingTimestamp: null
                         };
-                } catch {
+                } catch (error) {
+                    console.warn("Failed to load local secure DM preview:", error);
                     nextPreviews[conversationId] = {
                         text: "Encrypted chat",
                         hasMessage: false,
@@ -1305,7 +1589,9 @@ export default function FriendsHome({
             setShowAddFriendModal(false);
             await loadFriends();
         } catch (err) {
-            showError(err);
+            showError(err, {
+                operation: "dm.send"
+            });
         } finally {
             setSubmitting(false);
         }
@@ -1321,6 +1607,7 @@ export default function FriendsHome({
     function handleSelectGroupConversation(conversationId) {
         setActiveView("group");
         setSelectedGroupConversationId(conversationId);
+        setHasLocalGroupConversationAccess(true);
         setShowConversationSettings(false);
         setFriendContextMenu(null);
         setGroupReplyTo(null);
@@ -1360,8 +1647,16 @@ export default function FriendsHome({
 
     async function handleSendMessage(event) {
         event.preventDefault();
+        const referencedDirectInlineEmbeds = filterReferencedInlineImageEmbeds(composer, directInlineEmbeds);
 
-        if (!effectiveSelectedFriend || (!composer.trim() && directAttachments.length === 0)) {
+        if (
+            !effectiveSelectedFriend
+            || (
+                !composer.trim()
+                && directAttachments.length === 0
+                && referencedDirectInlineEmbeds.length === 0
+            )
+        ) {
             return;
         }
 
@@ -1374,7 +1669,8 @@ export default function FriendsHome({
                     currentUser,
                     friend: effectiveSelectedFriend,
                     messageId: directEditingMessage.messageId,
-                    body: composer.trim()
+                    body: composer.trim(),
+                    embeds: referencedDirectInlineEmbeds
                 })
                 : await sendFriendDirectMessage({
                     currentUser,
@@ -1383,6 +1679,7 @@ export default function FriendsHome({
                     relayTtlSeconds: selectedRelayTtlSeconds,
                     messageTtlSeconds: selectedDisappearingTtlSeconds,
                     attachments: directAttachments,
+                    embeds: referencedDirectInlineEmbeds,
                     replyTo: directReplyTo ? {
                         messageId: directReplyTo.messageId,
                         body: directReplyTo.body,
@@ -1399,6 +1696,7 @@ export default function FriendsHome({
             });
             setComposer("");
             setDirectAttachments([]);
+            setDirectInlineEmbeds([]);
             setDirectReplyTo(null);
             setDirectEditingMessage(null);
             setMessages(result.messages);
@@ -1572,8 +1870,10 @@ export default function FriendsHome({
             });
 
             upsertGroupConversation(result.conversation);
-            setGroupMessages(opened.messages);
-            setGroupConversationMeta(opened.conversation || result.conversation);
+            applyOpenedGroupConversation({
+                ...opened,
+                conversation: opened.conversation || result.conversation
+            });
             setGroupComposer("");
             setShowCreateGroupModal(false);
             setGroupTitle("");
@@ -1594,7 +1894,11 @@ export default function FriendsHome({
     async function handleSendGroupMessage(event) {
         event.preventDefault();
 
-        if (!selectedGroupConversationId || (!groupComposer.trim() && groupAttachments.length === 0)) {
+        if (
+            !selectedGroupConversationId
+            || !hasLocalGroupConversationAccess
+            || (!groupComposer.trim() && groupAttachments.length === 0)
+        ) {
             return;
         }
 
@@ -1625,11 +1929,13 @@ export default function FriendsHome({
             setGroupAttachments([]);
             setGroupReplyTo(null);
             setGroupEditingMessage(null);
-            setGroupMessages(opened.messages);
-            setGroupConversationMeta((prev) => ({
-                ...(prev || {}),
-                ...(opened.conversation || {})
-            }));
+            applyOpenedGroupConversation({
+                ...opened,
+                conversation: {
+                    ...(groupConversationMeta || {}),
+                    ...(opened.conversation || {})
+                }
+            });
             await loadGroupConversationList(selectedGroupConversationId);
             await loadGroupInvites();
         } catch (err) {
@@ -1649,8 +1955,10 @@ export default function FriendsHome({
                 inviteId
             });
             upsertGroupConversation(accepted.conversation);
-            setGroupMessages(accepted.messages);
-            setGroupConversationMeta(accepted.conversation);
+            applyOpenedGroupConversation({
+                ...accepted,
+                hasLocalAccess: accepted.hasLocalAccess !== false
+            });
             setActiveView("group");
             setSelectedGroupConversationId(accepted.conversation.id);
             setGroupInvites((prev) => prev.filter((invite) => String(invite.id) !== String(inviteId)));
@@ -1778,10 +2086,7 @@ export default function FriendsHome({
                     conversation
                 });
             }
-            setMessages(await window.secureDm.listMessages({
-                userId: currentUser.id,
-                conversationId: effectiveSelectedFriend.conversationId
-            }));
+            await loadFriendConversationForFriend(effectiveSelectedFriend);
             setShowConversationSettings(false);
         } catch (err) {
             showError(err);
@@ -1813,10 +2118,7 @@ export default function FriendsHome({
                     conversation
                 });
             }
-            setMessages(await window.secureDm.listMessages({
-                userId: currentUser.id,
-                conversationId: effectiveSelectedFriend.conversationId
-            }));
+            await loadFriendConversationForFriend(effectiveSelectedFriend);
             setShowConversationSettings(false);
         } catch (err) {
             showError(err);
@@ -2017,13 +2319,16 @@ export default function FriendsHome({
         }
     }
 
-    async function registerComposerAttachment(file) {
+    async function registerComposerAttachment(file, arrayBufferOverride = null) {
         const transferId = `file_${crypto.randomUUID()}`;
+        const arrayBuffer = arrayBufferOverride instanceof ArrayBuffer
+            ? arrayBufferOverride
+            : await file.arrayBuffer();
         const registered = await window.attachmentTransfers.registerOutgoing({
             transferId,
             fileName: file.name,
             mimeType: file.type || "application/octet-stream",
-            arrayBuffer: await file.arrayBuffer()
+            arrayBuffer
         });
 
         return {
@@ -2034,13 +2339,115 @@ export default function FriendsHome({
         };
     }
 
-    async function handlePickDirectAttachment(file) {
+    async function registerDirectComposerMedia(file, selection = null) {
+        const arrayBuffer = await file.arrayBuffer();
+        const debugMode = isDebugModeEnabled();
+        const candidate = classifyInlineImageEmbedCandidate({
+            mimeType: file.type,
+            byteLength: arrayBuffer.byteLength
+        });
+
+        if (candidate.kind === "inline") {
+            try {
+                const embed = await buildInlineImageEmbedFromFile({
+                    fileName: file.name,
+                    mimeType: file.type,
+                    arrayBuffer,
+                    alt: file.name
+                });
+                const renderability = inspectInlineImageEmbedRenderable(embed);
+
+                if (!renderability.ok) {
+                    traceInlineImageDiagnostic({
+                        level: "warning",
+                        stage: "composer.embed",
+                        reason: "invalid-embed",
+                        message: "Built a DM inline image embed that is not renderable.",
+                        body: composer,
+                        embeds: [embed],
+                        embed,
+                        embedId: embed?.id,
+                        conversationId: effectiveSelectedFriend?.conversationId || "",
+                        surface: "composer",
+                        extraDetails: {
+                            candidateKind: candidate.kind,
+                            candidateReason: candidate.reason,
+                            renderabilityReason: renderability.reason,
+                            fileName: String(file?.name || ""),
+                            fileType: String(file?.type || ""),
+                            fileSize: Number(file?.size || arrayBuffer.byteLength || 0)
+                        }
+                    });
+                    throw new Error("Inline image embed was created without a usable preview source.");
+                }
+
+                traceInlineImageDiagnostic({
+                    level: "info",
+                    debugMode,
+                    onceKey: `composer.embed:${String(embed?.id || "")}`,
+                    stage: "composer.embed",
+                    reason: "trace",
+                    message: "Created a renderable DM inline image embed.",
+                    body: composer,
+                    embeds: [embed],
+                    embed,
+                    embedId: embed?.id,
+                    conversationId: effectiveSelectedFriend?.conversationId || "",
+                    surface: "composer",
+                    extraDetails: {
+                        fileName: String(file?.name || ""),
+                        fileType: String(file?.type || ""),
+                        fileSize: Number(file?.size || arrayBuffer.byteLength || 0)
+                    }
+                });
+
+                const nextComposer = insertInlineImageEmbedMarkdownReference({
+                    value: composer,
+                    embed,
+                    selectionStart: selection?.selectionStart ?? null,
+                    selectionEnd: selection?.selectionEnd ?? null
+                });
+                setComposer(nextComposer.value);
+                setDirectInlineEmbeds((prev) => [...prev, embed]);
+                traceInlineImageDiagnostic({
+                    level: "info",
+                    debugMode,
+                    onceKey: `composer.reference:${String(embed?.id || "")}`,
+                    stage: "composer.reference",
+                    reason: "trace",
+                    message: "Inserted a DM inline image markdown reference into the composer.",
+                    body: nextComposer.value,
+                    embeds: [embed],
+                    embed,
+                    embedId: embed?.id,
+                    conversationId: effectiveSelectedFriend?.conversationId || "",
+                    surface: "composer"
+                });
+                return {
+                    kind: "embed",
+                    embed,
+                    selectionStart: nextComposer.selectionStart,
+                    selectionEnd: nextComposer.selectionEnd
+                };
+            } catch (inlineError) {
+                console.warn("Falling back to attachment path for inline image candidate:", inlineError);
+            }
+        }
+
+        const attachment = await registerComposerAttachment(file, arrayBuffer);
+        setDirectAttachments((prev) => [...prev, attachment]);
+        return {
+            kind: "attachment",
+            attachment
+        };
+    }
+
+    async function handlePickDirectAttachment(file, selection = null) {
         if (directEditingMessage) {
             return;
         }
 
-        const attachment = await registerComposerAttachment(file);
-        setDirectAttachments((prev) => [...prev, attachment]);
+        return registerDirectComposerMedia(file, selection);
     }
 
     async function handlePickGroupAttachment(file) {
@@ -2054,6 +2461,34 @@ export default function FriendsHome({
 
     function handleRemoveDirectAttachment(transferId) {
         setDirectAttachments((prev) => prev.filter((entry) => String(entry.transferId) !== String(transferId)));
+    }
+
+    function handleRemoveDirectInlineEmbed(embedId) {
+        setComposer((prev) => removeInlineImageEmbedReferences(prev, embedId));
+        setDirectInlineEmbeds((prev) => prev.filter((entry) => String(entry.id || "") !== String(embedId || "")));
+    }
+
+    async function handleDirectComposerPaste(event, selection = null) {
+        if (directEditingMessage) {
+            return;
+        }
+
+        const clipboardItems = Array.from(event?.clipboardData?.items || []);
+        const imageFile = clipboardItems.find((item) => String(item?.type || "").startsWith("image/"))?.getAsFile?.() || null;
+
+        if (!imageFile) {
+            return;
+        }
+
+        event.preventDefault();
+
+        try {
+            return await registerDirectComposerMedia(imageFile, selection);
+        } catch (pasteError) {
+            showError(pasteError, {
+                operation: "dm.inlineImage.paste"
+            });
+        }
     }
 
     function handleRemoveGroupAttachment(transferId) {
@@ -2156,11 +2591,13 @@ export default function FriendsHome({
                 conversationId: selectedGroupConversationId,
                 messageId: message.messageId
             });
-            setGroupMessages(opened.messages);
-            setGroupConversationMeta((prev) => ({
-                ...(prev || {}),
-                ...(opened.conversation || {})
-            }));
+            applyOpenedGroupConversation({
+                ...opened,
+                conversation: {
+                    ...(groupConversationMeta || {}),
+                    ...(opened.conversation || {})
+                }
+            });
             await loadGroupConversationList(selectedGroupConversationId);
         } catch (err) {
             showError(err);
@@ -2184,11 +2621,13 @@ export default function FriendsHome({
                 messageId: message.messageId,
                 emoji
             });
-            setGroupMessages(opened.messages);
-            setGroupConversationMeta((prev) => ({
-                ...(prev || {}),
-                ...(opened.conversation || {})
-            }));
+            applyOpenedGroupConversation({
+                ...opened,
+                conversation: {
+                    ...(groupConversationMeta || {}),
+                    ...(opened.conversation || {})
+                }
+            });
             await loadGroupConversationList(selectedGroupConversationId);
         } catch (err) {
             showError(err);
@@ -2247,6 +2686,10 @@ export default function FriendsHome({
         && !hasLocalConversationAccess
         && !isEncryptingChat
     );
+    const shouldShowMissingGroupConversationAccessNotice = Boolean(
+        selectedGroupConversationId
+        && !hasLocalGroupConversationAccess
+    );
     const incomingHistoryRequest = historyAccessRequest
         && historyAccessRequest.status === "pending"
         && Number(historyAccessRequest.approverUserId) === Number(currentUser.id);
@@ -2256,6 +2699,11 @@ export default function FriendsHome({
     const isDirectConversationEncrypted = Boolean(effectiveSelectedFriend?.conversationId);
     const showEncryptionStage = lockPhase !== "hidden";
     const canComposeDirectMessage = isDirectConversationEncrypted && hasLocalConversationAccess && !submitting && !isEncryptingChat && !showEncryptionStage;
+    const canComposeGroupMessage = Boolean(
+        selectedGroupConversationId
+        && hasLocalGroupConversationAccess
+        && !submitting
+    );
     const activeGroupParticipantNames = (selectedGroupConversation?.participants || [])
         .filter((participant) => Number(participant.userId) !== Number(currentUser.id))
         .map((participant) => participant.username);
@@ -2350,6 +2798,12 @@ export default function FriendsHome({
                 {error ? (
                     <div className="friends-error-block">
                         <p className="friends-error">{error}</p>
+                        {errorCode ? (
+                            <p className="friends-error-code">
+                                Code: <code>{errorCode}</code>
+                                {errorTraceId ? <> · Trace {errorTraceId}</> : null}
+                            </p>
+                        ) : null}
                         {debugModeEnabled && errorDebugDetails ? (
                             <pre className="friends-debug-details">{errorDebugDetails}</pre>
                         ) : null}
@@ -2406,6 +2860,7 @@ export default function FriendsHome({
                     effectiveSelectedFriend={effectiveSelectedFriend}
                     presenceByUserId={presenceByUserId}
                     secureStatusRef={secureStatusRef}
+                    shouldShowMissingGroupConversationAccessNotice={shouldShowMissingGroupConversationAccessNotice}
                     canRequestOldConversation={canRequestOldConversation}
                     isForgettingOldConversation={isForgettingOldConversation}
                     shouldShowConversationRestartNotice={shouldShowConversationRestartNotice}
@@ -2424,10 +2879,12 @@ export default function FriendsHome({
                     messages={messages}
                     composer={composer}
                     directAttachments={directAttachments}
+                    directInlineEmbeds={directInlineEmbeds}
                     directReplyTo={directReplyTo}
                     directEditingMessage={directEditingMessage}
                     isDirectConversationEncrypted={isDirectConversationEncrypted}
                     canComposeDirectMessage={canComposeDirectMessage}
+                    canComposeGroupMessage={canComposeGroupMessage}
                     transferStates={attachmentTransferStates}
                     messageListRef={messageListRef}
                     onGroupComposerChange={setGroupComposer}
@@ -2465,7 +2922,9 @@ export default function FriendsHome({
                     onSendMessage={handleSendMessage}
                     onDirectPickAttachment={handlePickDirectAttachment}
                     onDirectRemoveAttachment={handleRemoveDirectAttachment}
+                    onDirectRemoveInlineEmbed={handleRemoveDirectInlineEmbed}
                     onDirectDownloadAttachment={handleDownloadDirectAttachment}
+                    onDirectComposerPaste={handleDirectComposerPaste}
                     onDirectReply={(message) => {
                         setDirectEditingMessage(null);
                         setDirectReplyTo(message);
@@ -2475,6 +2934,7 @@ export default function FriendsHome({
                         setDirectEditingMessage(message);
                         setComposer(message.body || "");
                         setDirectAttachments([]);
+                        setDirectInlineEmbeds(Array.isArray(message.embeds) ? message.embeds : []);
                     }}
                     onDirectDelete={handleDeleteDirectMessage}
                     onDirectToggleReaction={handleToggleDirectReaction}
@@ -2484,6 +2944,7 @@ export default function FriendsHome({
                         setDirectEditingMessage(null);
                         setComposer("");
                         setDirectAttachments([]);
+                        setDirectInlineEmbeds([]);
                     }}
                 />
             </div>

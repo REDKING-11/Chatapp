@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { classifySecureDmIpcError } from "./lib/diagnostics.js";
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object") {
@@ -19,35 +20,43 @@ function exposeFrozenApi(name, api) {
   contextBridge.exposeInMainWorld(name, deepFreeze(api));
 }
 
+function secureDmInvoke(channel, payload) {
+  return ipcRenderer.invoke(channel, payload).catch((error) => {
+    throw classifySecureDmIpcError(channel, error);
+  });
+}
+
 // Security boundary: expose only reviewed, high-level secure DM operations.
 // Never expose a generic IPC invoke/send helper here, and never add APIs that can
 // return raw private keys, master keys, wrapped master keys, or decrypted secrets.
 exposeFrozenApi("secureDm", {
-  initializeDevice: (payload) => ipcRenderer.invoke("secure-dm:init-device", payload),
-  getDeviceBundle: (payload) => ipcRenderer.invoke("secure-dm:get-device-bundle", payload),
-  createConversation: (payload) => ipcRenderer.invoke("secure-dm:create-conversation", payload),
-  adoptConversationId: (payload) => ipcRenderer.invoke("secure-dm:adopt-conversation-id", payload),
-  importConversation: (payload) => ipcRenderer.invoke("secure-dm:import-conversation", payload),
-  createMessage: (payload) => ipcRenderer.invoke("secure-dm:create-message", payload),
-  receiveMessage: (payload) => ipcRenderer.invoke("secure-dm:receive-message", payload),
-  syncConversationMetadata: (payload) => ipcRenderer.invoke("secure-dm:sync-conversation-metadata", payload),
-  listConversations: (payload) => ipcRenderer.invoke("secure-dm:list-conversations", payload),
-  listMessages: (payload) => ipcRenderer.invoke("secure-dm:list-messages", payload),
-  exportConversationPackage: (payload) => ipcRenderer.invoke("secure-dm:export-conversation-package", payload),
-  createWrappedKey: (payload) => ipcRenderer.invoke("secure-dm:create-wrapped-key", payload),
-  verifyDeviceBundles: (payload) => ipcRenderer.invoke("secure-dm:verify-device-bundles", payload),
-  getConversationVerification: (payload) => ipcRenderer.invoke("secure-dm:get-conversation-verification", payload),
-  setConversationDeviceVerified: (payload) => ipcRenderer.invoke("secure-dm:set-conversation-device-verified", payload),
-  beginDeviceIdentityRotation: (payload) => ipcRenderer.invoke("secure-dm:begin-device-identity-rotation", payload),
-  commitDeviceIdentityRotation: (payload) => ipcRenderer.invoke("secure-dm:commit-device-identity-rotation", payload),
-  rollbackDeviceIdentityRotation: (payload) => ipcRenderer.invoke("secure-dm:rollback-device-identity-rotation", payload),
-  rotateConversationKey: (payload) => ipcRenderer.invoke("secure-dm:rotate-conversation-key", payload),
-  rotateDeviceIdentity: (payload) => ipcRenderer.invoke("secure-dm:rotate-device-identity", payload),
-  importConversationPackage: (payload) => ipcRenderer.invoke("secure-dm:import-conversation-package", payload),
-  deleteConversation: (payload) => ipcRenderer.invoke("secure-dm:delete-conversation", payload),
-  diagnoseMissingKeys: (payload) => ipcRenderer.invoke("secure-dm:diagnose-missing-keys", payload),
-  exportDeviceTransfer: (payload) => ipcRenderer.invoke("secure-dm:export-device-transfer", payload),
-  importDeviceTransfer: (payload) => ipcRenderer.invoke("secure-dm:import-device-transfer", payload)
+  initializeDevice: (payload) => secureDmInvoke("secure-dm:init-device", payload),
+  getDeviceBundle: (payload) => secureDmInvoke("secure-dm:get-device-bundle", payload),
+  getConversationAccess: (payload) => secureDmInvoke("secure-dm:get-conversation-access", payload),
+  createConversation: (payload) => secureDmInvoke("secure-dm:create-conversation", payload),
+  adoptConversationId: (payload) => secureDmInvoke("secure-dm:adopt-conversation-id", payload),
+  importConversation: (payload) => secureDmInvoke("secure-dm:import-conversation", payload),
+  createMessage: (payload) => secureDmInvoke("secure-dm:create-message", payload),
+  receiveMessage: (payload) => secureDmInvoke("secure-dm:receive-message", payload),
+  syncConversationMetadata: (payload) => secureDmInvoke("secure-dm:sync-conversation-metadata", payload),
+  listConversations: (payload) => secureDmInvoke("secure-dm:list-conversations", payload),
+  listMessages: (payload) => secureDmInvoke("secure-dm:list-messages", payload),
+  setMessageDeliveryState: (payload) => secureDmInvoke("secure-dm:set-message-delivery-state", payload),
+  exportConversationPackage: (payload) => secureDmInvoke("secure-dm:export-conversation-package", payload),
+  createWrappedKey: (payload) => secureDmInvoke("secure-dm:create-wrapped-key", payload),
+  verifyDeviceBundles: (payload) => secureDmInvoke("secure-dm:verify-device-bundles", payload),
+  getConversationVerification: (payload) => secureDmInvoke("secure-dm:get-conversation-verification", payload),
+  setConversationDeviceVerified: (payload) => secureDmInvoke("secure-dm:set-conversation-device-verified", payload),
+  beginDeviceIdentityRotation: (payload) => secureDmInvoke("secure-dm:begin-device-identity-rotation", payload),
+  commitDeviceIdentityRotation: (payload) => secureDmInvoke("secure-dm:commit-device-identity-rotation", payload),
+  rollbackDeviceIdentityRotation: (payload) => secureDmInvoke("secure-dm:rollback-device-identity-rotation", payload),
+  rotateConversationKey: (payload) => secureDmInvoke("secure-dm:rotate-conversation-key", payload),
+  rotateDeviceIdentity: (payload) => secureDmInvoke("secure-dm:rotate-device-identity", payload),
+  importConversationPackage: (payload) => secureDmInvoke("secure-dm:import-conversation-package", payload),
+  deleteConversation: (payload) => secureDmInvoke("secure-dm:delete-conversation", payload),
+  diagnoseMissingKeys: (payload) => secureDmInvoke("secure-dm:diagnose-missing-keys", payload),
+  exportDeviceTransfer: (payload) => secureDmInvoke("secure-dm:export-device-transfer", payload),
+  importDeviceTransfer: (payload) => secureDmInvoke("secure-dm:import-device-transfer", payload)
 });
 
 exposeFrozenApi("desktopNotifications", {
@@ -67,8 +76,21 @@ exposeFrozenApi("serverHealth", {
 });
 
 exposeFrozenApi("appUpdates", {
-  check: () => ipcRenderer.invoke("app-update:check"),
-  openReleasesPage: () => ipcRenderer.invoke("app-update:open-releases")
+  getUpdateState: () => ipcRenderer.invoke("app-update:get-state"),
+  checkForUpdates: (options) => ipcRenderer.invoke("app-update:check", options),
+  openReleasesPage: () => ipcRenderer.invoke("app-update:open-releases"),
+  onUpdateState: (listener) => {
+    if (typeof listener !== "function") {
+      return () => {};
+    }
+
+    const wrappedListener = (_event, payload) => {
+      listener(payload);
+    };
+
+    ipcRenderer.on("app-update:state-changed", wrappedListener);
+    return () => ipcRenderer.removeListener("app-update:state-changed", wrappedListener);
+  }
 });
 
 exposeFrozenApi("attachmentTransfers", {

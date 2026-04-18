@@ -1,5 +1,28 @@
-import { parseJsonResponse } from "../../lib/api";
+import {
+  fetchWithNetworkErrorContext,
+  parseJsonResponse
+} from "../../lib/api";
 import { getCoreApiBase, getRealtimeWsBase } from "../../lib/env";
+import {
+  classifyDmRelayPollError,
+  createAppDiagnosticError,
+  normalizeAppDiagnosticError,
+  recordAppDiagnostic
+} from "../../lib/diagnostics.js";
+import {
+  normalizeOutgoingDeliveryState,
+  resolveOutgoingDeliveryStateFromRelayEvent
+} from "./deliveryState.js";
+import {
+  canReadConversationLocally,
+  createConversationAccess,
+  normalizeConversationAccess
+} from "./conversationAccess.js";
+import {
+  createPendingDeliveryStateQueue,
+  flushPendingDeliveryStateQueue
+} from "./pendingDeliveryStateQueue.js";
+import { normalizeConfiguredPresenceStatus } from "../presence";
 
 const CORE_API_BASE = getCoreApiBase();
 const REALTIME_WS_BASE = getRealtimeWsBase();
@@ -25,9 +48,47 @@ export const DISAPPEARING_MESSAGE_OPTIONS = [
 let realtimeSocket = null;
 let realtimeSocketKey = null;
 let realtimeConnectedPromise = null;
+let realtimeRetryAvailableAt = 0;
+let realtimeLastFailureMessage = "";
+const REALTIME_RETRY_COOLDOWN_MS = 15000;
+const REALTIME_RELAY_ACK_TIMEOUT_MS = 5000;
+const outboundConversationIdByMessageId = new Map();
+const pendingDeliveryStateQueue = createPendingDeliveryStateQueue();
+const pendingRealtimeRelayAckWaiters = new Map();
 
 function dispatchRealtimeEvent(type, detail) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
+}
+
+function normalizeRelayAckKey(value) {
+  return value != null ? String(value).trim() : "";
+}
+
+function resolvePendingRealtimeRelayAck(relayId, payload) {
+  const relayKey = normalizeRelayAckKey(relayId);
+
+  if (!relayKey) {
+    return false;
+  }
+
+  const waiter = pendingRealtimeRelayAckWaiters.get(relayKey);
+
+  if (!waiter) {
+    return false;
+  }
+
+  window.clearTimeout(waiter.timeoutId);
+  pendingRealtimeRelayAckWaiters.delete(relayKey);
+  waiter.resolve(payload);
+  return true;
+}
+
+function rejectAllPendingRealtimeRelayAcks(error) {
+  pendingRealtimeRelayAckWaiters.forEach((waiter) => {
+    window.clearTimeout(waiter.timeoutId);
+    waiter.reject(error);
+  });
+  pendingRealtimeRelayAckWaiters.clear();
 }
 
 function isMissingLocalConversationError(error) {
@@ -37,7 +98,81 @@ function isMissingLocalConversationError(error) {
 }
 
 function isMissingRelayDeviceError(error) {
-  return /device not found or revoked/i.test(String(error?.message || error || ""));
+  return isDeviceNotRegisteredError(error)
+    || /device not found or revoked/i.test(String(error?.message || error || ""));
+}
+
+function isMissingSenderBundleError(error) {
+  return /missing verified sender device bundle for dm message/i.test(
+    String(error?.message || error || "")
+  );
+}
+
+function isDeviceNotRegisteredError(error) {
+  const rawCode = String(error?.code || error?.details?.backendCode || "").trim().toUpperCase();
+  return rawCode === "DEVICE_NOT_REGISTERED"
+    || rawCode === "DM_DEVICE_NOT_REGISTERED"
+    || /sender device is not registered|device is not registered for secure dms/i.test(
+      String(error?.message || error || "")
+    );
+}
+
+function isDeviceReauthRequiredError(error) {
+  const rawCode = String(error?.code || error?.details?.backendCode || "").trim().toUpperCase();
+  return rawCode === "DEVICE_REAUTH_REQUIRED"
+    || rawCode === "DM_DEVICE_REAUTH_REQUIRED"
+    || /re-authorized with mfa|revoked for secure dms/i.test(String(error?.message || error || ""));
+}
+
+function isSenderDeviceNotRegisteredError(error) {
+  return isDeviceNotRegisteredError(error)
+    || /sender device is not registered/i.test(String(error?.message || error || ""));
+}
+
+export function isDmDeviceReauthRequiredError(error) {
+  return String(error?.code || "").trim() === "DM_DEVICE_REAUTH_REQUIRED"
+    || isDeviceReauthRequiredError(error);
+}
+
+function toDmDeviceStateError(error, extra = {}) {
+  if (isDeviceReauthRequiredError(error)) {
+    return wrapDmError(error, {
+      code: "DM_DEVICE_REAUTH_REQUIRED",
+      userMessage: "Secure DMs are blocked on this device until you re-authorize it with MFA.",
+      severity: "warning",
+      ...extra
+    });
+  }
+
+  if (isDeviceNotRegisteredError(error)) {
+    return wrapDmError(error, {
+      code: "DM_DEVICE_NOT_REGISTERED",
+      userMessage: "This device is not registered for secure DMs on the server yet.",
+      severity: "warning",
+      ...extra
+    });
+  }
+
+  return null;
+}
+
+function recordMissingSenderDeviceDiagnostic({ relayItem, currentUser, context }) {
+  return recordAppDiagnostic(createAppDiagnosticError({
+    code: "DM_RECEIVE_SENDER_DEVICE_MISSING",
+    message: "Missing verified sender device bundle for DM message",
+    userMessage: "A secure DM could not be verified because the sender device bundle is unavailable.",
+    source: "dm",
+    operation: "message.receive",
+    severity: "warning",
+    conversationId: String(relayItem?.conversationId || ""),
+    details: {
+      relayId: relayItem?.relayId ?? null,
+      relayMessageId: String(relayItem?.messageId || ""),
+      senderUserId: relayItem?.senderUserId ?? null,
+      senderDeviceId: String(relayItem?.senderDeviceId || ""),
+      context
+    }
+  }));
 }
 
 function authHeaders(token) {
@@ -47,11 +182,308 @@ function authHeaders(token) {
   };
 }
 
-function createUserFacingDmError(message, code) {
-  const error = new Error(message);
-  error.code = code;
-  error.userMessage = message;
+async function acknowledgeRelayDeliveryViaHttp({
+  token,
+  currentUser,
+  relayId,
+  deviceId,
+  fallbackMessage,
+  userMessage,
+  conversationId
+}) {
+  const resolvedDeviceId = String(
+    deviceId
+    || (await window.secureDm.getDeviceBundle({
+      userId: currentUser.id,
+      username: currentUser.username
+    })).deviceId
+    || ""
+  );
+
+  const ackRes = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/dm/relay/ack.php`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      relayId,
+      deviceId: resolvedDeviceId
+    })
+  });
+
+  try {
+    const result = await parseJsonResponse(ackRes, {
+      fallbackMessage,
+      source: "dm",
+      operation: "relay.ack",
+      method: "POST"
+    });
+
+    return {
+      ...result,
+      ok: result?.ok ?? true,
+      relayId: normalizeRelayAckKey(result?.relayId || relayId),
+      via: "http"
+    };
+  } catch (error) {
+    throw wrapDmError(error, {
+      code: "DM_RELAY_ACK_FAILED",
+      userMessage,
+      operation: "relay.ack",
+      deviceId: resolvedDeviceId,
+      conversationId: String(conversationId || "")
+    });
+  }
+}
+
+async function acknowledgeRelayDelivery({
+  token,
+  currentUser,
+  relayId,
+  deviceId,
+  fallbackMessage,
+  userMessage,
+  conversationId
+}) {
+  const relayKey = normalizeRelayAckKey(relayId);
+
+  if (!relayKey) {
+    return { ok: false, relayId: "" };
+  }
+
+  if (realtimeSocket?.readyState === WebSocket.OPEN) {
+    const ackPromise = new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        pendingRealtimeRelayAckWaiters.delete(relayKey);
+        reject(new Error(`Timed out waiting for realtime relay ack: ${relayKey}`));
+      }, REALTIME_RELAY_ACK_TIMEOUT_MS);
+
+      pendingRealtimeRelayAckWaiters.set(relayKey, {
+        resolve,
+        reject,
+        timeoutId
+      });
+    });
+
+    try {
+      realtimeSocket.send(JSON.stringify({
+        type: "dm:ack",
+        relayId: relayKey
+      }));
+
+      const result = await ackPromise;
+      return {
+        ...(result || {}),
+        ok: result?.ok ?? true,
+        relayId: relayKey,
+        via: "realtime"
+      };
+    } catch (_error) {
+      const waiter = pendingRealtimeRelayAckWaiters.get(relayKey);
+
+      if (waiter) {
+        window.clearTimeout(waiter.timeoutId);
+        pendingRealtimeRelayAckWaiters.delete(relayKey);
+      }
+    }
+  }
+
+  return acknowledgeRelayDeliveryViaHttp({
+    token,
+    currentUser,
+    relayId: relayKey,
+    deviceId,
+    fallbackMessage,
+    userMessage,
+    conversationId
+  });
+}
+
+function createMissingLocalConversationAccess() {
+  return createConversationAccess({
+    conversationId: "",
+    status: "missing-local",
+    hasConversation: false,
+    hasWrappedKey: false,
+    hasConversationKey: false
+  });
+}
+
+export async function getSecureDmConversationAccess({ currentUser, conversationId }) {
+  if (!conversationId || !window.secureDm?.getConversationAccess) {
+    return createConversationAccess({
+      ...createMissingLocalConversationAccess(),
+      conversationId
+    });
+  }
+
+  const access = await window.secureDm.getConversationAccess({
+    userId: currentUser?.id,
+    username: currentUser?.username,
+    conversationId
+  });
+
+  return normalizeConversationAccess(access);
+}
+
+async function persistSecureDmDeliveryState({
+  currentUser,
+  conversationId,
+  messageId,
+  deliveryState
+}) {
+  if (!conversationId || !messageId || !window.secureDm?.setMessageDeliveryState) {
+    return { ok: false };
+  }
+
+  try {
+    const access = await getSecureDmConversationAccess({
+      currentUser,
+      conversationId
+    });
+
+    if (!canReadConversationLocally(access)) {
+      pendingDeliveryStateQueue.enqueue({
+        conversationId,
+        messageId,
+        deliveryState
+      });
+      return {
+        ok: false,
+        queued: true,
+        access
+      };
+    }
+
+    const result = await window.secureDm.setMessageDeliveryState({
+      userId: currentUser.id,
+      conversationId,
+      messageId,
+      deliveryState
+    });
+
+    if (result?.ok === false) {
+      pendingDeliveryStateQueue.enqueue({
+        conversationId,
+        messageId,
+        deliveryState
+      });
+    }
+
+    return result;
+  } catch (error) {
+    if (isMissingLocalConversationError(error)) {
+      pendingDeliveryStateQueue.enqueue({
+        conversationId,
+        messageId,
+        deliveryState
+      });
+      return {
+        ok: false,
+        queued: true
+      };
+    }
+
+    throw error;
+  }
+}
+
+export async function flushPendingSecureDmDeliveryStates({ currentUser, conversationId }) {
+  if (!conversationId || !currentUser || !window.secureDm?.setMessageDeliveryState) {
+    return {
+      flushedCount: 0,
+      remainingCount: 0
+    };
+  }
+
+  const access = await getSecureDmConversationAccess({
+    currentUser,
+    conversationId
+  });
+
+  if (!canReadConversationLocally(access)) {
+    return {
+      flushedCount: 0,
+      remainingCount: pendingDeliveryStateQueue.list(conversationId).length
+    };
+  }
+
+  return flushPendingDeliveryStateQueue(pendingDeliveryStateQueue, {
+    conversationId,
+    persist: async (entry) => {
+      try {
+        return await window.secureDm.setMessageDeliveryState({
+          userId: currentUser.id,
+          conversationId: entry.conversationId,
+          messageId: entry.messageId,
+          deliveryState: entry.deliveryState
+        });
+      } catch (error) {
+        if (isMissingLocalConversationError(error)) {
+          return { ok: false, queued: true };
+        }
+
+        console.warn("Failed to flush queued secure DM delivery state:", error);
+        return { ok: false };
+      }
+    }
+  });
+}
+
+function createRealtimeError(message, code, extra = {}) {
+  const severity = [
+    "DM_REALTIME_TEMP_UNAVAILABLE",
+    "DM_DEVICE_REAUTH_REQUIRED",
+    "DM_DEVICE_NOT_REGISTERED"
+  ].includes(code) ? "warning" : "error";
+  const error = createAppDiagnosticError({
+    code,
+    message,
+    userMessage: extra.userMessage || message,
+    source: "dm",
+    operation: "realtime.connect",
+    severity,
+    endpoint: REALTIME_WS_BASE,
+    details: {
+      retryAt: extra.retryAt || null
+    },
+    cause: extra.cause
+  });
+  Object.assign(error, extra);
   return error;
+}
+
+export function isRealtimeConnectionUnavailableError(error) {
+  return [
+    "DM_REALTIME_CONNECT_FAILED",
+    "DM_REALTIME_AUTH_FAILED",
+    "DM_REALTIME_TEMP_UNAVAILABLE",
+    "DM_DEVICE_REAUTH_REQUIRED",
+    "DM_DEVICE_NOT_REGISTERED"
+  ].includes(String(error?.code || ""));
+}
+
+function createUserFacingDmError(message, code, extra = {}) {
+  return createAppDiagnosticError({
+    code,
+    message,
+    userMessage: message,
+    source: "dm",
+    operation: extra.operation || "conversation",
+    severity: extra.severity || "warning",
+    endpoint: extra.endpoint || "",
+    deviceId: extra.deviceId || "",
+    conversationId: extra.conversationId || "",
+    friendUserId: extra.friendUserId || "",
+    details: extra.details,
+    cause: extra.cause
+  });
+}
+
+function wrapDmError(error, overrides = {}) {
+  return normalizeAppDiagnosticError(error, {
+    source: "dm",
+    severity: "error",
+    ...overrides
+  });
 }
 
 function hasConversationRecipientKey(device) {
@@ -87,6 +519,84 @@ async function inspectDeviceList({ expectedUserId, devices }) {
   return inspectedDevices;
 }
 
+async function fetchDmDeviceList({ token, userId, includeRevoked, endpoint, operation }) {
+  const res = await fetch(
+    `${CORE_API_BASE}${endpoint}?userId=${encodeURIComponent(userId)}&includeRevoked=${includeRevoked ? "1" : "0"}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }
+  );
+
+  const data = await parseJsonResponse(res, {
+    fallbackMessage: "Failed to fetch DM devices",
+    source: "dm",
+    operation,
+    method: "GET"
+  });
+  const inspectedDevices = await inspectDeviceList({
+    expectedUserId: userId,
+    devices: data.devices || []
+  });
+
+  return {
+    ...data,
+    devices: inspectedDevices.map((device) => ({
+      ...device,
+      revokedAt: data.devices?.find((entry) => String(entry.deviceId) === String(device.deviceId))?.revokedAt || null
+    }))
+  };
+}
+
+function mergeFetchedDeviceLists(primaryResponse, secondaryResponse) {
+  const mergedById = new Map();
+
+  const absorb = (devices = [], source) => {
+    for (const device of devices) {
+      const key = String(device?.deviceId || "");
+      if (!key) {
+        continue;
+      }
+
+      const existing = mergedById.get(key);
+      if (!existing) {
+        mergedById.set(key, {
+          ...device,
+          deviceSource: source
+        });
+        continue;
+      }
+
+      const existingScore = Number(Boolean(!existing.revokedAt)) * 4
+        + Number(Boolean(existing.signatureVerified)) * 2
+        + Number(existing.deviceSource === "keys");
+      const nextScore = Number(Boolean(!device.revokedAt)) * 4
+        + Number(Boolean(device.signatureVerified)) * 2
+        + Number(source === "keys");
+
+      if (nextScore > existingScore) {
+        mergedById.set(key, {
+          ...existing,
+          ...device,
+          deviceSource: source
+        });
+      } else {
+        mergedById.set(key, {
+          ...device,
+          ...existing,
+          deviceSource: existing.deviceSource || source
+        });
+      }
+    }
+  };
+
+  absorb(primaryResponse?.devices || [], "keys");
+  absorb(secondaryResponse?.devices || [], "legacy-dm");
+
+  return Array.from(mergedById.values());
+}
+
 async function queueEncryptedConversationMessage({
   token,
   currentUser,
@@ -100,6 +610,13 @@ async function queueEncryptedConversationMessage({
     senderUserId: currentUser.id,
     plaintext
   });
+  const outboundMessageId = encryptedMessage?.messageId != null
+    ? String(encryptedMessage.messageId)
+    : "";
+
+  if (outboundMessageId) {
+    outboundConversationIdByMessageId.set(outboundMessageId, String(conversationId));
+  }
 
   try {
     const socket = await ensureRealtimeConnection({
@@ -125,28 +642,75 @@ async function queueEncryptedConversationMessage({
     console.warn("Realtime send unavailable, falling back to HTTP relay:", error);
   }
 
-  const res = await fetch(`${CORE_API_BASE}/dm/messages/send.php`, {
-    method: "POST",
-    headers: authHeaders(token),
-    body: JSON.stringify(encryptedMessage)
-  });
+  async function sendEncryptedMessageViaHttp() {
+    if (outboundMessageId) {
+      outboundConversationIdByMessageId.delete(outboundMessageId);
+    }
 
-  return parseJsonResponse(res, "Failed to send DM");
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/dm/messages/send.php`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(encryptedMessage)
+    });
+
+    return parseJsonResponse(res, {
+      fallbackMessage: "Failed to send DM",
+      source: "dm",
+      operation: "message.send",
+      method: "POST"
+    });
+  }
+
+  try {
+    return await sendEncryptedMessageViaHttp();
+  } catch (error) {
+    const deviceStateError = toDmDeviceStateError(error, {
+      operation: "message.send",
+      deviceId: String(encryptedMessage?.senderDeviceId || ""),
+      conversationId: String(conversationId || "")
+    });
+
+    if (deviceStateError?.code === "DM_DEVICE_REAUTH_REQUIRED") {
+      throw deviceStateError;
+    }
+
+    if (!isSenderDeviceNotRegisteredError(error) && !deviceStateError) {
+      throw error;
+    }
+
+    console.warn("Sender device was not registered on the server. Re-registering and retrying DM send once.", error);
+    await registerSecureDmDevice({
+      token,
+      currentUser
+    });
+
+    return sendEncryptedMessageViaHttp();
+  }
 }
 
 async function handleRealtimeDelivery({ currentUser, relayItem, token }) {
   let message = null;
-  let senderDevice = null;
+  let senderDevice = relayItem?.senderDevice || null;
 
-  if (relayItem?.senderUserId && relayItem?.senderDeviceId) {
+  if (!senderDevice && relayItem?.senderUserId && relayItem?.senderDeviceId) {
     const senderDevices = await fetchUserDmDevices({
       token,
       userId: relayItem.senderUserId,
-      includeRevoked: true
+      includeRevoked: true,
+      requiredDeviceId: relayItem.senderDeviceId
     });
     senderDevice = (senderDevices.devices || []).find(
       (device) => String(device.deviceId) === String(relayItem.senderDeviceId)
     ) || null;
+  }
+
+  if (!senderDevice && relayItem?.senderDeviceId) {
+    recordMissingSenderDeviceDiagnostic({
+      relayItem,
+      currentUser,
+      context: "realtime"
+    });
+    return null;
   }
 
   try {
@@ -165,22 +729,26 @@ async function handleRealtimeDelivery({ currentUser, relayItem, token }) {
       return;
     }
 
+    if (isMissingSenderBundleError(error)) {
+      recordMissingSenderDeviceDiagnostic({
+        relayItem,
+        currentUser,
+        context: "realtime"
+      });
+      return;
+    }
+
     throw error;
   }
 
   if (relayItem.relayId) {
-    const device = await window.secureDm.getDeviceBundle({
-      userId: currentUser.id,
-      username: currentUser.username
-    });
-
-    await fetch(`${CORE_API_BASE}/dm/relay/ack.php`, {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify({
-        relayId: relayItem.relayId,
-        deviceId: device.deviceId
-      })
+    await acknowledgeRelayDelivery({
+      token,
+      currentUser,
+      relayId: relayItem.relayId,
+      fallbackMessage: "Failed to acknowledge relay delivery",
+      userMessage: "A secure DM arrived, but Chatapp could not confirm it with the server.",
+      conversationId: relayItem.conversationId
     });
   }
 
@@ -195,6 +763,8 @@ async function handleRealtimeDelivery({ currentUser, relayItem, token }) {
 }
 
 export function closeRealtimeConnection() {
+  rejectAllPendingRealtimeRelayAcks(new Error("Realtime connection closed"));
+
   if (realtimeSocket) {
     realtimeSocket.close();
   }
@@ -216,6 +786,16 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
 
   if (!token) {
     throw new Error("Realtime authentication token is required");
+  }
+
+  if (Date.now() < realtimeRetryAvailableAt) {
+    throw createRealtimeError(
+      realtimeLastFailureMessage || "Realtime is temporarily unavailable. Please retry in a moment.",
+      "DM_REALTIME_TEMP_UNAVAILABLE",
+      {
+        retryAt: realtimeRetryAvailableAt
+      }
+    );
   }
 
   const connectionKey = `${currentUser.id}:${device.deviceId}`;
@@ -241,6 +821,7 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
     const socket = new WebSocket(REALTIME_WS_BASE);
     realtimeSocket = socket;
     let settled = false;
+    let hasAuthenticatedConnection = false;
 
     function cleanupConnectionState() {
       if (realtimeSocket === socket) {
@@ -250,19 +831,23 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
       }
     }
 
-    function failConnection(message) {
+    function failConnection(message, code = "DM_REALTIME_CONNECT_FAILED") {
       if (settled) {
         return;
       }
 
       settled = true;
+      realtimeRetryAvailableAt = Date.now() + REALTIME_RETRY_COOLDOWN_MS;
+      realtimeLastFailureMessage = String(message || "Realtime connection failed");
       cleanupConnectionState();
 
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close();
       }
 
-      reject(new Error(message));
+      reject(createRealtimeError(realtimeLastFailureMessage, code, {
+        retryAt: realtimeRetryAvailableAt
+      }));
     }
 
     function finishConnection() {
@@ -271,7 +856,14 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
       }
 
       settled = true;
+      realtimeRetryAvailableAt = 0;
+      realtimeLastFailureMessage = "";
       resolve(socket);
+      dispatchRealtimeEvent("secureDmRealtimeConnected", {
+        userId: currentUser.id,
+        deviceId: device.deviceId,
+        connectionKey
+      });
     }
 
     socket.addEventListener("open", () => {
@@ -288,13 +880,40 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
         const payload = JSON.parse(event.data);
 
         if (payload.type === "auth:ok") {
+          hasAuthenticatedConnection = true;
           socket.send(JSON.stringify({ type: "dm:fetchRelay" }));
           finishConnection();
           return;
         }
 
         if (payload.type === "auth:error") {
-          failConnection(payload.error || "Realtime authentication failed");
+          const backendCode = String(payload.code || "").trim().toUpperCase();
+
+          if (backendCode === "DEVICE_REAUTH_REQUIRED") {
+            failConnection(
+              payload.error || "Secure DMs are blocked on this device until you re-authorize it with MFA.",
+              "DM_DEVICE_REAUTH_REQUIRED"
+            );
+            return;
+          }
+
+          if (backendCode === "DEVICE_NOT_REGISTERED") {
+            failConnection(
+              payload.error || "This device is not registered for secure DM realtime yet.",
+              "DM_DEVICE_NOT_REGISTERED"
+            );
+            return;
+          }
+
+          failConnection(payload.error || "Realtime authentication failed", "DM_REALTIME_AUTH_FAILED");
+          return;
+        }
+
+        if (payload.type === "dm:ack:ok") {
+          resolvePendingRealtimeRelayAck(payload.relayId, {
+            ok: true,
+            relayId: normalizeRelayAckKey(payload.relayId)
+          });
           return;
         }
 
@@ -345,7 +964,61 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
         }
 
         if (payload.type === "dm:queued") {
-          dispatchRealtimeEvent("secureDmRelayQueueState", payload);
+          const messageId = payload.messageId != null ? String(payload.messageId) : "";
+          const conversationId = messageId
+            ? outboundConversationIdByMessageId.get(messageId) || null
+            : null;
+          const deliveryState = resolveOutgoingDeliveryStateFromRelayEvent(payload);
+
+          if (messageId) {
+            outboundConversationIdByMessageId.delete(messageId);
+          }
+
+          if (conversationId && window.secureDm?.setMessageDeliveryState) {
+            try {
+              await persistSecureDmDeliveryState({
+                currentUser,
+                conversationId,
+                messageId,
+                deliveryState
+              });
+            } catch (error) {
+              console.warn("Failed to persist secure DM delivery state:", error);
+            }
+          }
+
+          dispatchRealtimeEvent("secureDmRelayQueueState", {
+            ...payload,
+            conversationId,
+            deliveryState
+          });
+          return;
+        }
+
+        if (payload.type === "dm:delivery-update") {
+          const messageId = payload.messageId != null ? String(payload.messageId) : "";
+          const conversationId = payload.conversationId != null ? String(payload.conversationId) : "";
+          const deliveryState = normalizeOutgoingDeliveryState(payload.deliveryState || "sent");
+
+          dispatchRealtimeEvent("secureDmDeliveryUpdate", {
+            ...payload,
+            conversationId,
+            messageId,
+            deliveryState
+          });
+
+          if (conversationId && messageId && window.secureDm?.setMessageDeliveryState) {
+            try {
+              await persistSecureDmDeliveryState({
+                currentUser,
+                conversationId,
+                messageId,
+                deliveryState
+              });
+            } catch (error) {
+              console.warn("Failed to persist secure DM delivery upgrade:", error);
+            }
+          }
           return;
         }
 
@@ -367,18 +1040,30 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
       }
     });
 
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
+      rejectAllPendingRealtimeRelayAcks(new Error("Realtime relay ack channel closed"));
+
       if (!settled) {
-        failConnection("Realtime connection closed during authentication");
+        failConnection("Realtime connection closed during authentication", "DM_REALTIME_CONNECT_FAILED");
         return;
       }
 
       cleanupConnectionState();
+
+      if (hasAuthenticatedConnection) {
+        dispatchRealtimeEvent("secureDmRealtimeDisconnected", {
+          userId: currentUser.id,
+          deviceId: device.deviceId,
+          connectionKey,
+          code: event.code,
+          reason: event.reason || ""
+        });
+      }
     });
 
     socket.addEventListener("error", () => {
       if (!settled && socket.readyState !== WebSocket.OPEN) {
-        failConnection("Realtime connection failed");
+        failConnection("Realtime connection failed", "DM_REALTIME_CONNECT_FAILED");
       }
     });
   });
@@ -403,22 +1088,131 @@ export async function registerSecureDmDevice({ token, currentUser }) {
     username: currentUser.username
   });
 
-  const res = await fetch(`${CORE_API_BASE}/keys/devices/register.php`, {
-    method: "POST",
-    headers: authHeaders(token),
-    body: JSON.stringify(deviceBundle)
-  });
+  try {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/keys/devices/register.php`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(deviceBundle)
+    });
 
-  const data = await parseJsonResponse(res, "Failed to register DM device");
+    const data = await parseJsonResponse(res, {
+      fallbackMessage: "Failed to register DM device",
+      source: "dm",
+      operation: "device.register",
+      method: "POST"
+    });
 
-  if (data?.device) {
-    await window.secureDm.verifyDeviceBundles({
-      expectedUserId: currentUser.id,
-      devices: [data.device]
+    if (data?.approvalRequired) {
+      recordAppDiagnostic(createAppDiagnosticError({
+        code: "DM_DEVICE_APPROVAL_REQUIRED",
+        message: "This server is still using the legacy pending-device approval flow for secure DMs.",
+        userMessage: "This server is still using the legacy pending-device approval flow for secure DMs.",
+        source: "dm",
+        operation: "device.register",
+        severity: "warning",
+        deviceId: String(deviceBundle?.deviceId || ""),
+        details: {
+          pendingDeviceId: String(data?.device?.deviceId || deviceBundle?.deviceId || ""),
+          approverRequired: true
+        }
+      }));
+    }
+
+    if (data?.device) {
+      try {
+        await window.secureDm.verifyDeviceBundles({
+          expectedUserId: currentUser.id,
+          devices: [data.device]
+        });
+      } catch (error) {
+        throw wrapDmError(error, {
+          code: "DM_DEVICE_BUNDLE_VERIFY_FAILED",
+          userMessage: "Chatapp could not verify the device bundle returned by the server.",
+          operation: "device.verifyBundle",
+          deviceId: String(data.device.deviceId || deviceBundle?.deviceId || "")
+        });
+      }
+    }
+
+    return data;
+  } catch (error) {
+    const deviceStateError = toDmDeviceStateError(error, {
+      operation: "device.register",
+      deviceId: String(deviceBundle?.deviceId || "")
+    });
+
+    if (deviceStateError) {
+      throw deviceStateError;
+    }
+
+    if (String(error?.code || "").startsWith("DM_DEVICE_")) {
+      throw error;
+    }
+
+    throw wrapDmError(error, {
+      code: "DM_DEVICE_REGISTER_FAILED",
+      userMessage: "Could not register this device for secure direct messages.",
+      operation: "device.register"
     });
   }
+}
 
-  return data;
+export async function reauthorizeDmDevice({ token, currentUser, deviceId, totpCode }) {
+  try {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/keys/devices/reauthorize.php`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({
+        deviceId,
+        totpCode
+      })
+    });
+
+    const data = await parseJsonResponse(res, {
+      fallbackMessage: "Failed to re-authorize DM device",
+      source: "dm",
+      operation: "device.reauthorize",
+      method: "POST"
+    });
+    const inspectedDevices = await inspectDeviceList({
+      expectedUserId: currentUser.id,
+      devices: data.devices || []
+    });
+
+    return {
+      ...data,
+      devices: inspectedDevices.map((device) => ({
+        ...device,
+        revokedAt: data.devices?.find((entry) => String(entry.deviceId) === String(device.deviceId))?.revokedAt || null
+      }))
+    };
+  } catch (error) {
+    if (String(error?.code || "").trim().toUpperCase() === "MFA_REQUIRED_FOR_DEVICE_REAUTH") {
+      throw wrapDmError(error, {
+        code: "DM_DEVICE_REAUTH_REQUIRED",
+        userMessage: "Set up MFA on this account before re-authorizing a revoked DM device.",
+        operation: "device.reauthorize",
+        deviceId: String(deviceId || ""),
+        severity: "warning"
+      });
+    }
+
+    const deviceStateError = toDmDeviceStateError(error, {
+      operation: "device.reauthorize",
+      deviceId: String(deviceId || "")
+    });
+
+    if (deviceStateError) {
+      throw deviceStateError;
+    }
+
+    throw wrapDmError(error, {
+      code: "DM_DEVICE_REAUTH_REQUIRED",
+      userMessage: String(error?.userMessage || error?.message || "Could not re-authorize that secure DM device right now."),
+      operation: "device.reauthorize",
+      deviceId: String(deviceId || "")
+    });
+  }
 }
 
 export async function fetchPendingDmDeviceApprovals({ token }) {
@@ -456,29 +1250,44 @@ export async function approvePendingDmDevice({ token, currentUser, requestId, ap
   };
 }
 
-export async function fetchUserDmDevices({ token, userId, includeRevoked = false }) {
-  const res = await fetch(
-    `${CORE_API_BASE}/keys/devices/list.php?userId=${encodeURIComponent(userId)}&includeRevoked=${includeRevoked ? "1" : "0"}`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    }
-  );
-
-  const data = await parseJsonResponse(res, "Failed to fetch DM devices");
-  const inspectedDevices = await inspectDeviceList({
-    expectedUserId: userId,
-    devices: data.devices || []
+export async function fetchUserDmDevices({ token, userId, includeRevoked = false, requiredDeviceId = "" }) {
+  const primaryResponse = await fetchDmDeviceList({
+    token,
+    userId,
+    includeRevoked,
+    endpoint: "/keys/devices/list.php",
+    operation: "device.list"
   });
+  const normalizedRequiredDeviceId = String(requiredDeviceId || "");
+  const hasRequiredPrimaryDevice = normalizedRequiredDeviceId
+    ? (primaryResponse.devices || []).some((device) => String(device.deviceId) === normalizedRequiredDeviceId)
+    : false;
+  const shouldFetchLegacyFallback = normalizedRequiredDeviceId
+    ? !hasRequiredPrimaryDevice
+    : (primaryResponse.devices || []).length === 0;
 
-  return {
-    ...data,
-    devices: inspectedDevices.map((device) => ({
-      ...device,
-      revokedAt: data.devices?.find((entry) => String(entry.deviceId) === String(device.deviceId))?.revokedAt || null
-    }))
-  };
+  if (!shouldFetchLegacyFallback) {
+    return primaryResponse;
+  }
+
+  try {
+    const legacyResponse = await fetchDmDeviceList({
+      token,
+      userId,
+      includeRevoked,
+      endpoint: "/dm/devices/list.php",
+      operation: "device.listLegacy"
+    });
+
+    return {
+      ...primaryResponse,
+      includesLegacyFallback: true,
+      devices: mergeFetchedDeviceLists(primaryResponse, legacyResponse)
+    };
+  } catch (error) {
+    console.warn("Legacy DM device fallback failed:", error);
+    return primaryResponse;
+  }
 }
 
 export async function revokeDmDevice({ token, currentUser, deviceId }) {
@@ -680,87 +1489,125 @@ export async function createDirectConversation({
   relayTtlSeconds,
   messageTtlSeconds = 0
 }) {
-  const currentDevice = await window.secureDm.getDeviceBundle({
-    userId: currentUser.id,
-    username: currentUser.username
-  });
-  const ownDevicesResponse = await fetchUserDmDevices({
-    token,
-    userId: currentUser.id
-  });
-  const recipientDevicesResponse = await fetchUserDmDevices({
-    token,
-    userId: recipientUser.id
-  });
+  try {
+    const currentDevice = await window.secureDm.getDeviceBundle({
+      userId: currentUser.id,
+      username: currentUser.username
+    });
+    const ownDevicesResponse = await fetchUserDmDevices({
+      token,
+      userId: currentUser.id
+    });
+    const recipientDevicesResponse = await fetchUserDmDevices({
+      token,
+      userId: recipientUser.id
+    });
 
-  if (!recipientDevicesResponse.devices?.length) {
-    throw new Error("That user has not set up secure DMs on any device yet");
-  }
-
-  const additionalOwnDevices = (ownDevicesResponse.devices || []).filter(
-    (device) => device.deviceId !== currentDevice.deviceId && hasConversationRecipientKey(device)
-  );
-  const usableRecipientDevices = (recipientDevicesResponse.devices || []).filter(
-    (device) => hasConversationRecipientKey(device)
-  );
-  const verifiedRecipientDevices = usableRecipientDevices.filter(
-    (device) => device.signatureVerified === true
-  );
-
-  if (!usableRecipientDevices.length) {
-    throw createUserFacingDmError(
-      `${recipientUser.username} needs to reopen Chatapp to finish setting up secure DMs before you can start an encrypted chat.`,
-      "dm_recipient_devices_unavailable"
-    );
-  }
-
-  if (!verifiedRecipientDevices.length) {
-    throw createUserFacingDmError(
-      `${recipientUser.username} needs to open the latest Chatapp on one of their devices or rotate their DM keys before you can start an encrypted chat. Their current DM devices could not be verified yet.`,
-      "dm_recipient_devices_unverified"
-    );
-  }
-
-  const recipientDevices = [
-    ...additionalOwnDevices,
-    ...verifiedRecipientDevices
-  ];
-
-  const localConversation = await window.secureDm.createConversation({
-    userId: currentUser.id,
-    username: currentUser.username,
-    title: `DM with ${recipientUser.username}`,
-    participants: [recipientUser.id],
-    recipientDevices
-  });
-
-  const res = await fetch(`${CORE_API_BASE}/dm/conversations/create.php`, {
-    method: "POST",
-    headers: authHeaders(token),
-    body: JSON.stringify({
-      participantUserIds: [recipientUser.id],
-      wrappedKeys: localConversation.wrappedKeys,
-      relayTtlSeconds,
-      messageTtlSeconds
-    })
-  });
-
-  const data = await parseJsonResponse(res, "Failed to create DM conversation");
-  await window.secureDm.adoptConversationId({
-    userId: currentUser.id,
-    username: currentUser.username,
-    fromConversationId: localConversation.conversationId,
-    toConversationId: data.conversation.id,
-    title: `DM with ${recipientUser.username}`
-  });
-
-  return {
-    remoteConversation: data.conversation,
-    localConversation: {
-      ...localConversation,
-      conversationId: data.conversation.id
+    if (!recipientDevicesResponse.devices?.length) {
+      throw createUserFacingDmError(
+        `${recipientUser.username} has not set up secure DMs on any device yet.`,
+        "DM_RECIPIENT_DEVICES_UNAVAILABLE",
+        {
+          operation: "conversation.create",
+          friendUserId: String(recipientUser.id || "")
+        }
+      );
     }
-  };
+
+    const additionalOwnDevices = (ownDevicesResponse.devices || []).filter(
+      (device) => device.deviceId !== currentDevice.deviceId && hasConversationRecipientKey(device)
+    );
+    const usableRecipientDevices = (recipientDevicesResponse.devices || []).filter(
+      (device) => hasConversationRecipientKey(device)
+    );
+    const verifiedRecipientDevices = usableRecipientDevices.filter(
+      (device) => device.signatureVerified === true
+    );
+
+    if (!usableRecipientDevices.length) {
+      throw createUserFacingDmError(
+        `${recipientUser.username} needs to reopen Chatapp to finish setting up secure DMs before you can start an encrypted chat.`,
+        "DM_RECIPIENT_DEVICES_UNAVAILABLE",
+        {
+          operation: "conversation.create",
+          friendUserId: String(recipientUser.id || "")
+        }
+      );
+    }
+
+    if (!verifiedRecipientDevices.length) {
+      throw createUserFacingDmError(
+        `${recipientUser.username} needs to open the latest Chatapp on one of their devices or rotate their DM keys before you can start an encrypted chat. Their current DM devices could not be verified yet.`,
+        "DM_RECIPIENT_DEVICES_UNVERIFIED",
+        {
+          operation: "conversation.create",
+          friendUserId: String(recipientUser.id || "")
+        }
+      );
+    }
+
+    const recipientDevices = [
+      ...additionalOwnDevices,
+      ...verifiedRecipientDevices
+    ];
+
+    const localConversation = await window.secureDm.createConversation({
+      userId: currentUser.id,
+      username: currentUser.username,
+      title: `DM with ${recipientUser.username}`,
+      participants: [recipientUser.id],
+      recipientDevices
+    });
+
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/dm/conversations/create.php`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({
+        participantUserIds: [recipientUser.id],
+        wrappedKeys: localConversation.wrappedKeys,
+        relayTtlSeconds,
+        messageTtlSeconds
+      })
+    });
+
+    const data = await parseJsonResponse(res, {
+      fallbackMessage: "Failed to create DM conversation",
+      source: "dm",
+      operation: "conversation.create",
+      method: "POST"
+    });
+    await window.secureDm.adoptConversationId({
+      userId: currentUser.id,
+      username: currentUser.username,
+      fromConversationId: localConversation.conversationId,
+      toConversationId: data.conversation.id,
+      title: `DM with ${recipientUser.username}`
+    });
+
+    return {
+      remoteConversation: data.conversation,
+      localConversation: {
+        ...localConversation,
+        conversationId: data.conversation.id
+      }
+    };
+  } catch (error) {
+    if (
+      [
+        "DM_RECIPIENT_DEVICES_UNAVAILABLE",
+        "DM_RECIPIENT_DEVICES_UNVERIFIED"
+      ].includes(String(error?.code || ""))
+    ) {
+      throw error;
+    }
+
+    throw wrapDmError(error, {
+      code: "DM_CONVERSATION_CREATE_FAILED",
+      userMessage: "Could not start the encrypted chat right now.",
+      operation: "conversation.create",
+      friendUserId: String(recipientUser?.id || "")
+    });
+  }
 }
 
 export async function importRemoteConversation({ token, currentUser, conversationId }) {
@@ -774,29 +1621,37 @@ export async function importRemoteConversation({ token, currentUser, conversatio
   );
   const data = await parseJsonResponse(res, "Failed to load DM conversation");
 
-  try {
-    const messages = await window.secureDm.importConversation({
-      userId: currentUser.id,
-      username: currentUser.username,
-      conversation: data.conversation
-    });
+  await window.secureDm.importConversation({
+    userId: currentUser.id,
+    username: currentUser.username,
+    conversation: data.conversation
+  });
+  const access = await getSecureDmConversationAccess({
+    currentUser,
+    conversationId
+  });
 
+  if (!canReadConversationLocally(access)) {
     return {
       conversation: data.conversation,
-      messages
+      messages: null,
+      missingKey: true
     };
-  } catch (error) {
-    // Surface missing-key failures as a structured result so the caller can
-    // offer a recovery flow rather than showing a generic error toast.
-    if (error?.code === "dm_missing_conversation_key") {
-      return {
-        conversation: data.conversation,
-        messages: null,
-        missingKey: true
-      };
-    }
-    throw error;
   }
+
+  await flushPendingSecureDmDeliveryStates({
+    currentUser,
+    conversationId
+  });
+
+  return {
+    conversation: data.conversation,
+    messages: await window.secureDm.listMessages({
+      userId: currentUser.id,
+      conversationId
+    }),
+    missingKey: false
+  };
 }
 
 /**
@@ -854,7 +1709,8 @@ export async function sendDirectMessage({
       replyTo: messageOptions.replyTo || null,
       targetMessageId: messageOptions.targetMessageId || null,
       emoji: messageOptions.emoji || null,
-      attachments: Array.isArray(messageOptions.attachments) ? messageOptions.attachments : []
+      attachments: Array.isArray(messageOptions.attachments) ? messageOptions.attachments : [],
+      embeds: Array.isArray(messageOptions.embeds) ? messageOptions.embeds : []
     }
   });
 }
@@ -866,12 +1722,33 @@ export async function sendSecureDmRealtimeEvent({ token, currentUser, payload })
   });
 
   if (!socket || socket.readyState !== WebSocket.OPEN) {
-    throw new Error("Realtime connection is not available");
+    throw createRealtimeError("Realtime connection is not available", "DM_REALTIME_CONNECT_FAILED");
   }
 
   socket.send(JSON.stringify(payload));
 
   return { ok: true };
+}
+
+export async function updateSecureDmPresenceStatus({ token, currentUser, status }) {
+  const socket = await ensureRealtimeConnection({
+    token,
+    currentUser
+  });
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw createRealtimeError("Realtime connection is not available", "DM_REALTIME_CONNECT_FAILED");
+  }
+
+  socket.send(JSON.stringify({
+    type: "presence:set-status",
+    status: normalizeConfiguredPresenceStatus(status)
+  }));
+
+  return {
+    ok: true,
+    status: normalizeConfiguredPresenceStatus(status)
+  };
 }
 
 export async function subscribeSecureDmPresence({ token, currentUser, userIds }) {
@@ -881,7 +1758,7 @@ export async function subscribeSecureDmPresence({ token, currentUser, userIds })
   });
 
   if (!socket || socket.readyState !== WebSocket.OPEN) {
-    throw new Error("Realtime connection is not available");
+    throw createRealtimeError("Realtime connection is not available", "DM_REALTIME_CONNECT_FAILED");
   }
 
   const normalizedUserIds = [
@@ -906,7 +1783,7 @@ export async function pullRelayMessages({ token, currentUser }) {
     username: currentUser.username
   });
 
-  const relayRes = await fetch(
+  const relayRes = await fetchWithNetworkErrorContext(
     `${CORE_API_BASE}/dm/relay/pending.php?deviceId=${encodeURIComponent(device.deviceId)}`,
     {
       headers: {
@@ -917,13 +1794,20 @@ export async function pullRelayMessages({ token, currentUser }) {
   let relayData;
 
   try {
-    relayData = await parseJsonResponse(relayRes, "Failed to load relay messages");
+    relayData = await parseJsonResponse(relayRes, {
+      fallbackMessage: "Failed to load relay messages",
+      source: "dm",
+      operation: "relay.poll",
+      method: "GET"
+    });
   } catch (error) {
-    if (relayRes.status === 404 && isMissingRelayDeviceError(error)) {
-      return [];
-    }
+    const relayError = classifyDmRelayPollError(error, {
+      endpoint: `${CORE_API_BASE}/dm/relay/pending.php`,
+      deviceId: String(device.deviceId || "")
+    });
 
-    throw error;
+    recordAppDiagnostic(relayError);
+    throw relayError;
   }
 
   const imported = [];
@@ -938,16 +1822,29 @@ export async function pullRelayMessages({ token, currentUser }) {
 
   for (const item of relayData.items) {
     let message;
-    const senderDevices = item.senderUserId
+    let senderDevice = item.senderDevice || null;
+    const senderDevices = !senderDevice && item.senderUserId
       ? await fetchUserDmDevices({
           token,
           userId: item.senderUserId,
-          includeRevoked: true
+          includeRevoked: true,
+          requiredDeviceId: item.senderDeviceId
         })
       : { devices: [] };
-    const senderDevice = (senderDevices.devices || []).find(
-      (device) => String(device.deviceId) === String(item.senderDeviceId)
-    ) || null;
+    if (!senderDevice) {
+      senderDevice = (senderDevices.devices || []).find(
+        (device) => String(device.deviceId) === String(item.senderDeviceId)
+      ) || null;
+    }
+
+    if (!senderDevice && item.senderDeviceId) {
+      recordMissingSenderDeviceDiagnostic({
+        relayItem: item,
+        currentUser,
+        context: "relay-poll"
+      });
+      continue;
+    }
 
     try {
       message = await window.secureDm.receiveMessage({
@@ -965,6 +1862,15 @@ export async function pullRelayMessages({ token, currentUser }) {
         continue;
       }
 
+      if (isMissingSenderBundleError(error)) {
+        recordMissingSenderDeviceDiagnostic({
+          relayItem: item,
+          currentUser,
+          context: "relay-poll"
+        });
+        continue;
+      }
+
       throw error;
     }
 
@@ -972,13 +1878,14 @@ export async function pullRelayMessages({ token, currentUser }) {
       imported.push(message);
     }
 
-    await fetch(`${CORE_API_BASE}/dm/relay/ack.php`, {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify({
-        relayId: item.relayId,
-        deviceId: device.deviceId
-      })
+    await acknowledgeRelayDelivery({
+      token,
+      currentUser,
+      relayId: item.relayId,
+      deviceId: device.deviceId,
+      fallbackMessage: "Failed to acknowledge relay message",
+      userMessage: "Chatapp imported a secure DM but could not confirm it with the server.",
+      conversationId: item.conversationId
     });
   }
 

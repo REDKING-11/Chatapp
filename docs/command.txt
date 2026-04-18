@@ -1,21 +1,35 @@
-sudo cp /home/ubuntu/.env /var/www/chatapp-core/public/.env
-sudo cp /home/ubuntu/.htaccess /var/www/chatapp-core/public/.htaccess
-
+# chatapp-core deploy
 sudo cp -r /home/ubuntu/* /var/www/chatapp-core/public/
-sudo cp /home/ubuntu/.env /var/www/chatapp-core/public/.env
 sudo cp /home/ubuntu/.htaccess /var/www/chatapp-core/public/.htaccess
 sudo chown -R www-data:www-data /var/www/chatapp-core
 
-sudo rm -rf /var/www/chatapp-realtime/{*,.*} 2>/dev/null && \
-sudo cp /home/ubuntu/app.js /var/www/chatapp-realtime/app.js && \
-sudo cp /home/ubuntu/.env /var/www/chatapp-realtime/.env && \
-sudo chown -R www-data:www-data /var/www/chatapp-realtime && \
-sudo npm install -g pm2 && \
-pm2 delete chatapp-realtime 2>/dev/null && \
-pm2 start /var/www/chatapp-realtime/app.js --name chatapp-realtime --cwd /var/www/chatapp-realtime && \
-pm2 save
+# chatapp-realtime deploy
+sudo find /var/www/chatapp-realtime -mindepth 1 -maxdepth 1 -exec rm -rf {} + && \
+sudo install -m 644 /home/ubuntu/app.js /var/www/chatapp-realtime/app.js && \
+sudo install -m 644 /home/ubuntu/package.json /var/www/chatapp-realtime/package.json && \
+sudo install -m 600 /home/ubuntu/.env /var/www/chatapp-realtime/.env && \
+sudo install -m 644 /home/ubuntu/presence.js /var/www/chatapp-realtime/presence.js && \
+cd /var/www/chatapp-realtime && \
+sudo npm install --omit=dev && \
+sudo systemctl restart chatapp-realtime && \
+sleep 2 && \
+curl http://127.0.0.1:3010/health
 
-run:
-sudo rm -rf /var/www/chatapp-realtime/{*,.*} 2>/dev/null && sudo cp /home/ubuntu/app.js /var/www/chatapp-realtime/app.js && sudo cp /home/ubuntu/.env /var/www/chatapp-realtime/.env && sudo chown -R www-data:www-data /var/www/chatapp-realtime && sudo npm install -g pm2 && pm2 delete chatapp-realtime 2>/dev/null; pm2 start /var/www/chatapp-realtime/app.js --name chatapp-realtime --cwd /var/www/chatapp-realtime && pm2 save
+# Lightsail HTTPS/WSS edge
+sudo cp /home/ubuntu/deploy/nginx-chatapp-core.lightsail.conf /etc/nginx/sites-available/chatapp
+sudo ln -sfn /etc/nginx/sites-available/chatapp /etc/nginx/sites-enabled/chatapp
+sudo nginx -t
+sudo systemctl reload nginx
+
+sudo snap install --classic certbot
+sudo ln -sf /snap/bin/certbot /usr/local/bin/certbot
+sudo certbot certonly --standalone --preferred-profile shortlived --ip-address 56.228.2.7 --cert-name chatapp-lightsail-ip --pre-hook "systemctl stop caddy" --post-hook "systemctl start caddy" --deploy-hook "systemctl reload caddy"
+
+sudo cp /home/ubuntu/deploy/Caddyfile.lightsail /etc/caddy/Caddyfile
+sudo systemctl enable --now caddy
+sudo systemctl restart caddy
+
+# Desktop app remote target (Application/.env.local)
+VITE_CORE_API_BASE=https://56.228.2.7
 
 $env:Path += ";C:\Program Files (x86)\WiX Toolset v3.14\bin"

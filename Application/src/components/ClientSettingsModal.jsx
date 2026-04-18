@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+    APP_DIAGNOSTICS_CHANGED_EVENT,
+    clearStoredDiagnostics,
+    copyStoredDiagnosticsToClipboard,
+    readStoredDiagnostics,
+} from "../lib/diagnostics.js";
+import {
     CLIENT_SETTINGS_TAB_KEYS,
     downloadClientSettings,
     importClientSettingsFromFile,
@@ -24,6 +30,7 @@ import {
     approvePendingDmDevice,
     fetchUserDmDevices,
     fetchPendingDmDeviceApprovals,
+    reauthorizeDmDevice,
     recoverMissingConversationKeys,
     revokeDmDeviceAndRewrapConversations,
     rotateCurrentDmDeviceKeys
@@ -242,6 +249,8 @@ export default function ClientSettingsModal({
     const [transferImportJson, setTransferImportJson] = useState("");
     const [transferImportStatus, setTransferImportStatus] = useState("");
     const [transferImportError, setTransferImportError] = useState("");
+    const [diagnosticEntries, setDiagnosticEntries] = useState([]);
+    const [diagnosticsNotice, setDiagnosticsNotice] = useState("");
     const [mfaStatus, setMfaStatus] = useState({ enabled: false, enabledAt: null, pendingSetup: false, available: true });
     const [mfaSetup, setMfaSetup] = useState(null);
     const [mfaCode, setMfaCode] = useState("");
@@ -274,6 +283,16 @@ export default function ClientSettingsModal({
     const activeTabLabel = SETTINGS_TABS.find((tab) => tab.id === activeTab)?.label || "tab";
     const canResetActiveTab = (CLIENT_SETTINGS_TAB_KEYS[activeTab] || []).length > 0;
     const trustedDeviceSeenStorageKey = `trustedDmDevicesSeen:${currentUser?.id || "guest"}`;
+    const recentDiagnostics = useMemo(
+        () => [...diagnosticEntries].reverse().slice(0, 20),
+        [diagnosticEntries]
+    );
+    const currentDmDevice = useMemo(
+        () => dmDevices.find((device) => String(device.deviceId) === String(currentDmDeviceId)) || null,
+        [dmDevices, currentDmDeviceId]
+    );
+    const currentDmDeviceIsRevoked = Boolean(currentDmDevice?.revokedAt);
+    const hasRevokedDmDevices = dmDevices.some((device) => Boolean(device.revokedAt));
 
     useEffect(() => {
         setDisplayName(currentUser?.displayName || "");
@@ -438,6 +457,19 @@ export default function ClientSettingsModal({
             cancelled = true;
         };
     }, [currentUser?.id]);
+
+    useEffect(() => {
+        function refreshDiagnostics() {
+            setDiagnosticEntries(readStoredDiagnostics());
+        }
+
+        refreshDiagnostics();
+        window.addEventListener(APP_DIAGNOSTICS_CHANGED_EVENT, refreshDiagnostics);
+
+        return () => {
+            window.removeEventListener(APP_DIAGNOSTICS_CHANGED_EVENT, refreshDiagnostics);
+        };
+    }, []);
 
     useEffect(() => {
         let revokedUrl = null;
@@ -775,6 +807,54 @@ export default function ClientSettingsModal({
         }
     }
 
+    async function handleReauthorizeDevice(deviceId) {
+        if (!currentUser?.id || !deviceId) {
+            return;
+        }
+
+        const token = getStoredAuthToken();
+
+        if (!token) {
+            setAccountNotice("Your session expired before that device could be re-authorized.");
+            return;
+        }
+
+        if (!mfaStatus.enabled) {
+            setAccountNotice("Set up MFA on this account before re-authorizing a revoked DM device.");
+            return;
+        }
+
+        if (mfaCode.length !== 6) {
+            setAccountNotice("Enter your six-digit MFA code, then try re-authorizing this device again.");
+            return;
+        }
+
+        try {
+            setDeviceActionId(`reauth:${deviceId}`);
+            setAccountNotice("");
+            const data = await reauthorizeDmDevice({
+                token,
+                currentUser,
+                deviceId,
+                totpCode: mfaCode
+            });
+            const pending = await fetchPendingDmDeviceApprovals({
+                token
+            });
+            setDmDevices(data.devices || []);
+            setPendingDmDevices(pending.pendingDevices || []);
+            setMfaCode("");
+            setAccountNotice("Secure DMs are enabled again on that device.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not re-authorize that device right now.",
+                context: "DM device re-authorization"
+            }).message);
+        } finally {
+            setDeviceActionId("");
+        }
+    }
+
     async function handleRotateDeviceKeys() {
         if (!currentUser?.id) {
             return;
@@ -930,6 +1010,24 @@ export default function ClientSettingsModal({
             }).message);
             setTransferImportStatus("");
         }
+    }
+
+    async function handleCopyDiagnostics() {
+        try {
+            const count = await copyStoredDiagnosticsToClipboard();
+            setDiagnosticsNotice(`Copied ${count} diagnostic entr${count === 1 ? "y" : "ies"} to the clipboard.`);
+        } catch (error) {
+            setDiagnosticsNotice(formatAppError(error, {
+                fallbackMessage: "Could not copy diagnostics right now.",
+                context: "Diagnostics copy"
+            }).message);
+        }
+    }
+
+    function handleClearDiagnostics() {
+        clearStoredDiagnostics();
+        setDiagnosticEntries([]);
+        setDiagnosticsNotice("Saved diagnostics cleared for this device.");
     }
 
     async function refreshAccountSecurityState(token) {
@@ -1343,6 +1441,80 @@ export default function ClientSettingsModal({
                                 </div>
                             </label>
                         </div>
+
+                        <div className="client-settings-stack" style={{ marginTop: "18px" }}>
+                            <div className="client-settings-inline-actions">
+                                <button type="button" onClick={handleCopyDiagnostics}>
+                                    Copy diagnostics JSON
+                                </button>
+                                <button
+                                    type="button"
+                                    className="secondary"
+                                    onClick={() => setDiagnosticEntries(readStoredDiagnostics())}
+                                >
+                                    Refresh list
+                                </button>
+                                <button
+                                    type="button"
+                                    className="secondary"
+                                    onClick={handleClearDiagnostics}
+                                    disabled={diagnosticEntries.length === 0}
+                                >
+                                    Clear saved diagnostics
+                                </button>
+                            </div>
+
+                            {diagnosticsNotice ? (
+                                <p className="client-settings-muted">{diagnosticsNotice}</p>
+                            ) : null}
+
+                            {recentDiagnostics.length > 0 ? (
+                                <div className="client-settings-stack">
+                                    {recentDiagnostics.map((entry, index) => {
+                                        const borderColor = entry.severity === "fatal"
+                                            ? "#ef4444"
+                                            : entry.severity === "error"
+                                                ? "#f97316"
+                                                : entry.severity === "warning"
+                                                    ? "#facc15"
+                                                    : "#38bdf8";
+                                        const isNewestSerious = index === 0 && ["fatal", "error"].includes(entry.severity);
+
+                                        return (
+                                            <div
+                                                key={entry.id}
+                                                className="client-settings-security-card"
+                                                style={{
+                                                    borderLeft: `4px solid ${borderColor}`,
+                                                    boxShadow: isNewestSerious ? `0 0 0 1px ${borderColor}` : undefined
+                                                }}
+                                            >
+                                                <div className="client-settings-security-copy">
+                                                    <strong><code>{entry.code}</code></strong>
+                                                    <p>{entry.userMessage || entry.message}</p>
+                                                    <span className="client-settings-muted">
+                                                        {new Date(entry.recordedAt).toLocaleString()}
+                                                        {" · "}
+                                                        {entry.source}.{entry.operation}
+                                                        {entry.status ? ` · HTTP ${entry.status}` : ""}
+                                                        {entry.traceId ? ` · trace ${entry.traceId}` : ""}
+                                                    </span>
+                                                    {settings.debugMode ? (
+                                                        <pre className="friends-debug-details" style={{ marginTop: "10px" }}>
+                                                            {JSON.stringify(entry, null, 2)}
+                                                        </pre>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="client-settings-muted">
+                                    No recent diagnostics have been captured on this device yet.
+                                </p>
+                            )}
+                        </div>
                     </CollapsibleSection>
 
                         </>
@@ -1385,11 +1557,21 @@ export default function ClientSettingsModal({
                             </button>
                         </div>
                         <p className="client-settings-muted">
-                            Trusted DM devices can decrypt future direct messages. Review new devices, revoke old ones, and confirm bundle integrity here.
+                            Devices you sign into are authorized for secure DMs by default. Revoked devices stay signed in, but secure DMs stay blocked until you explicitly re-authorize them with MFA.
                         </p>
-                        {pendingDmDevices.some((device) => String(device.deviceId) === String(currentDmDeviceId)) ? (
+                        {currentDmDeviceIsRevoked ? (
                             <p className="client-settings-muted">
-                                This device is waiting for approval from an already trusted device before it can receive DM keys.
+                                This device is signed in, but secure DMs are blocked. Re-authorize it with MFA to restore encrypted messaging here.
+                            </p>
+                        ) : null}
+                        {hasRevokedDmDevices && !mfaStatus.enabled ? (
+                            <p className="client-settings-muted">
+                                Set up MFA first if you want to restore secure DM access on a revoked device.
+                            </p>
+                        ) : null}
+                        {hasRevokedDmDevices && mfaStatus.enabled ? (
+                            <p className="client-settings-muted">
+                                Enter your six-digit MFA code below, then use the re-authorize action on any revoked device.
                             </p>
                         ) : null}
                         <div className="client-settings-stack">
@@ -1398,10 +1580,10 @@ export default function ClientSettingsModal({
                                     <strong>Multi-factor authentication</strong>
                                     <p>
                                         {mfaStatus.enabled
-                                            ? `Enabled${mfaStatus.enabledAt ? ` on ${formatDeviceTimestamp(mfaStatus.enabledAt)}` : ""}.`
+                                            ? `Enabled${mfaStatus.enabledAt ? ` on ${formatDeviceTimestamp(mfaStatus.enabledAt)}` : ""}. Use it to re-authorize any secure-DM device you previously revoked.`
                                             : mfaStatus.available === false
                                                 ? "This server has not applied the auth schema upgrade yet, so MFA setup is temporarily unavailable."
-                                                : "Add a TOTP authenticator code to protect logins if your password is ever exposed."}
+                                                : "Add a TOTP authenticator code to protect logins and to re-authorize revoked secure-DM devices later if you need to."}
                                     </p>
                                 </div>
                                 <div className="client-settings-inline-actions">
@@ -1435,7 +1617,7 @@ export default function ClientSettingsModal({
                                 ) : null}
                                 {(mfaSetup || mfaStatus.enabled) ? (
                                     <label className="client-settings-field">
-                                        <span>{mfaStatus.enabled ? "Authentication code to disable MFA" : "Authentication code to enable MFA"}</span>
+                                        <span>{mfaStatus.enabled ? "Authentication code for device re-authorization or MFA disable" : "Authentication code to enable MFA"}</span>
                                         <input
                                             type="text"
                                             inputMode="numeric"
@@ -1508,11 +1690,13 @@ export default function ClientSettingsModal({
                                 dmDevices.map((device) => {
                                     const isCurrentDevice = String(device.deviceId) === String(currentDmDeviceId);
                                     const isRevoking = String(device.deviceId) === String(deviceActionId);
+                                    const isReauthorizing = String(deviceActionId) === `reauth:${device.deviceId}`;
                                     const isRevoked = Boolean(device.revokedAt);
                                     const isNewDevice = Boolean(newTrustedDeviceIds[String(device.deviceId)]);
                                     const statusBadges = [
                                         isCurrentDevice ? "Current" : null,
                                         isRevoked ? "Revoked" : "Active",
+                                        isRevoked ? "Secure DMs blocked" : null,
                                         isNewDevice ? "New" : null,
                                         device.signatureVerified ? "Signature verified" : "Unverified bundle"
                                     ].filter(Boolean);
@@ -1540,14 +1724,29 @@ export default function ClientSettingsModal({
                                                     <span>Revoked: {formatDeviceTimestamp(device.revokedAt)}</span>
                                                 ) : null}
                                             </div>
-                                            <button
-                                                type="button"
-                                                className="danger"
-                                                disabled={isCurrentDevice || isRevoked || Boolean(deviceActionId)}
-                                                onClick={() => handleRevokeDevice(device.deviceId)}
-                                            >
-                                                {isRevoking ? "Revoking..." : isCurrentDevice ? "Current device" : isRevoked ? "Revoked" : "Revoke device"}
-                                            </button>
+                                            {isRevoked ? (
+                                                <button
+                                                    type="button"
+                                                    className="secondary"
+                                                    disabled={Boolean(deviceActionId) || !mfaStatus.enabled || mfaCode.length !== 6}
+                                                    onClick={() => handleReauthorizeDevice(device.deviceId)}
+                                                >
+                                                    {!mfaStatus.enabled
+                                                        ? "Set up MFA first"
+                                                        : isReauthorizing
+                                                            ? "Re-authorizing..."
+                                                            : "Re-authorize with MFA"}
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    className="danger"
+                                                    disabled={isCurrentDevice || Boolean(deviceActionId)}
+                                                    onClick={() => handleRevokeDevice(device.deviceId)}
+                                                >
+                                                    {isRevoking ? "Revoking..." : isCurrentDevice ? "Current device" : "Revoke device"}
+                                                </button>
+                                            )}
                                         </div>
                                     );
                                 })
@@ -1557,6 +1756,9 @@ export default function ClientSettingsModal({
                         </div>
                         {pendingDmDevices.length > 0 ? (
                             <div className="client-device-list">
+                                <p className="client-settings-muted">
+                                    Legacy pending approvals from older server behavior are still listed below for compatibility. Normal new sign-ins should become active automatically now.
+                                </p>
                                 {pendingDmDevices.map((device) => {
                                     const isApproving = String(deviceActionId) === `approve:${device.requestId}`;
                                     const isCurrentPendingDevice = String(device.deviceId) === String(currentDmDeviceId);
@@ -1567,7 +1769,7 @@ export default function ClientSettingsModal({
                                                 <div className="client-device-heading">
                                                     <strong>{device.deviceName || "Pending device"}</strong>
                                                     <div className="client-device-badges">
-                                                        <span className="client-device-badge is-new">Pending approval</span>
+                                                        <span className="client-device-badge is-new">Legacy pending approval</span>
                                                     </div>
                                                 </div>
                                                 <span>{device.deviceId}</span>

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { joinServer } from "../features/servers/actions";
 import { formatAppError } from "../lib/debug";
+import { getSelfhostApiBase } from "../lib/env";
 
 export default function JoinServerModal({ onJoinSuccess, onClose }) {
-    const [backendUrl, setBackendUrl] = useState("http://localhost:3000");
+    const [backendUrl, setBackendUrl] = useState(() => getSelfhostApiBase() || "");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
 
@@ -35,7 +36,7 @@ export default function JoinServerModal({ onJoinSuccess, onClose }) {
                 <div className="backend-add-row">
                     <input
                         type="text"
-                        placeholder="http://localhost:3000"
+                        placeholder="https://chat.example.com"
                         value={backendUrl}
                         onChange={(e) => setBackendUrl(e.target.value)}
                         onKeyDown={(e) => {

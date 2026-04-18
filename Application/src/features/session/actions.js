@@ -1,4 +1,8 @@
-import { parseJsonResponse } from "../../lib/api";
+import {
+    fetchWithNetworkErrorContext,
+    parseJsonResponse,
+    resetApiAuthErrorState
+} from "../../lib/api";
 import { getCoreApiBase } from "../../lib/env";
 
 const CORE_API_BASE = getCoreApiBase();
@@ -41,15 +45,23 @@ export async function hydrateAuthSession() {
     let token = null;
 
     if (window.authSession?.getToken) {
-        const data = await window.authSession.getToken();
-        token = typeof data?.token === "string" && data.token.trim() ? data.token : null;
+        try {
+            const data = await window.authSession.getToken();
+            token = typeof data?.token === "string" && data.token.trim() ? data.token : null;
+        } catch {
+            token = null;
+        }
     }
 
     const legacyToken = getLocalStorageSafe("authToken");
     if (!token && legacyToken) {
         token = legacyToken;
         if (window.authSession?.setToken) {
-            await window.authSession.setToken(legacyToken);
+            try {
+                await window.authSession.setToken(legacyToken);
+            } catch {
+                // Legacy token migration is best-effort.
+            }
         }
     }
 
@@ -64,6 +76,7 @@ export async function hydrateAuthSession() {
 
 export async function clearAuthSession() {
     authTokenCache = null;
+    resetApiAuthErrorState();
 
     if (window.authSession?.clearToken) {
         await window.authSession.clearToken();
@@ -76,6 +89,7 @@ export async function clearAuthSession() {
 export async function saveAuthToken(token) {
     const normalizedToken = typeof token === "string" && token.trim() ? token : null;
     authTokenCache = normalizedToken;
+    resetApiAuthErrorState();
 
     if (normalizedToken) {
         if (window.authSession?.setToken) {
@@ -102,7 +116,7 @@ export function saveAuthUser(user) {
 }
 
 export async function validateSession(token) {
-    const res = await fetch(`${CORE_API_BASE}/auth/me.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/me.php`, {
         headers: {
             Authorization: `Bearer ${token}`
         }

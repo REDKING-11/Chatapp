@@ -2,6 +2,8 @@ import {
   advanceChainStep,
   buildSafetyNumber,
   createConversationKey,
+  deriveChainId,
+  deriveInitialChainKey,
   decryptFromSenderDevice,
   decryptPayload,
   encryptForRecipientDevice,
@@ -26,6 +28,14 @@ import {
   buildOutgoingAttachmentPayload,
   registerIncomingAttachmentPayload
 } from "../transfers/service";
+import { normalizeAppDiagnosticError } from "../../lib/diagnostics.js";
+import { deriveConversationAccessFromMetadata } from "../../features/dm/conversationAccess.js";
+import { normalizeInlineImageEmbeds } from "../../features/dm/inlineEmbeds.js";
+import {
+  summarizeInlineImageEmbedUsage,
+  verifyInlineImageEmbedsRoundTrip
+} from "../../features/dm/inlineEmbedContracts.js";
+import { traceInlineImageDiagnostic } from "../../features/dm/inlineEmbedTracing.js";
 
 const FORBIDDEN_DM_EXPORT_KEYS = new Set([
   "body",
@@ -41,6 +51,14 @@ const FORBIDDEN_DM_EXPORT_KEYS = new Set([
   "privateKey"
 ]);
 const pendingDeviceRotations = new Map();
+const SHOULD_TRACE_INLINE_IMAGE_INFO = process.env.NODE_ENV !== "production";
+
+function normalizeStoredDeliveryState(value) {
+  const normalizedValue = String(value || "").trim().toLowerCase();
+  return ["sent", "queued", "failed"].includes(normalizedValue)
+    ? normalizedValue
+    : null;
+}
 
 function getUserState(store, userId) {
   const key = String(userId);
@@ -95,6 +113,10 @@ function getConversationOrThrow(userState, conversationId) {
   return conversation;
 }
 
+function getConversation(userState, conversationId) {
+  return userState.conversations[String(conversationId)] || null;
+}
+
 function normalizePlaintextBody(value) {
   if (typeof value === "string") {
     return value;
@@ -140,6 +162,40 @@ function parseEnvelopeAad(aadBase64) {
   } catch {
     return {};
   }
+}
+
+function classifyReceiveMessageErrorCode(error) {
+  const message = String(error?.message || error || "");
+
+  if (/missing verified sender device bundle/i.test(message)) {
+    return "DM_RECEIVE_SENDER_DEVICE_MISSING";
+  }
+
+  if (/sender device bundle user mismatch/i.test(message)) {
+    return "DM_RECEIVE_SENDER_DEVICE_MISMATCH";
+  }
+
+  if (/signature verification failed/i.test(message)) {
+    return "DM_RECEIVE_SIGNATURE_INVALID";
+  }
+
+  if (/unknown chain epoch/i.test(message)) {
+    return "DM_RECEIVE_UNKNOWN_CHAIN_EPOCH";
+  }
+
+  if (/no stored key for out-of-order index/i.test(message)) {
+    return "DM_RECEIVE_OUT_OF_ORDER_KEY_MISSING";
+  }
+
+  if (/message index gap/i.test(message)) {
+    return "DM_RECEIVE_MESSAGE_INDEX_GAP";
+  }
+
+  if (/unable to decrypt dm message with known conversation keys/i.test(message)) {
+    return "DM_RECEIVE_DECRYPT_FAILED";
+  }
+
+  return "DM_RECEIVE_FAILED";
 }
 
 /**
@@ -468,6 +524,10 @@ function normalizeAttachments(value) {
     .filter((entry) => entry && entry.transferId);
 }
 
+function normalizeInlineEmbeds(value) {
+  return normalizeInlineImageEmbeds(value);
+}
+
 function materializeEncryptedAttachments(value) {
   if (!Array.isArray(value)) {
     return [];
@@ -482,6 +542,10 @@ function materializeEncryptedAttachments(value) {
       transferId: entry.transferId
     });
   }).filter(Boolean);
+}
+
+function materializeEncryptedInlineEmbeds(value) {
+  return normalizeInlineEmbeds(value);
 }
 
 function normalizeDisappearingSeconds(value) {
@@ -546,7 +610,10 @@ function mergeStoredMessages(existingMessages, incomingMessages) {
         ...message,
         plaintextCache: existing.plaintextCache ?? message.plaintextCache ?? undefined,
         remoteMessageId: message.remoteMessageId ?? existing.remoteMessageId ?? null,
-        control: message.control ?? existing.control ?? null
+        control: message.control ?? existing.control ?? null,
+        deliveryState: normalizeStoredDeliveryState(message.deliveryState)
+          ?? normalizeStoredDeliveryState(existing.deliveryState)
+          ?? undefined
       });
     });
 
@@ -854,11 +921,29 @@ export function importConversation({ userId, username, conversation }) {
   );
 
   if (!wrappedKey) {
-    // Use a stable code so callers can detect this specific failure without
-    // fragile message-string matching across the IPC boundary.
-    const err = new Error("No wrapped conversation key exists for this device");
-    err.code = "dm_missing_conversation_key";
-    throw err;
+    userState.conversations[String(conversation.id)] = {
+      ...syncConversationRecord(existingConversation, conversation),
+      conversationKey: existingConversation?.conversationKey || null,
+      legacyConversationKeys: existingConversation?.legacyConversationKeys || [],
+      deviceTrust: existingConversation?.deviceTrust || { verifiedDeviceIds: {} },
+      replayProtection: existingConversation?.replayProtection || {
+        seenMessageIds: {},
+        seenRemoteMessageIds: {},
+        seenEnvelopeSignatures: {}
+      },
+      sendingChain: existingConversation?.sendingChain ?? null,
+      receivingChains: existingConversation?.receivingChains ?? {},
+      messages: existingConversation?.messages || []
+    };
+
+    pruneExpiredMessagesInConversation(userState.conversations[String(conversation.id)]);
+    writeSecureDmStore(store);
+
+    return {
+      conversationId: String(conversation.id),
+      messages: null,
+      missingKey: true
+    };
   }
 
   const conversationKey = unwrapConversationKeyForDevice({
@@ -931,7 +1016,11 @@ export function importConversation({ userId, username, conversation }) {
   pruneExpiredMessagesInConversation(userState.conversations[String(conversation.id)]);
 
   writeSecureDmStore(store);
-  return listMessages({ userId, conversationId: conversation.id });
+  return {
+    conversationId: String(conversation.id),
+    messages: listMessages({ userId, conversationId: conversation.id }),
+    missingKey: false
+  };
 }
 
 export function createEncryptedMessage({ userId, username, conversationId, senderUserId, plaintext }) {
@@ -946,6 +1035,7 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
         body: plaintext.body ?? "",
         kind: inferMessageKind(plaintext),
         attachments: materializeEncryptedAttachments(plaintext.attachments),
+        embeds: materializeEncryptedInlineEmbeds(plaintext.embeds),
         createdAt
       }
     : {
@@ -954,6 +1044,44 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
         kind: "message",
         createdAt
       };
+  const inlineImageUsage = summarizeInlineImageEmbedUsage({
+    body: plaintextPayload.body,
+    embeds: plaintextPayload.embeds
+  });
+
+  if (inlineImageUsage.bodyHasEmbedRef && inlineImageUsage.missingReferencedEmbedIds.length > 0) {
+    traceInlineImageDiagnostic({
+      level: "warning",
+      stage: "service.store",
+      reason: "roundtrip-missing",
+      message: "Outgoing secure DM references inline images that are missing from the stored plaintext payload.",
+      body: plaintextPayload.body,
+      embeds: plaintextPayload.embeds,
+      conversationId,
+      surface: "service-store",
+      extraDetails: {
+        senderUserId: Number(senderUserId),
+        missingReferencedEmbedIds: inlineImageUsage.missingReferencedEmbedIds
+      }
+    });
+  } else if (inlineImageUsage.bodyHasEmbedRef) {
+    traceInlineImageDiagnostic({
+      level: "info",
+      debugMode: SHOULD_TRACE_INLINE_IMAGE_INFO,
+      onceKey: `service.store:${String(conversationId || "")}:${String(plaintextPayload.id || "")}`,
+      stage: "service.store",
+      reason: "trace",
+      message: "Stored an outgoing secure DM with referenced inline images in the plaintext cache.",
+      body: plaintextPayload.body,
+      embeds: plaintextPayload.embeds,
+      conversationId,
+      messageId: plaintextPayload.id,
+      surface: "service-store",
+      extraDetails: {
+        senderUserId: Number(senderUserId)
+      }
+    });
+  }
   // ── Ratchet: advance the sending chain and obtain a single-use message key ──
   //
   // ensureSendingChain re-initialises the chain automatically if the conversation
@@ -1009,6 +1137,7 @@ export function createEncryptedMessage({ userId, username, conversationId, sende
     createdAt,
     direction: "outgoing",
     control,
+    deliveryState: "sent",
     // Plaintext cache: the only way to re-read this message after the key advances.
     plaintextCache: JSON.stringify(plaintextPayload)
   };
@@ -1072,6 +1201,10 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
   const conversation = getConversationOrThrow(userState, conversationId);
   const prunedBeforeReceive = pruneExpiredMessagesInConversation(conversation);
   const replayReason = detectReplay(conversation, relayItem);
+  const envelopeAad = parseEnvelopeAad(relayItem?.aad);
+  const isRatchetMessage = Number(envelopeAad.ratchetVersion) >= 1
+    && typeof envelopeAad.messageIndex === "number"
+    && typeof envelopeAad.chainId === "string";
 
   if (replayReason) {
     if (prunedBeforeReceive) {
@@ -1087,6 +1220,8 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
       replayReason
     };
   }
+
+  try {
 
   if (!senderDevice || String(senderDevice.deviceId || "") !== String(relayItem.senderDeviceId || "")) {
     throw new Error("Missing verified sender device bundle for DM message");
@@ -1116,11 +1251,6 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
   // The AAD is authenticated plaintext (not encrypted), so we can read
   // ratchetVersion, chainId, and messageIndex before we decrypt the payload.
   // If these fields are absent the message is legacy (shared conversation key).
-  const envelopeAad = parseEnvelopeAad(relayItem.aad);
-  const isRatchetMessage = Number(envelopeAad.ratchetVersion) >= 1
-    && typeof envelopeAad.messageIndex === "number"
-    && typeof envelopeAad.chainId === "string";
-
   let plaintext;
   let plaintextCache;
 
@@ -1207,6 +1337,7 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
     body: normalizePlaintextBody(plaintext.body),
     replyTo: normalizeReplyTo(plaintext.replyTo),
     attachments: normalizeAttachments(plaintext.attachments),
+    embeds: normalizeInlineEmbeds(plaintext.embeds),
     reactions: normalizeReactions(plaintext.reactions),
     editedAt: plaintext.editedAt || null,
     deletedAt: plaintext.deletedAt || null,
@@ -1218,6 +1349,72 @@ export function receiveEncryptedMessage({ userId, username, conversationId, rela
     direction: "incoming",
     imported: !alreadyExists
   };
+  } catch (error) {
+    throw normalizeAppDiagnosticError(error, {
+      code: classifyReceiveMessageErrorCode(error),
+      userMessage: "Chatapp could not import that secure DM on this device.",
+      source: "dm",
+      operation: "message.receive",
+      severity: "error",
+      deviceId: String(userState?.device?.deviceId || ""),
+      conversationId: String(conversationId || ""),
+      details: {
+        relayMessageId: String(relayItem?.messageId || ""),
+        senderUserId: relayItem?.senderUserId ?? null,
+        senderDeviceId: String(relayItem?.senderDeviceId || ""),
+        ratchetVersion: Number.isFinite(Number(envelopeAad?.ratchetVersion)) ? Number(envelopeAad.ratchetVersion) : null,
+        chainId: typeof envelopeAad?.chainId === "string" ? envelopeAad.chainId : "",
+        messageIndex: typeof envelopeAad?.messageIndex === "number" ? envelopeAad.messageIndex : null,
+        isRatchetMessage
+      }
+    });
+  }
+}
+
+export function setMessageDeliveryState({ userId, conversationId, messageId, deliveryState }) {
+  const normalizedMessageId = messageId != null ? String(messageId) : "";
+
+  if (!normalizedMessageId) {
+    throw new Error("Message id is required");
+  }
+
+  const normalizedDeliveryState = normalizeStoredDeliveryState(deliveryState) || "sent";
+  const store = readSecureDmStore();
+  const userState = getUserState(store, userId);
+  const conversation = getConversationOrThrow(userState, conversationId);
+  const storedMessage = (conversation.messages || []).find((message) => (
+    String(message?.messageId || "") === normalizedMessageId
+      || String(message?.remoteMessageId || "") === normalizedMessageId
+  ));
+
+  if (!storedMessage) {
+    return {
+      ok: false,
+      missing: true,
+      conversationId,
+      messageId: normalizedMessageId
+    };
+  }
+
+  storedMessage.deliveryState = normalizedDeliveryState;
+  writeSecureDmStore(store);
+
+  return {
+    ok: true,
+    conversationId,
+    messageId: normalizedMessageId,
+    deliveryState: normalizedDeliveryState
+  };
+}
+
+export function getConversationAccess({ userId, username, conversationId }) {
+  const { userState } = ensureDevice(userId, username);
+
+  return deriveConversationAccessFromMetadata({
+    conversationId,
+    conversation: getConversation(userState, conversationId),
+    deviceId: userState.device.deviceId
+  });
 }
 
 function buildVisibleMessages({ conversation, userId }) {
@@ -1243,6 +1440,12 @@ function buildVisibleMessages({ conversation, userId }) {
     const targetMessageId = control?.targetMessageId ?? plaintext.targetMessageId;
     const hasControlTarget = Boolean(targetMessageId);
     const normalizedBody = normalizePlaintextBody(plaintext.body);
+    const normalizedEmbeds = normalizeInlineEmbeds(plaintext.embeds);
+    const inlineImageRoundTrip = verifyInlineImageEmbedsRoundTrip({
+      body: normalizedBody,
+      outgoingEmbeds: plaintext.embeds,
+      visibleEmbeds: normalizedEmbeds
+    });
     (Array.isArray(plaintext.attachments) ? plaintext.attachments : []).forEach((attachment) => {
       registerIncomingAttachmentPayload(attachment);
     });
@@ -1253,6 +1456,7 @@ function buildVisibleMessages({ conversation, userId }) {
       && !plaintext.deletedAt
       && !plaintext.reactions
       && normalizeAttachments(plaintext.attachments).length === 0
+      && normalizedEmbeds.length === 0
     );
 
     if (control || hasControlTarget || kind === "edit" || kind === "delete" || kind === "reaction" || kind.startsWith("disappearing")) {
@@ -1284,6 +1488,7 @@ function buildVisibleMessages({ conversation, userId }) {
 
       if (kind === "edit") {
         targetMessage.body = normalizePlaintextBody(plaintext.body || targetMessage.body);
+        targetMessage.embeds = normalizedEmbeds;
         targetMessage.editedAt = plaintext.createdAt || message.createdAt;
       } else {
         targetMessage.body = "Message deleted";
@@ -1298,6 +1503,43 @@ function buildVisibleMessages({ conversation, userId }) {
       return;
     }
 
+    if (inlineImageRoundTrip.visibleUsage.bodyHasEmbedRef && inlineImageRoundTrip.missingOnVisible.length > 0) {
+      traceInlineImageDiagnostic({
+        level: "warning",
+        stage: "service.list",
+        reason: "roundtrip-missing",
+        message: "Visible secure DM message is missing inline images referenced by its markdown body.",
+        body: normalizedBody,
+        embeds: normalizedEmbeds,
+        conversationId: conversation?.conversationId || "",
+        messageId: visibleMessageId,
+        surface: "service-list",
+        extraDetails: {
+          storageMessageId: String(storageMessageId || ""),
+          remoteMessageId: remoteMessageId != null ? String(remoteMessageId) : "",
+          missingReferencedEmbedIds: inlineImageRoundTrip.missingOnVisible
+        }
+      });
+    } else if (inlineImageRoundTrip.visibleUsage.bodyHasEmbedRef) {
+      traceInlineImageDiagnostic({
+        level: "info",
+        debugMode: SHOULD_TRACE_INLINE_IMAGE_INFO,
+        onceKey: `service.list:${String(conversation?.conversationId || "")}:${String(visibleMessageId || "")}`,
+        stage: "service.list",
+        reason: "trace",
+        message: "Visible secure DM message still contains all referenced inline images.",
+        body: normalizedBody,
+        embeds: normalizedEmbeds,
+        conversationId: conversation?.conversationId || "",
+        messageId: visibleMessageId,
+        surface: "service-list",
+        extraDetails: {
+          storageMessageId: String(storageMessageId || ""),
+          remoteMessageId: remoteMessageId != null ? String(remoteMessageId) : ""
+        }
+      });
+    }
+
     const visibleMessage = {
       messageId: visibleMessageId,
       storageMessageId,
@@ -1309,9 +1551,15 @@ function buildVisibleMessages({ conversation, userId }) {
       createdAt: plaintext.createdAt,
       replyTo: normalizeReplyTo(plaintext.replyTo),
       attachments: normalizeAttachments(plaintext.attachments),
+      embeds: normalizedEmbeds,
       reactions: normalizeReactions(plaintext.reactions),
       editedAt: plaintext.editedAt || null,
-      isDeleted: false
+      isDeleted: false,
+      ...(message.direction === "outgoing"
+        ? {
+            deliveryState: normalizeStoredDeliveryState(message.deliveryState) || "sent"
+          }
+        : {})
     };
 
     visibleMessages.push(visibleMessage);

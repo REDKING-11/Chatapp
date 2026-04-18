@@ -73,7 +73,7 @@ function formatAuthSubmitError(error, { isMfaStep, mode }) {
     }).message;
 }
 
-export default function AuthScreen({ onAuthSuccess }) {
+export default function AuthScreen({ onAuthSuccess, noticeMessage = "" }) {
     const [mode, setMode] = useState("login");
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
@@ -223,6 +223,7 @@ export default function AuthScreen({ onAuthSuccess }) {
                         </label>
                     ) : null}
 
+                    {noticeMessage ? <p className="auth-muted-note">{noticeMessage}</p> : null}
                     {error && <p className="auth-error">{error}</p>}
 
                     <button type="submit" disabled={loading || (isMfaStep && totpCode.length !== 6)}>

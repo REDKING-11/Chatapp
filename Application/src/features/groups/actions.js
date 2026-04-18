@@ -2,7 +2,12 @@ import { parseJsonResponse } from "../../lib/api";
 import { getCoreApiBase } from "../../lib/env";
 import { getStoredAuthToken } from "../session/actions";
 import {
+    canReadConversationLocally
+} from "../dm/conversationAccess.js";
+import {
     fetchUserDmDevices,
+    flushPendingSecureDmDeliveryStates,
+    getSecureDmConversationAccess,
     importRemoteConversation,
     sendDirectMessage
 } from "../dm/actions";
@@ -18,30 +23,52 @@ function authHeaders() {
     };
 }
 
-function isMissingLocalConversationError(error) {
-    return /unknown dm conversation|no wrapped conversation key exists for this device/i.test(
-        String(error?.message || error || "")
+function createMissingLocalConversationAccessError(conversationId) {
+    const error = new Error(
+        "This device does not have the local secure DM keys for that conversation yet. Reopen the chat after the local data migration completes, or import your DM device transfer package if this is a new device."
     );
+    error.code = "GROUP_DM_LOCAL_ACCESS_REQUIRED";
+    error.conversationId = String(conversationId || "");
+    return error;
 }
 
-async function hasLocalConversationAccess({ currentUser, conversationId }) {
-    if (!conversationId || !window.secureDm) {
-        return false;
+async function fetchRemoteConversationMetadata(conversationId) {
+    const res = await fetch(
+        `${CORE_API_BASE}/dm/conversations/get.php?conversationId=${encodeURIComponent(conversationId)}`,
+        {
+            headers: {
+                Authorization: `Bearer ${getStoredAuthToken()}`
+            }
+        }
+    );
+    const data = await parseJsonResponse(res, "Failed to load conversation details");
+
+    return data.conversation || { id: conversationId };
+}
+
+async function syncLocalConversationMetadata({ currentUser, conversation }) {
+    if (!window.secureDm?.syncConversationMetadata || !conversation?.id) {
+        return;
     }
 
     try {
-        await window.secureDm.listMessages({
+        await window.secureDm.syncConversationMetadata({
             userId: currentUser.id,
-            conversationId
+            username: currentUser.username,
+            conversation
         });
-        return true;
     } catch (error) {
-        if (isMissingLocalConversationError(error)) {
-            return false;
-        }
-
-        throw error;
+        console.warn("Failed to sync local group conversation metadata:", error);
     }
+}
+
+async function hasLocalConversationAccess({ currentUser, conversationId }) {
+    const access = await getSecureDmConversationAccess({
+        currentUser,
+        conversationId
+    });
+
+    return canReadConversationLocally(access);
 }
 
 export async function fetchGroupConversations() {
@@ -144,6 +171,11 @@ export async function createGroupConversation({
 }
 
 export async function openGroupConversation({ currentUser, conversationId }) {
+    const remoteConversation = await fetchRemoteConversationMetadata(conversationId);
+    await syncLocalConversationMetadata({
+        currentUser,
+        conversation: remoteConversation
+    });
     const hasAccess = await hasLocalConversationAccess({
         currentUser,
         conversationId
@@ -155,21 +187,30 @@ export async function openGroupConversation({ currentUser, conversationId }) {
             currentUser,
             conversationId
         });
+        const access = await getSecureDmConversationAccess({
+            currentUser,
+            conversationId
+        });
 
         return {
-            conversation: imported.conversation,
-            messages: imported.messages || []
+            conversation: imported.conversation || remoteConversation,
+            messages: imported.messages || [],
+            hasLocalAccess: canReadConversationLocally(access)
         };
     }
 
+    await flushPendingSecureDmDeliveryStates({
+        currentUser,
+        conversationId
+    });
+
     return {
-        conversation: {
-            id: conversationId
-        },
+        conversation: remoteConversation,
         messages: await window.secureDm.listMessages({
             userId: currentUser.id,
             conversationId
-        })
+        }),
+        hasLocalAccess: true
     };
 }
 
@@ -180,6 +221,15 @@ export async function sendGroupConversationMessage({
     replyTo = null,
     attachments = []
 }) {
+    const opened = await openGroupConversation({
+        currentUser,
+        conversationId
+    });
+
+    if (opened.hasLocalAccess === false) {
+        throw createMissingLocalConversationAccessError(conversationId);
+    }
+
     await sendDirectMessage({
         token: getStoredAuthToken(),
         currentUser,
@@ -283,7 +333,8 @@ export async function acceptGroupInvite({ currentUser, inviteId }) {
     return {
         inviteId,
         conversation: data.conversation,
-        messages: opened.messages || []
+        messages: opened.messages || [],
+        hasLocalAccess: opened.hasLocalAccess !== false
     };
 }
 

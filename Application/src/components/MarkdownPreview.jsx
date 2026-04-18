@@ -5,6 +5,10 @@ import { detectMarkdownSyntax } from "../lib/markdownPreview";
 export default function MarkdownPreview({
     value,
     label = "Preview",
+    allowImages = true,
+    secureDmImageMode = false,
+    secureDmEmbeds = null,
+    secureDmDiagnosticContext = null,
     linkContext = null
 }) {
     if (!detectMarkdownSyntax(value)) {
@@ -18,6 +22,10 @@ export default function MarkdownPreview({
                 as="div"
                 className="markdown-body markdown-preview-body"
                 value={value}
+                allowImages={allowImages}
+                secureDmImageMode={secureDmImageMode}
+                secureDmEmbeds={secureDmEmbeds}
+                secureDmDiagnosticContext={secureDmDiagnosticContext}
                 linkContext={linkContext}
             />
         </div>

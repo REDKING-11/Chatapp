@@ -1,5 +1,9 @@
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
+const packageJson = require('./package.json');
+
+const isPrereleaseVersion = /-/.test(packageJson.version);
+const WINDOWS_APP_USER_MODEL_ID = 'com.redfolder.librechat';
 
 module.exports = {
   packagerConfig: {
@@ -11,7 +15,7 @@ module.exports = {
       CompanyName: 'REDKING-11',
       FileDescription: 'Privacy-first desktop chat',
       OriginalFilename: 'Chatapp.exe',
-      ProductName: 'Chatapp',
+      ProductName: 'LibreChat',
       InternalName: 'Chatapp'
     }
   },
@@ -22,16 +26,17 @@ module.exports = {
       config: {
         language: 1033,
         manufacturer: 'REDKING-11',
-        name: 'Chatapp',
-        shortName: 'Chatapp',
+        name: 'LibreChat',
+        shortName: 'LibreChat',
         description: 'Privacy-first desktop chat with local-first encrypted messaging.',
         exe: 'Chatapp.exe',
         upgradeCode: 'fef5f711-cbd1-4a96-80d8-9b08c5ec0fb8',
         nestedFolderName: 'RedFolder',
         programFilesFolderName: 'LibreChat',
-        shortcutFolderName: 'Chatapp',
-        shortcutName: 'Chatapp',
+        shortcutFolderName: 'LibreChat',
+        shortcutName: 'LibreChat',
         defaultInstallMode: 'perMachine',
+        appUserModelId: WINDOWS_APP_USER_MODEL_ID,
         features: false,
         ui: {
           chooseDirectory: true
@@ -89,5 +94,18 @@ module.exports = {
       [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
       [FuseV1Options.OnlyLoadAppFromAsar]: true,
     }),
+  ],
+  publishers: [
+    {
+      name: '@electron-forge/publisher-github',
+      config: {
+        repository: {
+          owner: 'REDKING-11',
+          name: 'Chatapp',
+        },
+        prerelease: isPrereleaseVersion,
+        draft: false,
+      },
+    },
   ],
 };

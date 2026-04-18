@@ -2,6 +2,10 @@ import { useMemo, useState } from "react";
 import ProfileDock from "../../../components/ProfileDock";
 import addFriendIcon from "../../../assets/add-friend.png";
 import addFriendWhiteIcon from "../../../assets/add-friend-white.png";
+import {
+    formatPresenceWithSecondaryText,
+    resolvePresenceMeta
+} from "../../presence";
 
 function getFriendActivityTimestamp(friend, conversationPreviews) {
     const preview = friend?.conversationId
@@ -95,7 +99,7 @@ function GroupSection({
 
 function FriendCard({
     friend,
-    presenceState = "offline",
+    presence = null,
     selectedFriendId,
     activeView,
     friendTagLookup,
@@ -108,8 +112,10 @@ function FriendCard({
     const previewText = friend.conversationId
         ? conversationPreviews[String(friend.conversationId)]?.text || ""
         : "";
-    const displayStatus = friend.conversationId ? "Secure conversation ready" : "Start a secure chat";
+    const fallbackStatusText = friend.conversationId ? "Secure conversation ready" : "Start a secure chat";
     const initial = String(friend.friendUsername || "?").trim().slice(0, 1).toUpperCase() || "?";
+    const resolvedPresence = resolvePresenceMeta(presence);
+    const displayStatus = formatPresenceWithSecondaryText(resolvedPresence, previewText || fallbackStatusText);
 
     return (
         <button
@@ -118,11 +124,11 @@ function FriendCard({
             onClick={() => onSelectFriend(friend.friendUserId)}
             onContextMenu={(event) => onOpenFriendContextMenu(event, friend)}
         >
-            <span className={`friend-card-avatar-wrap is-${presenceState}`.trim()} aria-hidden="true">
+            <span className={`friend-card-avatar-wrap is-${resolvedPresence.tone}`.trim()} aria-hidden="true">
                 <span className="friend-card-avatar">{initial}</span>
                 <span
-                    className={`friend-card-presence-dot is-${presenceState}`.trim()}
-                    title={presenceState === "online" ? "Online" : "Offline"}
+                    className={`friend-card-presence-dot is-${resolvedPresence.tone}`.trim()}
+                    title={resolvedPresence.label}
                 />
             </span>
             <span className="friend-card-body">
@@ -132,7 +138,15 @@ function FriendCard({
                 {assignedTag ? (
                     <small className="friend-tag-pill" title={assignedTag.label}>{assignedTag.label}</small>
                 ) : null}
-                <span className="friend-card-status">{previewText || displayStatus}</span>
+                <span className="friend-card-status" title={displayStatus}>
+                    <span className={`friend-card-status-presence is-${resolvedPresence.tone}`.trim()}>
+                        {resolvedPresence.label}
+                    </span>
+                    <span className="friend-card-status-separator" aria-hidden="true"> · </span>
+                    <span className="friend-card-status-text">
+                        {previewText || fallbackStatusText}
+                    </span>
+                </span>
             </span>
         </button>
     );
@@ -175,7 +189,7 @@ function FriendFolderSection({
                         <FriendCard
                             key={friend.friendshipId}
                             friend={friend}
-                            presenceState={presenceByUserId?.[String(friend.friendUserId)] || "offline"}
+                            presence={presenceByUserId?.[String(friend.friendUserId)] || null}
                             selectedFriendId={selectedFriendId}
                             activeView={activeView}
                             friendTagLookup={friendTagLookup}
@@ -280,7 +294,7 @@ export default function FriendsRail({
                     <FriendCard
                         key={friend.friendshipId}
                         friend={friend}
-                        presenceState={presenceByUserId?.[String(friend.friendUserId)] || "offline"}
+                        presence={presenceByUserId?.[String(friend.friendUserId)] || null}
                         selectedFriendId={selectedFriendId}
                         activeView={activeView}
                         friendTagLookup={friendTagLookup}

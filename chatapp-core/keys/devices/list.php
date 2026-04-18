@@ -48,19 +48,6 @@ jsonResponse([
     'userId' => $userId,
     'includesRevoked' => $includeRevoked,
     'devices' => array_map(function ($row) {
-        return [
-            'userId' => (int)$row['user_id'],
-            'deviceId' => $row['device_id'],
-            'deviceName' => $row['device_name'],
-            'encryptionPublicKey' => $row['encryption_public_key'],
-            'signingPublicKey' => $row['signing_public_key'],
-            'keyVersion' => (int)$row['key_version'],
-            'algorithm' => 'x25519-aes-256-gcm',
-            'signingAlgorithm' => 'ed25519',
-            'bundleSignature' => $row['bundle_signature'],
-            'createdAt' => $row['created_at'],
-            'updatedAt' => $row['updated_at'],
-            'revokedAt' => $row['revoked_at']
-        ];
+        return keysBuildPublishedDevicePayload($row);
     }, $rows)
 ]);

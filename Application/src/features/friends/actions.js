@@ -1,10 +1,19 @@
-import { parseJsonResponse } from "../../lib/api";
+import {
+    fetchWithNetworkErrorContext,
+    parseJsonResponse
+} from "../../lib/api";
 import { getCoreApiBase } from "../../lib/env";
+import { normalizeAppDiagnosticError } from "../../lib/diagnostics.js";
 import { getStoredAuthToken } from "../session/actions";
+import {
+    canReadConversationLocally
+} from "../dm/conversationAccess.js";
 import {
     createDirectConversation,
     DISAPPEARING_MESSAGE_OPTIONS,
     fetchUserDmDevices,
+    flushPendingSecureDmDeliveryStates,
+    getSecureDmConversationAccess,
     importRemoteConversation,
     RELAY_RETENTION_OPTIONS,
     updateRelayRetention,
@@ -13,6 +22,14 @@ import {
 } from "../dm/actions";
 
 const CORE_API_BASE = getCoreApiBase();
+
+function wrapFriendsError(error, overrides = {}) {
+    return normalizeAppDiagnosticError(error, {
+        source: "friends",
+        severity: "error",
+        ...overrides
+    });
+}
 
 function authHeaders() {
     const token = getStoredAuthToken();
@@ -23,10 +40,13 @@ function authHeaders() {
     };
 }
 
-function isMissingLocalConversationError(error) {
-    return /unknown dm conversation|no wrapped conversation key exists for this device/i.test(
-        String(error?.message || error || "")
+function createMissingLocalConversationAccessError(conversationId) {
+    const error = new Error(
+        "This device does not have the local secure DM keys for that conversation yet. Reopen the chat after the local data migration completes, or import your DM device transfer package if this is a new device."
     );
+    error.code = "FRIENDS_DM_LOCAL_ACCESS_REQUIRED";
+    error.conversationId = String(conversationId || "");
+    return error;
 }
 
 async function fetchRemoteConversationMetadata(conversationId) {
@@ -60,33 +80,35 @@ async function syncLocalConversationMetadata({ currentUser, conversation }) {
 }
 
 async function hasLocalConversationAccess({ currentUser, conversationId }) {
-    if (!conversationId || !window.secureDm) {
-        return false;
-    }
+    const access = await getSecureDmConversationAccess({
+        currentUser,
+        conversationId
+    });
 
-    try {
-        await window.secureDm.listMessages({
-            userId: currentUser.id,
-            conversationId
-        });
-        return true;
-    } catch (error) {
-        if (isMissingLocalConversationError(error)) {
-            return false;
-        }
-
-        throw error;
-    }
+    return canReadConversationLocally(access);
 }
 
 export async function fetchFriends() {
-    const res = await fetch(`${CORE_API_BASE}/friends/list.php`, {
-        headers: {
-            Authorization: `Bearer ${getStoredAuthToken()}`
-        }
-    });
+    try {
+        const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/friends/list.php`, {
+            headers: {
+                Authorization: `Bearer ${getStoredAuthToken()}`
+            }
+        });
 
-    return parseJsonResponse(res, "Failed to load friends");
+        return await parseJsonResponse(res, {
+            fallbackMessage: "Failed to load friends",
+            source: "friends",
+            operation: "friends.load",
+            method: "GET"
+        });
+    } catch (error) {
+        throw wrapFriendsError(error, {
+            code: "FRIENDS_LOAD_FAILED",
+            userMessage: "Could not load your friends right now.",
+            operation: "friends.load"
+        });
+    }
 }
 
 export async function fetchHistoryAccessStatus({ friendUserId, conversationId }) {
@@ -247,32 +269,28 @@ export async function openFriendConversation({ currentUser, friend }) {
         });
 
         if (!hasAccess) {
-            try {
-                const imported = await importRemoteConversation({
-                    token: getStoredAuthToken(),
-                    currentUser,
-                    conversationId: friend.conversationId
-                });
-
-                return {
-                    conversationId: friend.conversationId,
-                    messages: imported.messages || [],
-                    conversation: imported.conversation || remoteConversation,
-                    hasLocalAccess: true
-                };
-            } catch (error) {
-                if (!isMissingLocalConversationError(error)) {
-                    throw error;
-                }
-            }
+            const imported = await importRemoteConversation({
+                token: getStoredAuthToken(),
+                currentUser,
+                conversationId: friend.conversationId
+            });
+            const access = await getSecureDmConversationAccess({
+                currentUser,
+                conversationId: friend.conversationId
+            });
 
             return {
                 conversationId: friend.conversationId,
-                messages: [],
-                conversation: remoteConversation,
-                hasLocalAccess: false
+                messages: imported.messages || [],
+                conversation: imported.conversation || remoteConversation,
+                hasLocalAccess: canReadConversationLocally(access)
             };
         }
+
+        await flushPendingSecureDmDeliveryStates({
+            currentUser,
+            conversationId: friend.conversationId
+        });
 
         return {
             conversationId: friend.conversationId,
@@ -294,45 +312,64 @@ export async function openFriendConversation({ currentUser, friend }) {
 }
 
 export async function importPendingHistoryTransfers({ currentUser }) {
-    const device = await window.secureDm.getDeviceBundle({
-        userId: currentUser.id,
-        username: currentUser.username
-    });
-
-    const pendingRes = await fetch(
-        `${CORE_API_BASE}/friends/history_pending.php?deviceId=${encodeURIComponent(device.deviceId)}`,
-        {
-            headers: {
-                Authorization: `Bearer ${getStoredAuthToken()}`
-            }
-        }
-    );
-    const pendingData = await parseJsonResponse(pendingRes, "Failed to load pending history downloads");
-    const imported = [];
-
-    for (const item of pendingData.items || []) {
-        const messages = await window.secureDm.importConversationPackage({
+    try {
+        const device = await window.secureDm.getDeviceBundle({
             userId: currentUser.id,
-            username: currentUser.username,
-            conversation: JSON.parse(item.conversationBlob),
-            wrappedKey: JSON.parse(item.wrappedKey)
-        });
-        imported.push({
-            transferId: item.transferId,
-            conversationId: item.conversationId,
-            messages
+            username: currentUser.username
         });
 
-        await fetch(`${CORE_API_BASE}/friends/history_ack.php`, {
-            method: "POST",
-            headers: authHeaders(),
-            body: JSON.stringify({
-                transferId: item.transferId
-            })
+        const pendingRes = await fetchWithNetworkErrorContext(
+            `${CORE_API_BASE}/friends/history_pending.php?deviceId=${encodeURIComponent(device.deviceId)}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${getStoredAuthToken()}`
+                }
+            }
+        );
+        const pendingData = await parseJsonResponse(pendingRes, {
+            fallbackMessage: "Failed to load pending history downloads",
+            source: "friends",
+            operation: "history.import.pending",
+            method: "GET"
+        });
+        const imported = [];
+
+        for (const item of pendingData.items || []) {
+            const messages = await window.secureDm.importConversationPackage({
+                userId: currentUser.id,
+                username: currentUser.username,
+                conversation: JSON.parse(item.conversationBlob),
+                wrappedKey: JSON.parse(item.wrappedKey)
+            });
+            imported.push({
+                transferId: item.transferId,
+                conversationId: item.conversationId,
+                messages
+            });
+
+            const ackRes = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/friends/history_ack.php`, {
+                method: "POST",
+                headers: authHeaders(),
+                body: JSON.stringify({
+                    transferId: item.transferId
+                })
+            });
+            await parseJsonResponse(ackRes, {
+                fallbackMessage: "Failed to acknowledge imported conversation history",
+                source: "friends",
+                operation: "history.import.ack",
+                method: "POST"
+            });
+        }
+
+        return imported;
+    } catch (error) {
+        throw wrapFriendsError(error, {
+            code: "FRIENDS_HISTORY_IMPORT_FAILED",
+            userMessage: "Could not import pending conversation history right now.",
+            operation: "history.import"
         });
     }
-
-    return imported;
 }
 
 export async function initializeFriendDirectConversation({ currentUser, friend, relayTtlSeconds, messageTtlSeconds = 0 }) {
@@ -349,7 +386,8 @@ export async function initializeFriendDirectConversation({ currentUser, friend, 
         return {
             conversationId,
             messages: opened.messages,
-            conversation: opened.conversation
+            conversation: opened.conversation,
+            hasLocalAccess: opened.hasLocalAccess !== false
         };
     }
 
@@ -379,48 +417,73 @@ export async function initializeFriendDirectConversation({ currentUser, friend, 
     return {
         conversationId,
         messages: opened.messages,
-        conversation: conversation || opened.conversation
+        conversation: conversation || opened.conversation,
+        hasLocalAccess: opened.hasLocalAccess !== false
     };
 }
 
-export async function sendFriendDirectMessage({ currentUser, friend, body, relayTtlSeconds, messageTtlSeconds = 0, replyTo = null, attachments = [] }) {
-    const initialized = await initializeFriendDirectConversation({
-        currentUser,
-        friend,
-        relayTtlSeconds,
-        messageTtlSeconds
-    });
-    const conversationId = initialized.conversationId;
+export async function sendFriendDirectMessage({
+    currentUser,
+    friend,
+    body,
+    relayTtlSeconds,
+    messageTtlSeconds = 0,
+    replyTo = null,
+    attachments = [],
+    embeds = []
+}) {
+    try {
+        const initialized = await initializeFriendDirectConversation({
+            currentUser,
+            friend,
+            relayTtlSeconds,
+            messageTtlSeconds
+        });
+        const conversationId = initialized.conversationId;
 
-    const sendResult = await sendDirectMessage({
-        token: getStoredAuthToken(),
-        currentUser,
-        conversationId,
-        body,
-        messageOptions: {
-          kind: "message",
-          replyTo,
-          attachments
+        if (initialized.hasLocalAccess === false) {
+            throw createMissingLocalConversationAccessError(conversationId);
         }
-    });
 
-    const opened = await openFriendConversation({
-        currentUser,
-        friend: {
-            ...friend,
-            conversationId
-        }
-    });
+        const sendResult = await sendDirectMessage({
+            token: getStoredAuthToken(),
+            currentUser,
+            conversationId,
+            body,
+            messageOptions: {
+              kind: "message",
+              replyTo,
+              attachments,
+              embeds
+            }
+        });
 
-    return {
-        conversationId,
-        outboundMessageId: sendResult?.message?.id || null,
-        messages: opened.messages,
-        conversation: initialized.conversation || opened.conversation
-    };
+        const opened = await openFriendConversation({
+            currentUser,
+            friend: {
+                ...friend,
+                conversationId
+            }
+        });
+
+        return {
+            conversationId,
+            outboundMessageId: sendResult?.message?.id || null,
+            messages: opened.messages,
+            conversation: initialized.conversation || opened.conversation
+        };
+    } catch (error) {
+        throw wrapFriendsError(error, {
+            code: "FRIENDS_DM_SEND_FAILED",
+            userMessage: String(error?.userMessage || "").trim() || "Could not send that message right now.",
+            operation: "dm.send",
+            friendUserId: String(friend?.friendUserId || ""),
+            conversationId: String(friend?.conversationId || "")
+        });
+    }
 }
 
-export async function editFriendDirectMessage({ currentUser, friend, messageId, body }) {
+export async function editFriendDirectMessage({ currentUser, friend, messageId, body, embeds = [] }) {
     await sendDirectMessage({
         token: getStoredAuthToken(),
         currentUser,
@@ -428,7 +491,8 @@ export async function editFriendDirectMessage({ currentUser, friend, messageId, 
         body,
         messageOptions: {
             kind: "edit",
-            targetMessageId: messageId
+            targetMessageId: messageId,
+            embeds
         }
     });
 

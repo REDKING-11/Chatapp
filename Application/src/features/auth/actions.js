@@ -1,4 +1,4 @@
-import { parseJsonResponse } from "../../lib/api";
+import { fetchWithNetworkErrorContext, parseJsonResponse } from "../../lib/api";
 import { getCoreApiBase } from "../../lib/env";
 import { getStoredAuthToken, saveAuthSession } from "../session/actions";
 
@@ -24,7 +24,7 @@ function buildAuthRequestHeaders(includeToken = false) {
 }
 
 export async function loginUser({ username, password }) {
-    const res = await fetch(`${CORE_API_BASE}/auth/login.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/login.php`, {
         method: "POST",
         headers: buildAuthRequestHeaders(),
         body: JSON.stringify({
@@ -37,7 +37,7 @@ export async function loginUser({ username, password }) {
 }
 
 export async function completeMfaLogin({ username, password, challengeId, totpCode }) {
-    const res = await fetch(`${CORE_API_BASE}/auth/login.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/login.php`, {
         method: "POST",
         headers: buildAuthRequestHeaders(),
         body: JSON.stringify({
@@ -58,7 +58,7 @@ export async function completeMfaLogin({ username, password, challengeId, totpCo
 }
 
 export async function registerUser({ username, password, email, phone }) {
-    const res = await fetch(`${CORE_API_BASE}/auth/register.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/register.php`, {
         method: "POST",
         headers: buildAuthRequestHeaders(),
         body: JSON.stringify({ username, password, email, phone })
@@ -68,7 +68,7 @@ export async function registerUser({ username, password, email, phone }) {
 }
 
 export async function updateUserProfile({ displayName }) {
-    const res = await fetch(`${CORE_API_BASE}/auth/profile.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/profile.php`, {
         method: "POST",
         headers: buildAuthRequestHeaders(true),
         body: JSON.stringify({ displayName })
@@ -95,7 +95,7 @@ export async function submitAuth({ mode, username, password, email, phone }) {
 }
 
 export async function fetchMfaStatus({ token }) {
-    const res = await fetch(`${CORE_API_BASE}/auth/mfa_status.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/mfa_status.php`, {
         headers: {
             Authorization: `Bearer ${token}`
         }
@@ -105,7 +105,7 @@ export async function fetchMfaStatus({ token }) {
 }
 
 export async function beginMfaSetup({ token }) {
-    const res = await fetch(`${CORE_API_BASE}/auth/mfa_setup.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/mfa_setup.php`, {
         method: "POST",
         headers: {
             Authorization: `Bearer ${token}`
@@ -116,7 +116,7 @@ export async function beginMfaSetup({ token }) {
 }
 
 export async function enableMfa({ token, totpCode }) {
-    const res = await fetch(`${CORE_API_BASE}/auth/mfa_enable.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/mfa_enable.php`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -129,7 +129,7 @@ export async function enableMfa({ token, totpCode }) {
 }
 
 export async function disableMfa({ token, totpCode }) {
-    const res = await fetch(`${CORE_API_BASE}/auth/mfa_disable.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/mfa_disable.php`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -142,7 +142,7 @@ export async function disableMfa({ token, totpCode }) {
 }
 
 export async function fetchSessions({ token }) {
-    const res = await fetch(`${CORE_API_BASE}/auth/sessions_list.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/sessions_list.php`, {
         headers: {
             Authorization: `Bearer ${token}`
         }
@@ -152,7 +152,7 @@ export async function fetchSessions({ token }) {
 }
 
 export async function revokeSession({ token, publicId }) {
-    const res = await fetch(`${CORE_API_BASE}/auth/sessions_revoke.php`, {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/sessions_revoke.php`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",

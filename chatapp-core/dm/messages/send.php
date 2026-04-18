@@ -20,6 +20,26 @@ if ($conversationId <= 0) {
 dmLoadConversationOrFail($db, $conversationId, (int)$user['id']);
 dmCleanupExpiredRelayQueue($db);
 $relayTtlSeconds = dmGetConversationRelayTtlSeconds($db, $conversationId);
+$senderDeviceState = dmDescribePublishedDeviceState($db, (int)$user['id'], $senderDeviceId);
+
+if ($senderDeviceState['status'] === 'missing') {
+    jsonResponse([
+        'error' => 'Sender device is not registered',
+        'code' => 'DEVICE_NOT_REGISTERED',
+        'deviceId' => $senderDeviceId
+    ], 409);
+}
+
+if ($senderDeviceState['status'] === 'revoked') {
+    jsonResponse([
+        'error' => 'Sender device was revoked and must be re-authorized with MFA before it can send secure DMs.',
+        'code' => 'DEVICE_REAUTH_REQUIRED',
+        'deviceId' => $senderDeviceId,
+        'deviceStatus' => 'revoked'
+    ], 409);
+}
+
+$senderDevice = $senderDeviceState['row'];
 
 $allowedRecipientStmt = $db->prepare('
     SELECT device_id
@@ -45,13 +65,18 @@ try {
                 sender_user_id,
                 recipient_device_id,
                 sender_device_id,
+                sender_device_name,
+                sender_encryption_public_key,
+                sender_signing_public_key,
+                sender_key_version,
+                sender_bundle_signature,
                 ciphertext,
                 nonce,
                 aad,
                 tag,
                 message_signature,
                 expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
         ');
 
         foreach ($recipientDeviceIds as $recipientDeviceIdRaw) {
@@ -71,6 +96,11 @@ try {
                 (int)$user['id'],
                 $recipientDeviceId,
                 $senderDeviceId,
+                $senderDevice['device_name'] ?? null,
+                $senderDevice['encryption_public_key'] ?? null,
+                $senderDevice['signing_public_key'] ?? null,
+                $senderDevice['key_version'] ?? null,
+                $senderDevice['bundle_signature'] ?? null,
                 $envelope['ciphertext'],
                 $envelope['nonce'],
                 $envelope['aad'],

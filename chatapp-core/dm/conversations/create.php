@@ -132,6 +132,12 @@ try {
         $messageId = dmRequireString($initialMessage, 'messageId', 'messageId is required');
         $senderDeviceId = dmRequireString($initialMessage, 'senderDeviceId', 'senderDeviceId is required');
         $recipientDeviceIds = dmRequireArray($initialMessage, 'recipientDeviceIds', 'recipientDeviceIds is required');
+        $senderDevice = dmFindPublishedDeviceRow($db, (int)$user['id'], $senderDeviceId, true);
+
+        if (!$senderDevice) {
+            throw new RuntimeException('Sender device is not registered');
+        }
+
         $relayStmt = $db->prepare('
             INSERT INTO dm_relay_queue (
                 message_id,
@@ -139,13 +145,18 @@ try {
                 sender_user_id,
                 recipient_device_id,
                 sender_device_id,
+                sender_device_name,
+                sender_encryption_public_key,
+                sender_signing_public_key,
+                sender_key_version,
+                sender_bundle_signature,
                 ciphertext,
                 nonce,
                 aad,
                 tag,
                 message_signature,
                 expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
         ');
 
         foreach ($recipientDeviceIds as $recipientDeviceIdRaw) {
@@ -161,6 +172,11 @@ try {
                 (int)$user['id'],
                 $recipientDeviceId,
                 $senderDeviceId,
+                $senderDevice['device_name'] ?? null,
+                $senderDevice['encryption_public_key'] ?? null,
+                $senderDevice['signing_public_key'] ?? null,
+                $senderDevice['key_version'] ?? null,
+                $senderDevice['bundle_signature'] ?? null,
                 $envelope['ciphertext'],
                 $envelope['nonce'],
                 $envelope['aad'],
