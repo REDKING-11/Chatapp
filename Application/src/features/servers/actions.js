@@ -11,6 +11,32 @@ function normalizeJoinedServer(server) {
     };
 }
 
+function normalizeJoinedServers(servers) {
+    if (!Array.isArray(servers)) {
+        return [];
+    }
+
+    const normalizedServers = [];
+
+    servers.forEach((server) => {
+        try {
+            normalizedServers.push(normalizeJoinedServer(server));
+        } catch (error) {
+            console.warn(
+                "Skipping joined server with insecure or invalid backend URL:",
+                {
+                    id: server?.id ?? null,
+                    name: server?.name ?? null,
+                    backendUrl: server?.backendUrl || server?.connectUrl || null,
+                    error: error?.message || String(error)
+                }
+            );
+        }
+    });
+
+    return normalizedServers;
+}
+
 function normalizeServerFetchError(error, fallbackMessage) {
     if (error instanceof TypeError) {
         return new Error(fallbackMessage);
@@ -46,7 +72,7 @@ export async function fetchUserServers() {
     });
 
     const data = await parseJsonResponse(res, "Failed to load joined servers");
-    return Array.isArray(data) ? data.map(normalizeJoinedServer) : [];
+    return normalizeJoinedServers(data);
 }
 
 export async function joinServer({ backendUrl }) {

@@ -1,3 +1,8 @@
+import {
+    buildDiagnosticDebugDetails,
+    normalizeAppDiagnosticError
+} from "./diagnostics.js";
+
 export function isDebugModeEnabled() {
     if (typeof document !== "undefined" && document.body?.dataset.debugMode) {
         return document.body.dataset.debugMode === "true";
@@ -27,10 +32,13 @@ export function formatAppError(error, options = {}) {
         invalidResponseMessage = "The server returned an invalid response.",
         context = ""
     } = options;
-    const userMessage = typeof error?.userMessage === "string"
-        ? error.userMessage.trim()
+    const diagnostic = normalizeAppDiagnosticError(error, {
+        userMessage: error?.userMessage || ""
+    });
+    const userMessage = typeof diagnostic.userMessage === "string"
+        ? diagnostic.userMessage.trim()
         : "";
-    const rawMessage = normalizeErrorMessage(error);
+    const rawMessage = normalizeErrorMessage(diagnostic);
     const lowerMessage = rawMessage.toLowerCase();
     const debugMode = isDebugModeEnabled();
 
@@ -52,18 +60,23 @@ export function formatAppError(error, options = {}) {
         message = invalidResponseMessage;
     } else if (debugMode) {
         message = rawMessage;
-    } else if (/offline|not queued|not available|unknown dm conversation/i.test(rawMessage)) {
+    } else if (
+        /offline|not queued|not available|unknown dm conversation|device (?:not found|is not registered)|revoked|re-authoriz|not set up secure dms|could not be verified|awaiting approval|encrypted chat/i.test(rawMessage)
+    ) {
         message = rawMessage;
     }
 
-    const debugDetails = rawMessage
-        ? `${context ? `${context}: ` : ""}${rawMessage}`
-        : "";
+    const debugDetails = buildDiagnosticDebugDetails(diagnostic, {
+        context
+    });
 
     return {
         message,
         debugDetails,
         rawMessage,
-        debugMode
+        debugMode,
+        code: diagnostic.code,
+        traceId: diagnostic.traceId || "",
+        diagnostic
     };
 }

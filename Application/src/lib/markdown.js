@@ -1,5 +1,9 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import {
+    getMarkdownInlineImageMatches,
+    parseInlineImageEmbedUri
+} from "../features/dm/inlineEmbeds";
 
 function encodePayload(value) {
     return encodeURIComponent(value);
@@ -9,9 +13,44 @@ function createEnhancedBlock(kind, payload, label) {
     return `<div class="md-enhanced-block md-${kind}" data-md-kind="${kind}" data-md-source="${encodePayload(payload)}"><div class="md-enhanced-fallback">${label}</div></div>`;
 }
 
-const renderer = new marked.Renderer();
-const defaultCodeRenderer = renderer.code.bind(renderer);
-const defaultHeadingRenderer = renderer.heading.bind(renderer);
+function escapeHtml(value) {
+    return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+function createSecureDmImagePlaceholder(embedId, alt, size = null) {
+    return `<span class="md-secure-dm-image" data-md-kind="secure-dm-image" data-md-source="${encodePayload(JSON.stringify({
+        embedId,
+        alt: String(alt || "Image"),
+        widthPx: Number(size?.widthPx) || 0,
+        heightPx: Number(size?.heightPx) || 0
+    }))}"></span>`;
+}
+
+function rewriteSecureDmMarkdownImages(value) {
+    const source = String(value || "");
+
+    return getMarkdownInlineImageMatches(source).reduce((currentValue, match) => {
+        const alt = String(match.alt || "");
+        const href = String(match.href || "");
+        const embedId = parseInlineImageEmbedUri(href);
+        const normalizedAlt = String(alt || "").trim() || "Image";
+        const normalizedHref = String(href || "").trim();
+
+        if (embedId) {
+            return currentValue.replace(match.fullMatch, createSecureDmImagePlaceholder(embedId, normalizedAlt, match.size));
+        }
+
+        if (!normalizedHref) {
+            return currentValue.replace(match.fullMatch, escapeHtml(normalizedAlt));
+        }
+
+        return currentValue.replace(match.fullMatch, `[${normalizedAlt}](${normalizedHref})`);
+    }, source);
+}
 
 function slugifyHeading(value) {
     return String(value || "")
@@ -22,41 +61,62 @@ function slugifyHeading(value) {
         .replace(/^-+|-+$/g, "");
 }
 
-renderer.code = (token) => {
-    const lang = String(token.lang || "").trim().toLowerCase();
-    const text = String(token.text || "");
+function createMarkdownRenderer({ allowImages = true, secureDmImageMode = false } = {}) {
+    const renderer = new marked.Renderer();
+    const defaultCodeRenderer = renderer.code.bind(renderer);
+    const defaultHeadingRenderer = renderer.heading.bind(renderer);
+    const defaultImageRenderer = renderer.image.bind(renderer);
 
-    if (lang === "mermaid") {
-        return createEnhancedBlock("mermaid", text, "Mermaid diagram");
-    }
+    renderer.code = (token) => {
+        const lang = String(token.lang || "").trim().toLowerCase();
+        const text = String(token.text || "");
 
-    if (["chart", "chartjs", "chart-json", "bar", "line", "pie", "doughnut"].includes(lang)) {
-        const payload = JSON.stringify({ lang, text });
-        return createEnhancedBlock("chart", payload, "Chart");
-    }
+        if (lang === "mermaid") {
+            return createEnhancedBlock("mermaid", text, "Mermaid diagram");
+        }
 
-    return defaultCodeRenderer(token);
-};
+        if (["chart", "chartjs", "chart-json", "bar", "line", "pie", "doughnut"].includes(lang)) {
+            const payload = JSON.stringify({ lang, text });
+            return createEnhancedBlock("chart", payload, "Chart");
+        }
 
-renderer.heading = (token) => {
-    const rawText = String(token.text || "");
-    const id = slugifyHeading(rawText);
-    const html = defaultHeadingRenderer(token);
+        return defaultCodeRenderer(token);
+    };
 
-    if (!id) {
-        return html;
-    }
+    renderer.heading = (token) => {
+        const rawText = String(token.text || "");
+        const id = slugifyHeading(rawText);
+        const html = defaultHeadingRenderer(token);
 
-    return html.replace(/^<h([1-6])>/, `<h$1 id="${id}">`);
-};
+        if (!id) {
+            return html;
+        }
 
-marked.setOptions({
-    renderer,
-    gfm: true,
-    breaks: true
-});
+        return html.replace(/^<h([1-6])>/, `<h$1 id="${id}">`);
+    };
 
-function buildAllowedTags({ inline = false } = {}) {
+    renderer.image = (token) => {
+        const href = String(token?.href || "").trim();
+        const alt = String(token?.text || token?.title || "Image").trim() || "Image";
+        const secureDmEmbedId = secureDmImageMode ? parseInlineImageEmbedUri(href) : "";
+
+        if (secureDmEmbedId) {
+            return createSecureDmImagePlaceholder(secureDmEmbedId, alt);
+        }
+
+        if (!allowImages) {
+            return href
+                ? `<a href="${escapeHtml(href)}">${escapeHtml(alt || href)}</a>`
+                : escapeHtml(alt);
+        }
+
+        return defaultImageRenderer(token);
+    };
+
+    return renderer;
+}
+
+function buildAllowedTags({ inline = false, allowImages = true } = {}) {
     const base = [
         "a",
         "abbr",
@@ -96,8 +156,10 @@ function buildAllowedTags({ inline = false } = {}) {
         "ul"
     ];
 
+    const filteredBase = allowImages ? base : base.filter((tag) => tag !== "img");
+
     if (inline) {
-        return base.filter((tag) => ![
+        return filteredBase.filter((tag) => ![
             "blockquote",
             "h1",
             "h2",
@@ -122,7 +184,7 @@ function buildAllowedTags({ inline = false } = {}) {
         ].includes(tag));
     }
 
-    return base;
+    return filteredBase;
 }
 
 function normalizeAnchors(container) {
@@ -160,11 +222,21 @@ function normalizeTaskListInputs(container) {
 
 export function renderMarkdownToHtml(value, options = {}) {
     const inline = options.inline === true;
-    const source = String(value || "");
-    const rendered = inline ? marked.parseInline(source) : marked.parse(source);
+    const allowImages = options.allowImages !== false;
+    const secureDmImageMode = options.secureDmImageMode === true;
+    const source = secureDmImageMode
+        ? rewriteSecureDmMarkdownImages(value)
+        : String(value || "");
+    const renderer = createMarkdownRenderer({
+        allowImages,
+        secureDmImageMode
+    });
+    const rendered = inline
+        ? marked.parseInline(source, { renderer, gfm: true, breaks: true })
+        : marked.parse(source, { renderer, gfm: true, breaks: true });
     const sanitized = DOMPurify.sanitize(rendered, {
         USE_PROFILES: { html: true },
-        ALLOWED_TAGS: buildAllowedTags({ inline }),
+        ALLOWED_TAGS: buildAllowedTags({ inline, allowImages }),
         ALLOWED_ATTR: [
             "alt",
             "checked",

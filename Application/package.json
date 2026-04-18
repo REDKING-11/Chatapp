@@ -1,15 +1,20 @@
 {
   "name": "chatapp",
-  "productName": "Chatapp",
-  "version": "0.1.4-alpha",
+  "productName": "LibreChat",
+  "version": "0.1.5-alpha",
   "description": "Privacy-first desktop chat with local-first encrypted messaging.",
   "main": ".vite/build/main.js",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/REDKING-11/Chatapp.git"
+  },
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
+    "test": "node ./tests/run-tests.mjs",
     "lint": "echo \"No linting configured\""
   },
   "keywords": [],
@@ -26,6 +31,7 @@
     "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
     "@electron-forge/plugin-fuses": "^7.11.1",
     "@electron-forge/plugin-vite": "^7.11.1",
+    "@electron-forge/publisher-github": "^7.11.1",
     "@electron/fuses": "^1.8.0",
     "electron": "41.1.0",
     "electron-wix-msi": "^5.1.3",

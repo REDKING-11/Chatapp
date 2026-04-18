@@ -147,6 +147,7 @@ export default function ComposerTools({
     async function handleFileChange(event) {
         const [file] = Array.from(event.target.files || []);
         event.target.value = "";
+        const element = inputRef?.current || null;
 
         if (!file) {
             return;
@@ -154,7 +155,10 @@ export default function ComposerTools({
 
         try {
             if (typeof onPickFile === "function") {
-                await onPickFile(file);
+                const result = await onPickFile(file);
+                if (result?.selectionStart != null || result?.selectionEnd != null) {
+                    updateSelection(element, result.selectionStart, result.selectionEnd);
+                }
             } else {
                 const markdown = await fileToComposerMarkdown(file);
                 const prefix = value && !/\s$/.test(value) ? "\n" : "";

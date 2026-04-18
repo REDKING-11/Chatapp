@@ -1,5 +1,3 @@
-I changed the session storage flow in [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php) so the database no longer needs the raw bearer token to create, find, or touch a session.
-
 **What I changed**
 In the schema bootstrap section around [lines 86-118](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php:86), I added support for a new `token_hash` column on `sessions`:
 - If `token_hash` does not exist, the code now adds it with `ALTER TABLE sessions ADD COLUMN token_hash VARCHAR(64) NULL AFTER token`.

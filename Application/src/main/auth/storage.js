@@ -1,12 +1,18 @@
 import { app, safeStorage } from "electron";
 import fs from "node:fs";
-import path from "node:path";
+import { resolveStoragePaths } from "../storagePaths.js";
 
-const STORE_DIR = path.join(app.getPath("userData"), "secure-auth");
-const TOKEN_PATH = path.join(STORE_DIR, "auth-token.bin");
+function getAuthStorePaths() {
+  const { storeDir, filePaths } = resolveStoragePaths("secure-auth", ["auth-token.bin"]);
+
+  return {
+    storeDir,
+    tokenPath: filePaths[0]
+  };
+}
 
 function ensureDir() {
-  fs.mkdirSync(STORE_DIR, { recursive: true });
+  fs.mkdirSync(getAuthStorePaths().storeDir, { recursive: true });
 }
 
 function assertSecureStorageAvailable() {
@@ -21,19 +27,49 @@ function writeFileAtomic(filePath, data) {
   fs.renameSync(tempPath, filePath);
 }
 
+function removeFileIfPresent(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 export function readStoredAuthToken() {
+  const { tokenPath } = getAuthStorePaths();
   ensureDir();
 
-  if (!fs.existsSync(TOKEN_PATH)) {
+  if (!fs.existsSync(tokenPath)) {
     return null;
   }
 
   assertSecureStorageAvailable();
-  return safeStorage.decryptString(fs.readFileSync(TOKEN_PATH));
+
+  try {
+    const storedValue = fs.readFileSync(tokenPath);
+    const token = safeStorage.decryptString(storedValue);
+    const normalizedToken = String(token || "").trim();
+
+    if (!normalizedToken) {
+      removeFileIfPresent(tokenPath);
+      return null;
+    }
+
+    return normalizedToken;
+  } catch (error) {
+    console.warn("Clearing unreadable stored auth token.", error);
+    removeFileIfPresent(tokenPath);
+    return null;
+  }
 }
 
 export function writeStoredAuthToken(token) {
   const normalizedToken = String(token || "").trim();
+  const { tokenPath } = getAuthStorePaths();
 
   if (!normalizedToken) {
     clearStoredAuthToken();
@@ -42,17 +78,15 @@ export function writeStoredAuthToken(token) {
 
   ensureDir();
   assertSecureStorageAvailable();
-  writeFileAtomic(TOKEN_PATH, safeStorage.encryptString(normalizedToken));
+  writeFileAtomic(tokenPath, safeStorage.encryptString(normalizedToken));
 
   return { ok: true, hasToken: true };
 }
 
 export function clearStoredAuthToken() {
+  const { tokenPath } = getAuthStorePaths();
   ensureDir();
-
-  if (fs.existsSync(TOKEN_PATH)) {
-    fs.unlinkSync(TOKEN_PATH);
-  }
+  removeFileIfPresent(tokenPath);
 
   return { ok: true, hasToken: false };
 }

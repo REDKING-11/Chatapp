@@ -41,29 +41,7 @@ function requireAuth(): array {
 
     $db = getDb();
     authBootstrap($db);
-
-    $selectParts = ['users.id', 'users.username', 'users.email', 'users.phone', 'sessions.expires_at'];
-    if (authSessionColumnExists($db, 'public_id')) {
-        $selectParts[] = 'sessions.public_id';
-    }
-
-    $whereConditions = ['sessions.token = ?'];
-    if (authSessionColumnExists($db, 'revoked_at')) {
-        $whereConditions[] = 'sessions.revoked_at IS NULL';
-    }
-
-    $stmt = $db->prepare(sprintf(
-        'SELECT %s
-         FROM sessions
-         JOIN users ON users.id = sessions.user_id
-         WHERE %s
-         LIMIT 1',
-        implode(', ', $selectParts),
-        implode(' AND ', $whereConditions)
-    ));
-    $stmt->execute([$token]);
-
-    $session = $stmt->fetch();
+    $session = authFindSessionByToken($db, $token);
 
     if (!$session) {
         jsonResponse(['error' => 'Invalid token'], 401);
@@ -73,16 +51,14 @@ function requireAuth(): array {
         jsonResponse(['error' => 'Token expired'], 401);
     }
 
-    if (authSessionColumnExists($db, 'last_seen_at')) {
-        $touchStmt = $db->prepare('UPDATE sessions SET last_seen_at = UTC_TIMESTAMP() WHERE token = ?');
-        $touchStmt->execute([$token]);
-    }
+    authTouchSession($db, $token);
 
     return [
         'id' => (int)$session['id'],
         'username' => $session['username'],
         'email' => $session['email'],
         'phone' => $session['phone'],
-        'sessionPublicId' => $session['public_id'] ?? null
+        'sessionPublicId' => $session['public_id'] ?? null,
+        'mfaCompleted' => !empty($session['mfa_completed_at'])
     ];
 }

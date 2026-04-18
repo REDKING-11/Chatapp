@@ -52,11 +52,12 @@ This document is based on the current implementation in:
 
 ### Transport security
 
-- The Electron client normalizes remote backend URLs to `https://` and remote realtime URLs to `wss://` by default.
-- `http://` and `ws://` are allowed for localhost development.
-- Environment configuration can still opt into insecure remote URLs.
+- The Electron client requires `https://` backend URLs and `wss://` realtime URLs everywhere.
+- Insecure transport overrides are not supported by the desktop app.
+- Local development is expected to run through the repo `Caddyfile`, using `https://core.localhost`, `wss://core.localhost/ws/`, and `https://server.localhost`.
+- The Lightsail deployment template uses Caddy at the network edge, splitting `/ws/*` to realtime and the remaining HTTPS paths to `chatapp-core`.
 - The self-hosted backend and realtime service are plain Node services and rely on deployment to provide TLS.
-- The self-hosted auth bridge accepts multiple configured core-auth base URLs, including localhost fallback.
+- The self-hosted auth bridge accepts only `https://` core-auth base URLs.
 
 ### Desktop client isolation
 
@@ -319,26 +320,24 @@ So the correct statement today is:
 
 ## HTTPS and TLS
 
-Chatapp prefers secure transport for remote endpoints at the client layer.
+Chatapp requires secure transport for app-facing endpoints.
 
 Current behavior:
 
-- `Application/src/lib/env.js` requires `https://` for remote backend URLs and `wss://` for remote realtime URLs unless a development override is enabled.
+- `Application/src/lib/env.js` requires `https://` for backend URLs and `wss://` for realtime URLs, including localhost and development.
 - The Electron main process uses the same rule when checking remote backend health.
-- `http://` and `ws://` are allowed for localhost development.
+- Local development is expected to use the repo `Caddyfile` so the app talks to `https://core.localhost`, `wss://core.localhost/ws/`, and `https://server.localhost`.
 
 Current limitations:
 
 - The self-hosted backend itself is a plain Express server with no built-in TLS layer.
 - The realtime service is a plain Node HTTP and WebSocket server with no built-in TLS layer.
-- Environment configuration can explicitly allow insecure remote URLs.
-- This repository snapshot currently includes environment values that opt into insecure remote URLs for a remote host.
-- `SelfHServer/services/auth.service.js` accepts multiple configured core-auth base URLs, including localhost fallback.
+- TLS is currently terminated by deployment or by the local Caddy proxy, not by those services directly.
+- `SelfHServer/services/auth.service.js` rejects insecure core-auth base URLs.
 
 Security impact:
 
 - Over HTTPS and WSS, traffic benefits from TLS in transit.
-- Over HTTP and WS, account tokens, message contents, and metadata can be observed by the network path.
 
 ## CORS and origin handling
 
@@ -574,7 +573,7 @@ The following statements are accurate for the current repository:
 - Regular server and channel messages are currently stored in plaintext on the self-hosted backend.
 - Direct messages have a stronger local encryption and device-verification design than normal channel messages.
 - The Electron app uses safer-than-default renderer isolation settings and Electron fuse hardening.
-- Remote backend and realtime URLs are intended to use HTTPS and WSS by default, with explicit development opt-outs.
+- Remote backend and realtime URLs are required to use HTTPS and WSS in the desktop client.
 - The self-hosted backend authorization model is incomplete and should not be treated as private-by-default.
 
 ## Claims that should not be made yet

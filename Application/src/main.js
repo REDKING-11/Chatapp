@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Notification, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Notification } from 'electron';
 import path from 'node:path';
 import {
   adoptConversationId,
@@ -9,6 +9,7 @@ import {
   exportConversationPackage,
   exportDeviceTransferPackage,
   getDeviceBundle,
+  getConversationAccess,
   importConversation,
   importConversationPackage,
   importDeviceTransferPackage,
@@ -19,6 +20,7 @@ import {
   beginDeviceIdentityRotation,
   commitDeviceIdentityRotation,
   rollbackDeviceIdentityRotation,
+  setMessageDeliveryState,
   syncConversationMetadata,
   createWrappedKeyForConversation,
   verifyDeviceBundles,
@@ -42,8 +44,14 @@ import {
   readStoredAuthToken,
   writeStoredAuthToken
 } from './main/auth/storage';
+import { registerAppUpdateIpc } from './main/appUpdates.js';
+import { normalizeSecureBackendUrl } from './lib/transportPolicy.mjs';
+import { normalizeAppDiagnosticError } from './lib/diagnostics.js';
 
-const LOCAL_DEVELOPMENT_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.redfolder.librechat');
+}
+
 const SECURE_DM_SENSITIVE_RESPONSE_KEYS = new Set([
   'encryptionPrivateKey',
   'signingPrivateKey',
@@ -65,6 +73,18 @@ const FORBIDDEN_SECURE_DM_CHANNEL_TOKENS = [
   'export-key',
   'decrypt-key'
 ];
+const RENDERER_CSP = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: http: https:",
+  "font-src 'self' data:",
+  "media-src 'self' blob: data: http: https:",
+  "connect-src 'self' http: https: ws: wss:"
+].join('; ');
 
 function assertNoSecureDmSecrets(value, path = 'result') {
   if (Array.isArray(value)) {
@@ -87,15 +107,76 @@ function assertNoSecureDmSecrets(value, path = 'result') {
 
 function handleSecureDm(channel, handler) {
   ipcMain.handle(channel, async (_event, payload) => {
-    const result = await handler(payload);
-    assertNoSecureDmSecrets(result);
-    return result;
+    try {
+      const result = await handler(payload);
+      assertNoSecureDmSecrets(result);
+      return result;
+    } catch (error) {
+      const operation = `secureDm.${String(channel || '').replace(/^secure-dm:/, '').replace(/-/g, '.') || 'unknown'}`;
+      const innerDiagnostic = normalizeAppDiagnosticError(error);
+      const diagnostic = normalizeAppDiagnosticError(error, {
+        code: String(error?.code || '').startsWith('IPC_') ? error.code : 'IPC_SECURE_DM_FAILED',
+        message: innerDiagnostic.message,
+        userMessage: 'Secure DM local operation failed.',
+        source: 'ipc',
+        operation,
+        severity: 'error',
+        details: {
+          channel,
+          causeCode: innerDiagnostic.code,
+          causeSource: innerDiagnostic.source,
+          causeOperation: innerDiagnostic.operation,
+          causeMessage: innerDiagnostic.message,
+          causeUserMessage: innerDiagnostic.userMessage,
+          causeStatus: innerDiagnostic.status ?? null,
+          causeEndpoint: innerDiagnostic.endpoint || '',
+          causeDeviceId: innerDiagnostic.deviceId || '',
+          causeConversationId: innerDiagnostic.conversationId || ''
+        }
+      });
+
+      console.error(`[${diagnostic.code}] ${operation}`, {
+        code: diagnostic.code,
+        source: diagnostic.source,
+        operation: diagnostic.operation,
+        severity: diagnostic.severity,
+        details: diagnostic.details,
+        message: diagnostic.message,
+        cause: {
+          code: innerDiagnostic.code,
+          source: innerDiagnostic.source,
+          operation: innerDiagnostic.operation,
+          message: innerDiagnostic.message,
+          stack: innerDiagnostic.stack
+        }
+      });
+
+      const wrappedError = new Error(`[${diagnostic.code}] ${diagnostic.message}`);
+      wrappedError.code = diagnostic.code;
+      wrappedError.source = diagnostic.source;
+      wrappedError.operation = diagnostic.operation;
+      wrappedError.severity = diagnostic.severity;
+      wrappedError.status = diagnostic.status ?? null;
+      wrappedError.endpoint = diagnostic.endpoint || '';
+      wrappedError.traceId = diagnostic.traceId || '';
+      wrappedError.deviceId = diagnostic.deviceId || '';
+      wrappedError.conversationId = diagnostic.conversationId || '';
+      wrappedError.friendUserId = diagnostic.friendUserId || '';
+      wrappedError.details = diagnostic.details;
+      wrappedError.causeCode = innerDiagnostic.code;
+      wrappedError.causeSource = innerDiagnostic.source;
+      wrappedError.causeOperation = innerDiagnostic.operation;
+      wrappedError.causeMessage = innerDiagnostic.message;
+      wrappedError.causeStack = innerDiagnostic.stack;
+      throw wrappedError;
+    }
   });
 }
 
 const SECURE_DM_IPC_HANDLERS = Object.freeze({
   'secure-dm:init-device': initializeDevice,
   'secure-dm:get-device-bundle': getDeviceBundle,
+  'secure-dm:get-conversation-access': getConversationAccess,
   'secure-dm:create-conversation': createConversation,
   'secure-dm:adopt-conversation-id': adoptConversationId,
   'secure-dm:import-conversation': importConversation,
@@ -104,6 +185,7 @@ const SECURE_DM_IPC_HANDLERS = Object.freeze({
   'secure-dm:sync-conversation-metadata': syncConversationMetadata,
   'secure-dm:list-conversations': listConversations,
   'secure-dm:list-messages': listMessages,
+  'secure-dm:set-message-delivery-state': setMessageDeliveryState,
   'secure-dm:export-conversation-package': exportConversationPackage,
   'secure-dm:create-wrapped-key': createWrappedKeyForConversation,
   'secure-dm:verify-device-bundles': verifyDeviceBundles,
@@ -132,26 +214,7 @@ function assertSecureDmChannelPolicy(channel) {
 }
 
 function assertAllowedRemoteBackendUrl(value) {
-  let url;
-
-  try {
-    url = new URL(String(value || '').trim());
-  } catch {
-    throw new Error('Backend URL must be a valid URL');
-  }
-
-  const hostname = String(url.hostname || '').trim().toLowerCase();
-  const isLocalDevelopment = LOCAL_DEVELOPMENT_HOSTS.has(hostname) || hostname.endsWith('.localhost');
-
-  if (url.protocol === 'https:') {
-    return url.toString().replace(/\/$/, '');
-  }
-
-  if (isLocalDevelopment && url.protocol === 'http:') {
-    return url.toString().replace(/\/$/, '');
-  }
-
-  throw new Error('Backend URL must use https:// for remote hosts. http:// is allowed only for localhost development.');
+  return normalizeSecureBackendUrl(value, 'Backend URL');
 }
 
 const createWindow = () => {
@@ -165,6 +228,16 @@ const createWindow = () => {
       sandbox: true,
       nodeIntegration: false,
     },
+  });
+
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = {
+      ...(details.responseHeaders || {})
+    };
+
+    responseHeaders['Content-Security-Policy'] = [RENDERER_CSP];
+
+    callback({ responseHeaders });
   });
 
   // and load the index.html of the app.
@@ -233,51 +306,6 @@ const registerServerHealthIpc = () => {
     } catch {
       return { online: false };
     }
-  });
-};
-
-const GITHUB_RELEASES_URL = 'https://api.github.com/repos/REDKING-11/Chatapp/releases/latest';
-const GITHUB_RELEASES_PAGE = 'https://github.com/REDKING-11/Chatapp/releases';
-
-const registerAppUpdateIpc = () => {
-  ipcMain.handle('app-update:check', async () => {
-    const currentVersion = app.getVersion();
-
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-      const res = await fetch(GITHUB_RELEASES_URL, {
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': `Chatapp/${currentVersion}`
-        },
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      if (!res.ok) {
-        return { currentVersion, hasUpdate: false };
-      }
-
-      const data = await res.json();
-      const latestTag = String(data.tag_name || '');
-      const latestVersion = latestTag.replace(/^v/, '');
-      const hasUpdate = latestVersion.length > 0 && latestVersion !== currentVersion;
-
-      return {
-        currentVersion,
-        latestVersion: latestTag,
-        hasUpdate,
-        releaseUrl: data.html_url || GITHUB_RELEASES_PAGE,
-        releaseName: data.name || latestTag
-      };
-    } catch {
-      return { currentVersion, hasUpdate: false };
-    }
-  });
-
-  ipcMain.handle('app-update:open-releases', () => {
-    shell.openExternal(GITHUB_RELEASES_PAGE);
   });
 };
 

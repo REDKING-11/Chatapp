@@ -1,0 +1,23 @@
+# Local TLS terminator for Chatapp development.
+#
+# Run the local services on plain loopback:
+# - chatapp-core on 127.0.0.1:4000
+# - chatapp-realtime on 127.0.0.1:3010
+# - SelfHServer on 127.0.0.1:3000
+#
+# Then start Caddy with:
+#   caddy run --config Caddyfile
+
+https://core.localhost {
+    handle /ws* {
+        reverse_proxy 127.0.0.1:3010
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:4000
+    }
+}
+
+https://server.localhost {
+    reverse_proxy 127.0.0.1:3000
+}

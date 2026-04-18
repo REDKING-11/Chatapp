@@ -7,7 +7,7 @@ function isAllowedCorsOrigin(string $origin): bool {
         return true;
     }
 
-    return (bool)preg_match('#^https?://(localhost|127\.0\.0\.1)(:\d+)?$#i', $origin);
+    return (bool)preg_match('#^https?://((localhost|127\.0\.0\.1)|([a-z0-9-]+\.)+localhost)(:\d+)?$#i', $origin);
 }
 
 if ($origin !== '' && isAllowedCorsOrigin($origin)) {

@@ -1,9 +1,19 @@
 require("dotenv").config();
 
 const http = require("http");
+const crypto = require("crypto");
 const express = require("express");
 const WebSocket = require("ws");
 const mysql = require("mysql2/promise");
+const {
+  createDmQueuedPayload,
+  notifyRelayConsumption
+} = require("./delivery");
+const {
+  createPresencePayload,
+  DEFAULT_PRESENCE_STATUS,
+  updateDevicePresence
+} = require("./presence");
 
 const app = express();
 app.use(express.json());
@@ -54,32 +64,12 @@ function normalizeSubscribedUserIds(userIds) {
   ];
 }
 
-function isUserOnline(userId, options = {}) {
-  const normalizedUserId = Number(userId);
-  const excludedDeviceId = options.excludeDeviceId ? String(options.excludeDeviceId) : null;
-
-  for (const [deviceId, connection] of onlineDevices.entries()) {
-    if (excludedDeviceId && String(deviceId) === excludedDeviceId) {
-      continue;
-    }
-
-    if (Number(connection?.userId) === normalizedUserId) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function sendPresenceSnapshot(ws, userIds) {
   const normalizedUserIds = normalizeSubscribedUserIds(userIds);
 
   sendJson(ws, {
     type: "presence:snapshot",
-    items: normalizedUserIds.map((userId) => ({
-      userId,
-      state: isUserOnline(userId) ? "online" : "offline"
-    }))
+    items: normalizedUserIds.map((userId) => createPresencePayload(onlineDevices, userId))
   });
 }
 
@@ -96,8 +86,7 @@ function broadcastPresenceUpdate(userId) {
   const normalizedUserId = Number(userId);
   const payload = {
     type: "presence:update",
-    userId: normalizedUserId,
-    state: isUserOnline(normalizedUserId) ? "online" : "offline"
+    ...createPresencePayload(onlineDevices, normalizedUserId)
   };
 
   presenceSubscriptions.forEach((subscribedUserIds, ws) => {
@@ -187,6 +176,31 @@ async function ensureRelayQueueMessageSignatureColumns() {
         columnExistsCache.set("dm_relay_queue.message_signature", true);
       }
 
+      if (!(await columnExists("dm_relay_queue", "sender_device_name"))) {
+        await pool.query("ALTER TABLE dm_relay_queue ADD COLUMN sender_device_name VARCHAR(191) NULL AFTER sender_device_id");
+        columnExistsCache.set("dm_relay_queue.sender_device_name", true);
+      }
+
+      if (!(await columnExists("dm_relay_queue", "sender_encryption_public_key"))) {
+        await pool.query("ALTER TABLE dm_relay_queue ADD COLUMN sender_encryption_public_key TEXT NULL AFTER sender_device_name");
+        columnExistsCache.set("dm_relay_queue.sender_encryption_public_key", true);
+      }
+
+      if (!(await columnExists("dm_relay_queue", "sender_signing_public_key"))) {
+        await pool.query("ALTER TABLE dm_relay_queue ADD COLUMN sender_signing_public_key TEXT NULL AFTER sender_encryption_public_key");
+        columnExistsCache.set("dm_relay_queue.sender_signing_public_key", true);
+      }
+
+      if (!(await columnExists("dm_relay_queue", "sender_key_version"))) {
+        await pool.query("ALTER TABLE dm_relay_queue ADD COLUMN sender_key_version INT NULL AFTER sender_signing_public_key");
+        columnExistsCache.set("dm_relay_queue.sender_key_version", true);
+      }
+
+      if (!(await columnExists("dm_relay_queue", "sender_bundle_signature"))) {
+        await pool.query("ALTER TABLE dm_relay_queue ADD COLUMN sender_bundle_signature TEXT NULL AFTER sender_key_version");
+        columnExistsCache.set("dm_relay_queue.sender_bundle_signature", true);
+      }
+
       relayQueueColumnsEnsured = true;
     })().finally(() => {
       relayQueueColumnsEnsuredPromise = null;
@@ -197,7 +211,15 @@ async function ensureRelayQueueMessageSignatureColumns() {
 }
 
 async function findSessionByToken(token) {
-  const whereClauses = ["token = ?", "expires_at > UTC_TIMESTAMP()"];
+  const normalizedToken = String(token || "").trim();
+  const hasTokenHashColumn = await columnExists("sessions", "token_hash");
+  const lookupValue = hasTokenHashColumn
+    ? crypto.createHash("sha256").update(normalizedToken).digest("hex")
+    : normalizedToken;
+  const whereClauses = [
+    hasTokenHashColumn ? "token_hash = ?" : "token = ?",
+    "expires_at > UTC_TIMESTAMP()"
+  ];
 
   if (await columnExists("sessions", "revoked_at")) {
     whereClauses.push("revoked_at IS NULL");
@@ -210,7 +232,7 @@ async function findSessionByToken(token) {
     WHERE ${whereClauses.join(" AND ")}
     LIMIT 1
     `,
-    [token]
+    [lookupValue]
   );
 
   const session = rows[0] || null;
@@ -220,7 +242,10 @@ async function findSessionByToken(token) {
   }
 
   if (await columnExists("sessions", "last_seen_at")) {
-    await pool.query("UPDATE sessions SET last_seen_at = UTC_TIMESTAMP() WHERE token = ?", [token]);
+    await pool.query(
+      `UPDATE sessions SET last_seen_at = UTC_TIMESTAMP() WHERE ${hasTokenHashColumn ? "token_hash = ?" : "token = ?"}`,
+      [lookupValue]
+    );
   }
 
   return {
@@ -228,33 +253,78 @@ async function findSessionByToken(token) {
   };
 }
 
-async function findActiveDeviceForUser(userId, deviceId) {
+async function findDeviceStateForUser(userId, deviceId) {
+  const candidateTables = [];
+
   if (await tableExists("dm_devices")) {
+    candidateTables.push("dm_devices");
+  }
+
+  if (await tableExists("device_public_keys")) {
+    candidateTables.push("device_public_keys");
+  }
+
+  for (const tableName of candidateTables) {
     const [rows] = await pool.query(
       `
-      SELECT device_id
-      FROM dm_devices
+      SELECT device_id, revoked_at
+      FROM ${tableName}
       WHERE user_id = ?
         AND device_id = ?
-        AND revoked_at IS NULL
+      ORDER BY
+        CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END ASC
       LIMIT 1
       `,
       [userId, deviceId]
     );
 
-    if (rows[0]) {
-      return rows[0];
+    if (!rows[0]) {
+      continue;
     }
+
+    return {
+      status: rows[0].revoked_at == null ? "active" : "revoked",
+      deviceId: String(rows[0].device_id)
+    };
   }
 
+  return {
+    status: "missing",
+    deviceId: String(deviceId || "").trim()
+  };
+}
+
+async function findPublishedDeviceRow(userId, deviceId) {
+  const candidateTables = [];
+
   if (await tableExists("device_public_keys")) {
+    candidateTables.push("device_public_keys");
+  }
+
+  if (await tableExists("dm_devices")) {
+    candidateTables.push("dm_devices");
+  }
+
+  for (const tableName of candidateTables) {
+    const bundleSignatureSelect = (await columnExists(tableName, "bundle_signature"))
+      ? "bundle_signature"
+      : "NULL AS bundle_signature";
     const [rows] = await pool.query(
       `
-      SELECT device_id
-      FROM device_public_keys
+      SELECT
+        user_id,
+        device_id,
+        device_name,
+        encryption_public_key,
+        signing_public_key,
+        key_version,
+        ${bundleSignatureSelect},
+        revoked_at
+      FROM ${tableName}
       WHERE user_id = ?
         AND device_id = ?
-        AND revoked_at IS NULL
+      ORDER BY
+        CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END ASC
       LIMIT 1
       `,
       [userId, deviceId]
@@ -296,19 +366,29 @@ async function authenticateRealtimeSocket({ userId, deviceId, token }) {
     };
   }
 
-  const device = await findActiveDeviceForUser(session.userId, normalizedDeviceId);
+  const deviceState = await findDeviceStateForUser(session.userId, normalizedDeviceId);
 
-  if (!device) {
+  if (deviceState.status === "missing") {
     return {
       ok: false,
-      error: "Device not found or revoked for the authenticated user"
+      code: "DEVICE_NOT_REGISTERED",
+      error: "Device is not registered for secure DMs"
+    };
+  }
+
+  if (deviceState.status === "revoked") {
+    return {
+      ok: false,
+      code: "DEVICE_REAUTH_REQUIRED",
+      error: "This device was revoked for secure DMs and must be re-authorized with MFA.",
+      deviceStatus: "revoked"
     };
   }
 
   return {
     ok: true,
     userId: session.userId,
-    deviceId: String(device.device_id)
+    deviceId: deviceState.deviceId
   };
 }
 
@@ -422,7 +502,12 @@ wss.on("connection", (ws) => {
         });
 
         if (!authResult.ok) {
-          sendJson(ws, { type: "auth:error", error: authResult.error });
+          sendJson(ws, {
+            type: "auth:error",
+            error: authResult.error,
+            code: authResult.code || "",
+            deviceStatus: authResult.deviceStatus || ""
+          });
           ws.close(4003, "Authentication failed");
           return;
         }
@@ -443,15 +528,14 @@ wss.on("connection", (ws) => {
         clearTimeout(authTimeout);
         onlineDevices.set(authedDeviceId, {
           ws,
-          userId: authedUserId
+          userId: authedUserId,
+          presenceStatus: DEFAULT_PRESENCE_STATUS,
+          presenceUpdatedAt: Date.now()
         });
         clearPresenceSubscription(ws);
 
         sendJson(ws, { type: "auth:ok", deviceId: authedDeviceId, userId: authedUserId });
-
-        if (!isUserOnline(authedUserId, { excludeDeviceId: authedDeviceId })) {
-          broadcastPresenceUpdate(authedUserId);
-        }
+        broadcastPresenceUpdate(authedUserId);
         return;
       }
 
@@ -522,6 +606,7 @@ wss.on("connection", (ws) => {
         );
         const undelivered = [];
         const dropped = [];
+        let deliveredRecipientCount = 0;
 
         for (const recipientDeviceId of allowedRecipients) {
           const onlineTarget = onlineDevices.get(recipientDeviceId);
@@ -540,6 +625,7 @@ wss.on("connection", (ws) => {
               tag: String(tag),
               signature: String(signature)
             });
+            deliveredRecipientCount += 1;
           } else {
             undelivered.push(recipientDeviceId);
           }
@@ -550,6 +636,7 @@ wss.on("connection", (ws) => {
 
           if (relayTtlSeconds > 0) {
             await ensureRelayQueueMessageSignatureColumns();
+            const senderDeviceRow = await findPublishedDeviceRow(authedUserId, authedDeviceId);
 
             const values = undelivered.map((recipientDeviceId) => [
               String(messageId),
@@ -557,6 +644,11 @@ wss.on("connection", (ws) => {
               authedUserId,
               recipientDeviceId,
               authedDeviceId,
+              senderDeviceRow?.device_name || null,
+              senderDeviceRow?.encryption_public_key || null,
+              senderDeviceRow?.signing_public_key || null,
+              senderDeviceRow?.key_version ?? null,
+              senderDeviceRow?.bundle_signature || null,
               String(ciphertext),
               String(nonce),
               String(aad),
@@ -568,9 +660,9 @@ wss.on("connection", (ws) => {
             await pool.query(
               `
               INSERT INTO dm_relay_queue
-                (message_id, conversation_id, sender_user_id, recipient_device_id, sender_device_id, ciphertext, nonce, aad, tag, message_signature, expires_at)
+                (message_id, conversation_id, sender_user_id, recipient_device_id, sender_device_id, sender_device_name, sender_encryption_public_key, sender_signing_public_key, sender_key_version, sender_bundle_signature, ciphertext, nonce, aad, tag, message_signature, expires_at)
               VALUES
-                ${values.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))").join(", ")}
+                ${values.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))").join(", ")}
               `,
               values.flat()
             );
@@ -581,13 +673,13 @@ wss.on("connection", (ws) => {
 
         await pool.query("UPDATE dm_conversations SET updated_at = UTC_TIMESTAMP() WHERE id = ?", [normalizedConversationId]);
 
-        sendJson(ws, {
-          type: "dm:queued",
+        sendJson(ws, createDmQueuedPayload({
           messageId: String(messageId),
+          deliveredRecipientCount,
           offlineRecipients: undelivered.filter((deviceId) => !dropped.includes(deviceId)),
           droppedRecipients: dropped,
           rejectedRecipients
-        });
+        }));
         return;
       }
 
@@ -642,18 +734,45 @@ wss.on("connection", (ws) => {
         return;
       }
 
+      if (data.type === "presence:set-status") {
+        updateDevicePresence(onlineDevices, authedDeviceId, data.status);
+        broadcastPresenceUpdate(authedUserId);
+        return;
+      }
+
       if (data.type === "dm:ack") {
         const { relayId } = data;
+        const normalizedRelayId = Number(relayId);
 
-        if (!relayId) {
+        if (!relayId || !Number.isInteger(normalizedRelayId) || normalizedRelayId <= 0) {
           sendJson(ws, { type: "error", error: "relayId is required" });
           return;
         }
 
+        const [relayRows] = await pool.query(
+          `
+          SELECT id, message_id, conversation_id, sender_device_id
+          FROM dm_relay_queue
+          WHERE id = ? AND recipient_device_id = ?
+          LIMIT 1
+          `,
+          [normalizedRelayId, authedDeviceId]
+        );
+        const relayRow = relayRows[0] || null;
+
         await pool.query(
           `DELETE FROM dm_relay_queue WHERE id = ? AND recipient_device_id = ?`,
-          [Number(relayId), authedDeviceId]
+          [normalizedRelayId, authedDeviceId]
         );
+
+        if (relayRow) {
+          notifyRelayConsumption({
+            onlineDevices,
+            relayRow,
+            recipientDeviceId: authedDeviceId,
+            sendJson
+          });
+        }
 
         sendJson(ws, { type: "dm:ack:ok", relayId });
       }
@@ -671,10 +790,7 @@ wss.on("connection", (ws) => {
 
       if (existingConnection?.ws === ws) {
         onlineDevices.delete(authedDeviceId);
-
-        if (!isUserOnline(authedUserId)) {
-          broadcastPresenceUpdate(authedUserId);
-        }
+        broadcastPresenceUpdate(authedUserId);
       }
     }
   });

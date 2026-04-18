@@ -12,6 +12,8 @@ import JoinServerModal from "./components/JoinServerModal";
 import QuickSwitcherModal from "./components/QuickSwitcherModal";
 import ShortcutInfoModal from "./components/ShortcutInfoModal";
 import ServerSettingsPanel from "./components/ServerSettingsPanel";
+import UpdateBanner from "./components/UpdateBanner";
+import { recordAppDiagnostic } from "./lib/diagnostics.js";
 import infoBlackIcon from "./assets/Info-black.png";
 import infoWhiteIcon from "./assets/Info-white.png";
 import infoFirstIcon from "./assets/Info-First.png";
@@ -30,8 +32,11 @@ import {
     closeRealtimeConnection,
     ensureRealtimeConnection,
     initializeSecureDm,
+    isDmDeviceReauthRequiredError,
     pullRelayMessages,
-    registerSecureDmDevice
+    registerSecureDmDevice,
+    rotateCurrentDmDeviceKeys,
+    updateSecureDmPresenceStatus
 } from "./features/dm/actions";
 
 import {
@@ -60,6 +65,31 @@ const FRIENDS_TAB_ID = "__friends__";
 const SERVER_STATUS_RECHECK_MS = 30000;
 const SHORTCUT_INFO_SEEN_VERSION = "v2";
 
+function getUpdateBannerKey(updateState) {
+    if (!updateState?.phase) {
+        return "";
+    }
+
+    switch (updateState.phase) {
+    case "available":
+        return `${updateState.phase}:${updateState.latestVersion || "unknown"}`;
+    case "error":
+        return `error:${updateState.trigger || "unknown"}:${updateState.latestVersion || "none"}:${updateState.error || "unknown"}`;
+    case "up-to-date":
+        return updateState.trigger === "manual"
+            ? `up-to-date:${updateState.checkedAt || Date.now()}`
+            : "";
+    default:
+        return "";
+    }
+}
+
+function isCurrentDeviceBundleVerificationError(error) {
+    return /secure-dm:verify-device-bundles|device bundle signature verification failed/i.test(
+        String(error?.message || error || "")
+    );
+}
+
 function isExpectedOfflineFetchError(error) {
     if (!error) return false;
 
@@ -73,6 +103,7 @@ function isExpectedOfflineFetchError(error) {
 function App() {
     const [currentUser, setCurrentUser] = useState(null);
     const [authLoading, setAuthLoading] = useState(true);
+    const [authNotice, setAuthNotice] = useState("");
 
     const [joinedServers, setJoinedServers] = useState([]);
     const [selectedJoinedServerId, setSelectedJoinedServerId] = useState(FRIENDS_TAB_ID);
@@ -94,15 +125,27 @@ function App() {
     const [clientSettings, setClientSettings] = useState(() => loadClientSettings());
     const [onboardingState, setOnboardingState] = useState(() => loadOnboardingState());
     const [hasSeenShortcutInfo, setHasSeenShortcutInfo] = useState(false);
-    const [updateInfo, setUpdateInfo] = useState(null);
-    const [updateDismissed, setUpdateDismissed] = useState(false);
+    const [updateState, setUpdateState] = useState(null);
+    const [dismissedUpdateBannerKey, setDismissedUpdateBannerKey] = useState("");
 
     const serverThemeRef = useRef(null);
     const serverCustomCssRef = useRef(null);
+    const autoDmRepairAttemptedUserRef = useRef(null);
+    const authExpiryHandlingRef = useRef(false);
+    const latestPresenceStatusRef = useRef(clientSettings?.presenceStatus || "online");
+    const hasAppliedPresenceStatusRef = useRef(false);
+
+    useEffect(() => {
+        latestPresenceStatusRef.current = clientSettings?.presenceStatus || "online";
+    }, [clientSettings?.presenceStatus]);
 
     useEffect(() => {
         applyClientSettings(clientSettings);
     }, [clientSettings]);
+
+    useEffect(() => {
+        hasAppliedPresenceStatusRef.current = false;
+    }, [currentUser?.id]);
 
     useEffect(() => {
         if (!currentUser?.id) {
@@ -120,8 +163,24 @@ function App() {
 
     useEffect(() => {
         async function restoreSession() {
-            const { token, user: savedUser } = await hydrateAuthSession();
-            if (savedUser) setCurrentUser(savedUser);
+            let token = null;
+
+            try {
+                ({ token } = await hydrateAuthSession());
+            } catch (error) {
+                console.error("Session hydration failed:", error);
+                resetAppState();
+
+                try {
+                    await clearAuthSession();
+                } catch {
+                    // Best-effort cleanup only.
+                }
+
+                setAuthNotice("Saved sign-in data could not be read. Please sign in again.");
+                setAuthLoading(false);
+                return;
+            }
 
             if (!token) {
                 setAuthLoading(false);
@@ -130,12 +189,24 @@ function App() {
 
             try {
                 const data = await validateSession(token);
+                authExpiryHandlingRef.current = false;
+                setAuthNotice("");
                 setCurrentUser(data.user);
                 saveAuthUser(data.user);
             } catch (err) {
                 console.error("Session restore failed:", err);
-                await clearAuthSession();
-                resetAppState();
+
+                if (err?.isAuthError) {
+                    resetAppState();
+                    await clearAuthSession();
+                    setAuthNotice(err?.message || "Your session expired. Please sign in again.");
+                } else {
+                    resetAppState();
+                    setAuthNotice(
+                        err?.userMessage
+                        || "Could not reach the Chatapp backend right now. Start the local TLS proxy and try again."
+                    );
+                }
             } finally {
                 setAuthLoading(false);
             }
@@ -145,19 +216,54 @@ function App() {
     }, []);
 
     useEffect(() => {
-        let cancelled = false;
-        async function checkForUpdate() {
+        async function handleInvalidToken(event) {
+            if (authExpiryHandlingRef.current) {
+                return;
+            }
+
+            authExpiryHandlingRef.current = true;
+            closeRealtimeConnection();
+            setAuthNotice(event.detail?.message || "Your session expired. Please sign in again.");
+            setAuthLoading(false);
+            resetAppState();
+
             try {
-                const result = await window.appUpdates.check();
-                if (!cancelled && result?.hasUpdate) {
-                    setUpdateInfo(result);
+                await clearAuthSession();
+            } finally {
+                authExpiryHandlingRef.current = false;
+            }
+        }
+
+        window.addEventListener("chatapp-auth-invalid-token", handleInvalidToken);
+        return () => window.removeEventListener("chatapp-auth-invalid-token", handleInvalidToken);
+    }, []);
+
+    useEffect(() => {
+        let disposed = false;
+        let removeUpdateListener = () => {};
+
+        async function hydrateUpdateState() {
+            try {
+                const currentUpdateState = await window.appUpdates.getUpdateState();
+                if (!disposed) {
+                    setUpdateState(currentUpdateState || null);
                 }
             } catch {
                 // silently ignore — update check is best-effort
             }
+            if (window.appUpdates?.onUpdateState) {
+                removeUpdateListener = window.appUpdates.onUpdateState((nextUpdateState) => {
+                    if (!disposed) {
+                        setUpdateState(nextUpdateState || null);
+                    }
+                });
+            }
         }
-        checkForUpdate();
-        return () => { cancelled = true; };
+        hydrateUpdateState();
+        return () => {
+            disposed = true;
+            removeUpdateListener();
+        };
     }, []);
 
     useEffect(() => {
@@ -681,20 +787,74 @@ function App() {
                 await initializeSecureDm(currentUser);
                 const token = getStoredAuthToken();
 
-                if (token) {
-                    const registration = await registerSecureDmDevice({
+                if (!token) {
+                    return;
+                }
+
+                let registration;
+
+                try {
+                    registration = await registerSecureDmDevice({
+                        token,
+                        currentUser
+                    });
+                } catch (error) {
+                    const repairKey = String(currentUser.id);
+                    const canAttemptRepair =
+                        autoDmRepairAttemptedUserRef.current !== repairKey
+                        && isCurrentDeviceBundleVerificationError(error);
+
+                    if (!canAttemptRepair) {
+                        throw error;
+                    }
+
+                    autoDmRepairAttemptedUserRef.current = repairKey;
+                    console.warn("Secure DM device bundle verification failed during startup; attempting one automatic key rotation repair.", error);
+
+                    await rotateCurrentDmDeviceKeys({
                         token,
                         currentUser
                     });
 
-                    if (!registration?.approvalRequired) {
+                    registration = { ok: true, repaired: true };
+                }
+
+                if (!registration?.approvalRequired && !registration?.reauthorizationRequired) {
+                    try {
                         await ensureRealtimeConnection({
                             token,
                             currentUser
                         });
+                        await updateSecureDmPresenceStatus({
+                            token,
+                            currentUser,
+                            status: latestPresenceStatusRef.current
+                        });
+                    } catch (error) {
+                        recordAppDiagnostic(error, {
+                            source: "renderer",
+                            operation: "secureDm.setup.realtime",
+                            severity: "warning"
+                        });
+                        console.warn("Realtime DM connection is unavailable; secure DM will use relay sync until it recovers.", error);
                     }
                 }
             } catch (err) {
+                if (isDmDeviceReauthRequiredError(err) || err?.code === "DM_DEVICE_APPROVAL_REQUIRED") {
+                    recordAppDiagnostic(err, {
+                        source: "renderer",
+                        operation: "secureDm.setup",
+                        severity: "warning"
+                    });
+                    console.warn("Secure DM setup is blocked for this device until it is authorized again.", err);
+                    return;
+                }
+
+                recordAppDiagnostic(err, {
+                    source: "renderer",
+                    operation: "secureDm.setup",
+                    severity: "error"
+                });
                 console.error("Failed to initialize secure DM:", err);
             }
         }
@@ -719,6 +879,11 @@ function App() {
                 });
             } catch (err) {
                 if (!disposed) {
+                    recordAppDiagnostic(err, {
+                        source: "renderer",
+                        operation: "secureDm.relaySync",
+                        severity: "warning"
+                    });
                     console.error("Failed to sync relay messages:", err);
                 }
             }
@@ -728,6 +893,117 @@ function App() {
 
         return () => {
             disposed = true;
+        };
+    }, [currentUser]);
+
+    useEffect(() => {
+        if (!currentUser || !window.secureDm) {
+            return;
+        }
+
+        if (!hasAppliedPresenceStatusRef.current) {
+            hasAppliedPresenceStatusRef.current = true;
+            return;
+        }
+
+        let cancelled = false;
+
+        async function syncPresenceStatus() {
+            const token = getStoredAuthToken();
+
+            if (!token) {
+                return;
+            }
+
+            try {
+                await updateSecureDmPresenceStatus({
+                    token,
+                    currentUser,
+                    status: latestPresenceStatusRef.current
+                });
+            } catch (error) {
+                if (
+                    cancelled
+                    || [
+                        "DM_REALTIME_CONNECT_FAILED",
+                        "DM_REALTIME_AUTH_FAILED",
+                        "DM_REALTIME_TEMP_UNAVAILABLE",
+                        "DM_DEVICE_REAUTH_REQUIRED",
+                        "DM_DEVICE_NOT_REGISTERED",
+                        "DM_DEVICE_APPROVAL_REQUIRED"
+                    ].includes(String(error?.code || ""))
+                ) {
+                    return;
+                }
+
+                recordAppDiagnostic(error, {
+                    source: "renderer",
+                    operation: "secureDm.presence.sync",
+                    severity: "warning"
+                });
+                console.warn("Failed to sync custom DM presence:", error);
+            }
+        }
+
+        syncPresenceStatus();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [clientSettings?.presenceStatus, currentUser]);
+
+    useEffect(() => {
+        if (!currentUser || !window.secureDm) {
+            return undefined;
+        }
+
+        let cancelled = false;
+
+        async function syncPresenceStatus() {
+            const token = getStoredAuthToken();
+
+            if (!token) {
+                return;
+            }
+
+            try {
+                await updateSecureDmPresenceStatus({
+                    token,
+                    currentUser,
+                    status: latestPresenceStatusRef.current
+                });
+            } catch (error) {
+                if (
+                    cancelled
+                    || [
+                        "DM_REALTIME_CONNECT_FAILED",
+                        "DM_REALTIME_AUTH_FAILED",
+                        "DM_REALTIME_TEMP_UNAVAILABLE",
+                        "DM_DEVICE_REAUTH_REQUIRED",
+                        "DM_DEVICE_NOT_REGISTERED",
+                        "DM_DEVICE_APPROVAL_REQUIRED"
+                    ].includes(String(error?.code || ""))
+                ) {
+                    return;
+                }
+
+                recordAppDiagnostic(error, {
+                    source: "renderer",
+                    operation: "secureDm.presence.reconnect",
+                    severity: "warning"
+                });
+                console.warn("Failed to restore custom DM presence after reconnect:", error);
+            }
+        }
+
+        function handleRealtimeConnected() {
+            syncPresenceStatus();
+        }
+
+        window.addEventListener("secureDmRealtimeConnected", handleRealtimeConnected);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("secureDmRealtimeConnected", handleRealtimeConnected);
         };
     }, [currentUser]);
 
@@ -809,8 +1085,10 @@ function App() {
 
     async function handleLogout() {
         closeRealtimeConnection();
-        await clearAuthSession();
         resetAppState();
+        await clearAuthSession();
+        authExpiryHandlingRef.current = false;
+        setAuthNotice("");
     }
 
     function handleClientSettingChange(key, value) {
@@ -856,6 +1134,27 @@ function App() {
         }));
     }
 
+    function dismissUpdateBanner() {
+        const bannerKey = getUpdateBannerKey(updateState);
+        if (bannerKey) {
+            setDismissedUpdateBannerKey(bannerKey);
+        }
+    }
+
+    async function handleCheckForUpdates() {
+        setDismissedUpdateBannerKey("");
+
+        try {
+            await window.appUpdates?.checkForUpdates?.({ interactive: true });
+        } catch (error) {
+            recordAppDiagnostic(error, {
+                source: "renderer",
+                operation: "appUpdates.manualCheck",
+                severity: "warning"
+            });
+        }
+    }
+
     if (authLoading) {
         return (
             <div className="auth-screen">
@@ -877,7 +1176,16 @@ function App() {
             );
         }
 
-        return <AuthScreen onAuthSuccess={(user) => setCurrentUser(user)} />;
+        return (
+            <AuthScreen
+                noticeMessage={authNotice}
+                onAuthSuccess={(user) => {
+                    authExpiryHandlingRef.current = false;
+                    setAuthNotice("");
+                    setCurrentUser(user);
+                }}
+            />
+        );
     }
 
     const channels = serverData?.channels || [];
@@ -899,6 +1207,12 @@ function App() {
     const topbarInfoIcon = !hasSeenShortcutInfo
         ? (isLightTheme ? infoFirstIcon : infoFirstWhiteIcon)
         : (isLightTheme ? infoBlackIcon : infoWhiteIcon);
+    const updateBannerKey = getUpdateBannerKey(updateState);
+    const showUpdateBanner = Boolean(updateBannerKey && updateBannerKey !== dismissedUpdateBannerKey);
+    const updateActionBusy = updateState?.phase === "checking";
+    const updateButtonLabel = updateState?.phase === "checking"
+        ? "Checking..."
+        : "Check for updates";
     const quickSwitcherItems = [
         {
             id: "nav:friends",
@@ -968,8 +1282,8 @@ function App() {
                     <button
                         className={`topbar-info-button ${!hasSeenShortcutInfo ? "is-first-open" : ""}`.trim()}
                         onClick={handleOpenShortcutInfo}
-                        title="Shortcuts and help"
-                        aria-label="Shortcuts and help"
+                        title="General features"
+                        aria-label="General features"
                     >
                         <img
                             src={topbarInfoIcon}
@@ -977,30 +1291,21 @@ function App() {
                             aria-hidden="true"
                         />
                     </button>
+                    <button onClick={handleCheckForUpdates} disabled={updateActionBusy}>
+                        {updateButtonLabel}
+                    </button>
                     <button onClick={() => setShowClientSettings(true)}>Client Settings</button>
                 </div>
             </div>
 
-            {updateInfo?.hasUpdate && !updateDismissed && (
-                <div className="update-banner">
-                    <span className="update-banner-text">
-                        <strong>{updateInfo.latestVersion}</strong> is available &mdash; {updateInfo.releaseName || "New release"}
-                    </span>
-                    <button
-                        className="update-banner-download"
-                        onClick={() => window.appUpdates.openReleasesPage()}
-                    >
-                        Download
-                    </button>
-                    <button
-                        className="update-banner-dismiss"
-                        onClick={() => setUpdateDismissed(true)}
-                        aria-label="Dismiss update notification"
-                    >
-                        &times;
-                    </button>
-                </div>
-            )}
+            {showUpdateBanner ? (
+                <UpdateBanner
+                    state={updateState}
+                    onDismiss={dismissUpdateBanner}
+                    onCheckForUpdates={handleCheckForUpdates}
+                    onOpenReleasesPage={() => window.appUpdates?.openReleasesPage?.()}
+                />
+            ) : null}
 
             <div className="app-shell">
                 <JoinedServersSidebar

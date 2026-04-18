@@ -1,7 +1,5 @@
 **What Changed**
 
-Across this chat, I worked on four big areas: the DM settings UI, DM/E2EE security boundaries, auth/security/storage, and login bug.
-
 **1. DM Settings UI**
 - Reworked the broken relay/disappearing-message picker multiple times after the original 3D hex-cylinder version failed.
 - Fixed the selector so it no longer expands the whole list and now shows a stable 3-option picker.
@@ -29,7 +27,6 @@ Main file:
 - [Application/src/features/friends/pages/FriendsHome.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/features/friends/pages/FriendsHome.jsx)
 
 **3. DM / E2EE security work**
-I implemented or tightened a lot of the security items you listed:
 
 - Kept DM private keys inside the Electron main process and blocked secret-shaped IPC responses.
 - Hardened the preload/main boundary so renderer code cannot directly access DM private keys.

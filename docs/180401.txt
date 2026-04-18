@@ -1,0 +1,153 @@
+**Windows Installer And Updates**
+- Squirrel removed from the Windows app flow.
+- WiX/MSI restored as the Windows installer path.
+- Windows updater behavior shifted back to installer/release-page based updating instead of Squirrel-specific update handling.
+- Squirrel startup hooks and related app-id handling removed from the Electron side.
+- Installer/output configuration and update UI logic adjusted in:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\forge.config.js](C:/Users/REDKING/Projects/Chatapp/Application/forge.config.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\main.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\main\appUpdates.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/appUpdates.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\preload.js](C:/Users/REDKING/Projects/Chatapp/Application/src/preload.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\UpdateBanner.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/components/UpdateBanner.jsx)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\renderer.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/renderer.jsx)
+
+**Auth And Encrypted Storage Recovery**
+- Auth token decryption failure stopped from crashing startup.
+- Invalid encrypted auth token handling changed to graceful sign-out / token reset behavior.
+- Secure DM store recovery added for unreadable encrypted local data instead of full appdata resets.
+- Legacy secure-DM locations checked and migrated/fallback logic added between `Chatapp` and `LibreChat`.
+- Broken secure-DM stores quarantined selectively instead of wiping the whole profile.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\main\auth\storage.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/auth/storage.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\main\dm\storage.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/dm/storage.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\main\storagePaths.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/storagePaths.js)
+
+**DM Delivery Status Fixes**
+- Sender-side mixed live-plus-relay delivery fixed.
+- `Sent securely` now wins when at least one recipient device received the message live.
+- True relay-only sends stay `Offline relay`.
+- Outgoing local secure-DM messages gained persisted local-only `deliveryState`.
+- Delivery status survives refresh/reload instead of reverting incorrectly.
+- Realtime protocol extended with live recipient delivery counting and later live-session delivery upgrade events.
+- Relay consumption now upgrades sender status from `Offline relay` to `Sent securely` in the same live session.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-realtime\app.js](C:/Users/REDKING/Projects/Chatapp/chatapp-realtime/app.js)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-realtime\delivery.js](C:/Users/REDKING/Projects/Chatapp/chatapp-realtime/delivery.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\main\dm\service.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/dm/service.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\dm\actions.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/dm/actions.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\dm\deliveryState.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/dm/deliveryState.js)
+
+**Missing Local Conversation / Missing Key Handling**
+- Expected DM local-access states stopped surfacing as generic `IPC_SECURE_DM_FAILED` noise.
+- Non-throwing conversation access inspection added with `ready`, `missing-local`, and `missing-key` states.
+- Group chats aligned with direct chats for missing-local-access handling.
+- Composer disabling and inline notice behavior added for missing-access group/direct conversations.
+- Background preview refresh now auto-imports missing-local conversations and avoids repeated noisy failures.
+- Pending sender delivery states queue until local conversation import succeeds.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\dm\conversationAccess.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/dm/conversationAccess.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\dm\pendingDeliveryStateQueue.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/dm/pendingDeliveryStateQueue.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\dm\backgroundConversationImportTracker.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/dm/backgroundConversationImportTracker.js)
+
+**Realtime Server Deployment / Health Troubleshooting**
+- Realtime deploy issue traced to missing copied files, `.env` handling, systemd environment loading, and database auth setup.
+- `delivery.js` deployment gap identified.
+- `.env` ownership/visibility and service loading behavior corrected.
+- DB env names and MySQL auth path verified.
+- Realtime health endpoint brought back to working state.
+- Linux-side operational fixes discussed around:
+  - `systemd` `EnvironmentFile`
+  - `.env` file ownership and permissions
+  - MySQL user grants for `chatapp`
+
+**DM Inline Encrypted Images, DM-Only**
+- Small `png` / `jpeg` / `webp` images at `<= 256 KB` moved into the encrypted DM message flow.
+- Large images and non-image files kept on the attachment/file-transfer path.
+- File picker and paste support added for inline DM embeds.
+- Groups left on attachment behavior.
+- Inline encrypted image payload shape added as `embeds`.
+- Message store and visible-message output extended to carry inline embeds.
+- Secure DM markdown locked down so remote images and raw `<img>` tags do not auto-render there.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\dm\inlineEmbeds.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/dm/inlineEmbeds.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\main\dm\service.js](C:/Users/REDKING/Projects/Chatapp/Application/src/main/dm/service.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\lib\markdown.js](C:/Users/REDKING/Projects/Chatapp/Application/src/lib/markdown.js)
+
+**Markdown-Positioned DM Images**
+- Secure DM inline images moved from “separate block only” behavior into markdown-positioned rendering.
+- `dm-embed://<embedId>` support added inside normal markdown image syntax.
+- Message body became the source of truth for which embeds are sent.
+- Only referenced embed ids remain in the outgoing encrypted payload.
+- Remote markdown images, including badge-style links, downgraded to safe non-image links in secure DMs.
+- Legacy messages with `embeds` but no markdown references kept through fallback rendering.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\MarkdownContent.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/components/MarkdownContent.jsx)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\MarkdownPreview.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/components/MarkdownPreview.jsx)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\lib\markdown.js](C:/Users/REDKING/Projects/Chatapp/Application/src/lib/markdown.js)
+
+**Inline DM Image Rendering Fixes**
+- Blob URL lifecycle race removed from secure DM image rendering.
+- `blob:` revocation issues replaced with stable `data:` URL rendering for secure DM inline images.
+- Local dev `React.StrictMode` remounts stopped breaking inline image rendering.
+- Shared validation and resolver contract created so pending preview and final chat render use the same logic.
+- Silent fallback paths replaced with structured diagnostics.
+- Service-level checks added to detect body/embed mismatches during create/list round trips.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\dm\inlineEmbedContracts.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/dm/inlineEmbedContracts.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\dm\inlineEmbedTracing.js](C:/Users/REDKING/Projects/Chatapp/Application/src/features/dm/inlineEmbedTracing.js)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\MarkdownContent.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/components/MarkdownContent.jsx)
+
+**Inline Image Size Syntax**
+- Custom image size suffix added to secure DM markdown embeds.
+- Supported examples:
+  - `![face.jpg](dm-embed://dmimg_...){25x25}`
+  - `![face.jpg](dm-embed://dmimg_...){250pxx180px}`
+- Bare numeric units mapped as `1 = 10px`, so `{25x25}` means `250px x 250px`.
+- Preview text parsing, token removal, markdown placeholder generation, and final rendering updated to understand the size suffix.
+- Pending asset tray kept at normal tray size; markdown preview and final chat render honor custom size.
+
+**Diagnostics And Test Coverage**
+- End-to-end inline-image diagnostics added for:
+  - embed creation
+  - preview rendering
+  - markdown resolution
+  - secure-DM storage
+  - secure-DM listing
+  - final render fallback cases
+- Structured warning/error diagnostics added for missing embeds, invalid embeds, unusable data URLs, and body/embed mismatches.
+- Debug-mode breadcrumb diagnostics added for successful inline-image stages.
+- New/expanded tests added around:
+  - delivery-state mapping
+  - local conversation access
+  - inline embed parsing
+  - inline image diagnostics
+  - secure-DM round-trip behavior
+- Main test files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\tests\dm-inline-embeds.test.mjs](C:/Users/REDKING/Projects/Chatapp/Application/tests/dm-inline-embeds.test.mjs)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\tests\dm-inline-image-diagnostics.test.mjs](C:/Users/REDKING/Projects/Chatapp/Application/tests/dm-inline-image-diagnostics.test.mjs)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\tests\dm-delivery-state.test.mjs](C:/Users/REDKING/Projects/Chatapp/Application/tests/dm-delivery-state.test.mjs)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\tests\dm-local-access.test.mjs](C:/Users/REDKING/Projects/Chatapp/Application/tests/dm-local-access.test.mjs)
+
+**General Features Hub**
+- Old flat “Shortcuts and help” popout replaced with a sidebar-style “General Features” hub.
+- Topbar info button relabeled from `Shortcuts and help` to `General features`.
+- New modal structure includes:
+  - `Overview`
+  - `Shortcuts`
+  - `DM Hidden Features`
+- Shortcut list moved into its own full page.
+- DM hidden-features page added with inline image syntax, image-size syntax, relay notes, DM settings hints, and trusted-device discovery copy.
+- Styling shifted toward a settings-like sidebar/tab layout instead of a single flat list.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\ShortcutInfoModal.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/components/ShortcutInfoModal.jsx)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\renderer.jsx](C:/Users/REDKING/Projects/Chatapp/Application/src/renderer.jsx)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\index.css](C:/Users/REDKING/Projects/Chatapp/Application/src/index.css)
+
+**Verification State**
+- Repeated `npm test` runs passed after the major feature/fix batches.
+- `npm run package` passed after the main app-side changes.
+- Realtime-side test/check coverage also passed during the DM delivery work.
+
+**Not Yet Started**
+- Left sidebar “piano-style” embedded side-control refactor.
+- Outer container-card removal for that left sidebar layout.

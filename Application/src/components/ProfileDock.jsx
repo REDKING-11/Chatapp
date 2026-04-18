@@ -7,34 +7,10 @@ import {
     fetchServerProfile,
     updateServerProfile
 } from "../features/profile/serverProfileActions";
-
-const PRESENCE_OPTIONS = [
-    {
-        id: "online",
-        label: "On",
-        detail: "Ready to chat"
-    },
-    {
-        id: "free",
-        label: "Free",
-        detail: "Available"
-    },
-    {
-        id: "busy",
-        label: "Busy",
-        detail: "Heads down"
-    },
-    {
-        id: "chilling",
-        label: "Chilling",
-        detail: "Taking it easy"
-    },
-    {
-        id: "off",
-        label: "Off",
-        detail: "Away for now"
-    }
-];
+import {
+    getConfiguredPresenceMeta,
+    PRESENCE_OPTIONS
+} from "../features/presence";
 
 function getUserLabel(user) {
     return user?.displayName || user?.usernameBase || user?.username || "User";
@@ -90,7 +66,7 @@ export default function ProfileDock({
     const initials = useMemo(() => getInitials(userLabel), [userLabel]);
     const hasServerProfile = Boolean(backendUrl);
     const presenceStatus = clientSettings?.presenceStatus || "online";
-    const presenceMeta = PRESENCE_OPTIONS.find((option) => option.id === presenceStatus) || PRESENCE_OPTIONS[0];
+    const presenceMeta = getConfiguredPresenceMeta(presenceStatus);
 
     useEffect(() => {
         async function loadManifest() {

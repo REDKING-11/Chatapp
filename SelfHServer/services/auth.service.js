@@ -1,10 +1,31 @@
+function normalizeCoreApiBase(baseUrl, label = "CORE_API_BASE") {
+    let url;
+
+    try {
+        url = new URL(String(baseUrl || "").trim());
+    } catch {
+        throw new Error(`${label} must be a valid https:// URL`);
+    }
+
+    if (url.protocol !== "https:") {
+        throw new Error(`${label} must use https://`);
+    }
+
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString().replace(/\/$/, "");
+}
+
+const configuredCoreApiBase = process.env.CORE_API_BASE
+    ? normalizeCoreApiBase(process.env.CORE_API_BASE)
+    : null;
+
 const CORE_API_BASES = Array.from(
     new Set(
         [
-            process.env.CORE_API_BASE,
+            configuredCoreApiBase,
+            "https://core.localhost",
             "https://56.228.2.7",
-            "https://core.samlam24.treok.io",
-            "http://localhost:4000"
+            "https://core.samlam24.treok.io"
         ].filter(Boolean)
     )
 );

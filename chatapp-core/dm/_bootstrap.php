@@ -56,6 +56,11 @@ function dmEnsureBundleSignatureColumn(PDO $db, string $table): void {
         return;
     }
 
+    if (!dmTableExists($db, $table)) {
+        $ensured[$table] = true;
+        return;
+    }
+
     $stmt = $db->prepare('
         SELECT COUNT(*) AS count_found
         FROM information_schema.COLUMNS
@@ -74,6 +79,74 @@ function dmEnsureBundleSignatureColumn(PDO $db, string $table): void {
     }
 
     $ensured[$table] = true;
+}
+
+function dmFindPublishedDeviceRow(PDO $db, int $userId, string $deviceId, bool $includeRevoked = true): ?array {
+    $candidateTables = [];
+
+    if (dmTableExists($db, 'device_public_keys')) {
+        $candidateTables[] = 'device_public_keys';
+    }
+
+    if (dmTableExists($db, 'dm_devices')) {
+        $candidateTables[] = 'dm_devices';
+    }
+
+    foreach ($candidateTables as $table) {
+        dmEnsureBundleSignatureColumn($db, $table);
+
+        $sql = "
+            SELECT user_id, device_id, device_name, encryption_public_key, signing_public_key, key_version, bundle_signature, created_at, updated_at, revoked_at
+            FROM {$table}
+            WHERE user_id = ?
+              AND device_id = ?
+        ";
+
+        if (!$includeRevoked) {
+            $sql .= '
+              AND revoked_at IS NULL
+            ';
+        }
+
+        $sql .= '
+            ORDER BY
+                CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END ASC,
+                updated_at DESC,
+                created_at DESC
+            LIMIT 1
+        ';
+
+        $stmt = $db->prepare($sql);
+        $stmt->execute([$userId, $deviceId]);
+        $row = $stmt->fetch();
+
+        if ($row) {
+            return $row;
+        }
+    }
+
+    return null;
+}
+
+function dmFindPublishedDevicePayload(PDO $db, int $userId, string $deviceId, bool $includeRevoked = true): ?array {
+    $row = dmFindPublishedDeviceRow($db, $userId, $deviceId, $includeRevoked);
+    return $row ? dmBuildPublishedDevicePayload($row) : null;
+}
+
+function dmDescribePublishedDeviceState(PDO $db, int $userId, string $deviceId): array {
+    $row = dmFindPublishedDeviceRow($db, $userId, $deviceId, true);
+
+    if (!$row) {
+        return [
+            'status' => 'missing',
+            'row' => null
+        ];
+    }
+
+    return [
+        'status' => ($row['revoked_at'] ?? null) === null ? 'active' : 'revoked',
+        'row' => $row
+    ];
 }
 
 function dmEnsureDeviceApprovalTable(PDO $db): void {
@@ -120,6 +193,26 @@ function dmEnsureRelayQueueMessageSignatureColumns(PDO $db): void {
         $db->exec('ALTER TABLE dm_relay_queue ADD COLUMN message_signature TEXT NULL AFTER tag');
     }
 
+    if (!dmColumnExists($db, 'dm_relay_queue', 'sender_device_name')) {
+        $db->exec('ALTER TABLE dm_relay_queue ADD COLUMN sender_device_name VARCHAR(191) NULL AFTER sender_device_id');
+    }
+
+    if (!dmColumnExists($db, 'dm_relay_queue', 'sender_encryption_public_key')) {
+        $db->exec('ALTER TABLE dm_relay_queue ADD COLUMN sender_encryption_public_key TEXT NULL AFTER sender_device_name');
+    }
+
+    if (!dmColumnExists($db, 'dm_relay_queue', 'sender_signing_public_key')) {
+        $db->exec('ALTER TABLE dm_relay_queue ADD COLUMN sender_signing_public_key TEXT NULL AFTER sender_encryption_public_key');
+    }
+
+    if (!dmColumnExists($db, 'dm_relay_queue', 'sender_key_version')) {
+        $db->exec('ALTER TABLE dm_relay_queue ADD COLUMN sender_key_version INT NULL AFTER sender_signing_public_key');
+    }
+
+    if (!dmColumnExists($db, 'dm_relay_queue', 'sender_bundle_signature')) {
+        $db->exec('ALTER TABLE dm_relay_queue ADD COLUMN sender_bundle_signature TEXT NULL AFTER sender_key_version');
+    }
+
     $ensured = true;
 }
 
@@ -132,6 +225,14 @@ function dmTrimmedString($value): ?string {
     return $trimmed !== '' ? $trimmed : null;
 }
 
+function dmPreservedString($value): ?string {
+    if (!is_string($value)) {
+        return null;
+    }
+
+    return trim($value) !== '' ? $value : null;
+}
+
 function dmRequireString(array $data, string $key, string $message): string {
     $value = dmTrimmedString($data[$key] ?? null);
 
@@ -140,6 +241,55 @@ function dmRequireString(array $data, string $key, string $message): string {
     }
 
     return $value;
+}
+
+function dmRequirePreservedString(array $data, string $key, string $message): string {
+    $value = dmPreservedString($data[$key] ?? null);
+
+    if ($value === null) {
+        jsonResponse(['error' => $message], 400);
+    }
+
+    return $value;
+}
+
+function dmNormalizePem(?string $value): ?string {
+    if (!is_string($value) || trim($value) === '') {
+        return null;
+    }
+
+    $normalized = str_replace(["\r\n", "\r"], "\n", $value);
+    return rtrim($normalized, "\n") . "\n";
+}
+
+function dmComparableBundleString($value): string {
+    if (!is_string($value)) {
+        return '';
+    }
+
+    return str_replace(["\r\n", "\r"], "\n", trim($value));
+}
+
+function dmComparablePem($value): string {
+    $normalized = dmNormalizePem(is_string($value) ? $value : null);
+    return $normalized !== null ? $normalized : '';
+}
+
+function dmBuildPublishedDevicePayload(array $row): array {
+    return [
+        'userId' => (int)$row['user_id'],
+        'deviceId' => $row['device_id'],
+        'deviceName' => $row['device_name'],
+        'encryptionPublicKey' => dmNormalizePem($row['encryption_public_key']),
+        'signingPublicKey' => dmNormalizePem($row['signing_public_key']),
+        'keyVersion' => (int)$row['key_version'],
+        'algorithm' => 'x25519-aes-256-gcm',
+        'signingAlgorithm' => 'ed25519',
+        'bundleSignature' => $row['bundle_signature'],
+        'createdAt' => $row['created_at'] ?? null,
+        'updatedAt' => $row['updated_at'] ?? null,
+        'revokedAt' => $row['revoked_at'] ?? null
+    ];
 }
 
 function dmRequireArray(array $data, string $key, string $message): array {
