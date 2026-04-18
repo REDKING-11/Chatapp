@@ -490,6 +490,43 @@ function hasConversationRecipientKey(device) {
   return Boolean(device?.deviceId && device?.encryptionPublicKey);
 }
 
+async function fetchCurrentUserRegisteredDmDevice({ token, currentUser, deviceId }) {
+  const res = await fetch(
+    `${CORE_API_BASE}/keys/devices/list.php?userId=${encodeURIComponent(currentUser.id)}&includeRevoked=1`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }
+  );
+
+  const data = await parseJsonResponse(res, "Failed to verify DM device registration");
+  return (data.devices || []).find(
+    (entry) => String(entry.deviceId) === String(deviceId)
+  ) || null;
+}
+
+async function ensureCurrentDeviceCanUseSecureDm({ token, currentUser, device, throwIfUnavailable = false }) {
+  const registeredDevice = await fetchCurrentUserRegisteredDmDevice({
+    token,
+    currentUser,
+    deviceId: device.deviceId
+  });
+
+  if (registeredDevice && !registeredDevice.revokedAt) {
+    return registeredDevice;
+  }
+
+  if (!throwIfUnavailable) {
+    return null;
+  }
+
+  throw createUserFacingDmError(
+    "This device is not approved for secure DMs yet. Approve it from a trusted device first.",
+    "dm_device_not_registered"
+  );
+}
+
 async function inspectDeviceList({ expectedUserId, devices }) {
   const inspectedDevices = [];
 
@@ -1782,6 +1819,17 @@ export async function pullRelayMessages({ token, currentUser }) {
     userId: currentUser.id,
     username: currentUser.username
   });
+
+  const registeredDevice = await ensureCurrentDeviceCanUseSecureDm({
+    token,
+    currentUser,
+    device,
+    throwIfUnavailable: false
+  });
+
+  if (!registeredDevice) {
+    return [];
+  }
 
   const relayRes = await fetchWithNetworkErrorContext(
     `${CORE_API_BASE}/dm/relay/pending.php?deviceId=${encodeURIComponent(device.deviceId)}`,
