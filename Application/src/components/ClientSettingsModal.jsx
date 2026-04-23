@@ -37,6 +37,7 @@ import {
 } from "../features/dm/actions";
 import { getStoredAuthToken } from "../features/session/actions";
 import { formatAppError } from "../lib/debug";
+import { UPDATE_PHASES } from "../lib/appUpdates.js";
 import { SHORTCUT_GROUPS } from "../lib/shortcuts";
 import PolicyDocumentModal from "./PolicyDocumentModal";
 import privacyPolicyMarkdown from "../assets/PP.md?raw";
@@ -221,8 +222,11 @@ export default function ClientSettingsModal({
     settings,
     currentUser,
     profileMediaHostUrl,
+    updateState,
     onChange,
     onImport,
+    onCheckForUpdates,
+    onOpenReleasesPage,
     onUserUpdated,
     onTabReset,
     onLogout,
@@ -236,6 +240,8 @@ export default function ClientSettingsModal({
     const [profileSuccess, setProfileSuccess] = useState("");
     const [activeTab, setActiveTab] = useState("general");
     const [displayName, setDisplayName] = useState(currentUser?.displayName || "");
+    const [profileDescription, setProfileDescription] = useState(currentUser?.profileDescription || "");
+    const [profileGames, setProfileGames] = useState(Array.isArray(currentUser?.profileGames) ? currentUser.profileGames : []);
     const [profileManifest, setProfileManifest] = useState(null);
     const [avatarUrl, setAvatarUrl] = useState(null);
     const [bannerUrl, setBannerUrl] = useState(null);
@@ -274,6 +280,7 @@ export default function ClientSettingsModal({
         keyHealth: true,
         developer: true,
         preview: true,
+        updates: false,
         shortcuts: false,
         policies: false
     });
@@ -293,10 +300,29 @@ export default function ClientSettingsModal({
     );
     const currentDmDeviceIsRevoked = Boolean(currentDmDevice?.revokedAt);
     const hasRevokedDmDevices = dmDevices.some((device) => Boolean(device.revokedAt));
+    const updateActionBusy = updateState?.phase === UPDATE_PHASES.CHECKING;
+    const canOpenReleasePage = Boolean(updateState?.releaseUrl);
+    const updateStatusLabel = updateState?.phase === UPDATE_PHASES.CHECKING
+        ? "Checking for updates..."
+        : updateState?.phase === UPDATE_PHASES.AVAILABLE
+            ? `Update available: ${updateState?.latestVersion || "new release"}`
+            : updateState?.phase === UPDATE_PHASES.UP_TO_DATE
+                ? `You're up to date on ${updateState?.currentVersion || "this build"}.`
+                : updateState?.phase === UPDATE_PHASES.ERROR
+                    ? (updateState?.error || "Could not check for updates.")
+                    : "Manual update checks happen here.";
 
     useEffect(() => {
         setDisplayName(currentUser?.displayName || "");
     }, [currentUser?.displayName]);
+
+    useEffect(() => {
+        setProfileDescription(currentUser?.profileDescription || "");
+    }, [currentUser?.profileDescription]);
+
+    useEffect(() => {
+        setProfileGames(Array.isArray(currentUser?.profileGames) ? currentUser.profileGames : []);
+    }, [currentUser?.profileGames]);
 
     useEffect(() => {
         try {
@@ -645,22 +671,58 @@ export default function ClientSettingsModal({
         }));
     }
 
-    async function handleSaveDisplayName() {
+    async function handleSaveProfile() {
         try {
             setProfileSaving(true);
             setProfileError("");
             setProfileSuccess("");
-            const data = await updateUserProfile({ displayName });
+            const data = await updateUserProfile({
+                displayName,
+                profileDescription,
+                profileGames
+            });
             onUserUpdated?.(data.user);
-            setProfileSuccess("Profile name saved.");
+            setProfileSuccess("Profile saved.");
         } catch (error) {
             setProfileError(formatAppError(error, {
-                fallbackMessage: "Could not save that display name.",
+                fallbackMessage: "Could not save that profile.",
                 context: "Profile update"
             }).message);
         } finally {
             setProfileSaving(false);
         }
+    }
+
+    function handleProfileGameChange(index, nextValue) {
+        setProfileGames((prev) => prev.map((game, gameIndex) => (
+            gameIndex === index ? nextValue.slice(0, 40) : game
+        )));
+    }
+
+    function handleAddProfileGame() {
+        setProfileGames((prev) => (
+            prev.length >= 6
+                ? prev
+                : [...prev, ""]
+        ));
+    }
+
+    function handleRemoveProfileGame(index) {
+        setProfileGames((prev) => prev.filter((_, gameIndex) => gameIndex !== index));
+    }
+
+    function handleMoveProfileGame(index, direction) {
+        setProfileGames((prev) => {
+            const nextIndex = index + direction;
+            if (nextIndex < 0 || nextIndex >= prev.length) {
+                return prev;
+            }
+
+            const next = [...prev];
+            const [moved] = next.splice(index, 1);
+            next.splice(nextIndex, 0, moved);
+            return next;
+        });
     }
 
     function handleImageUpload(event, assetType) {
@@ -1442,79 +1504,7 @@ export default function ClientSettingsModal({
                             </label>
                         </div>
 
-                        <div className="client-settings-stack" style={{ marginTop: "18px" }}>
-                            <div className="client-settings-inline-actions">
-                                <button type="button" onClick={handleCopyDiagnostics}>
-                                    Copy diagnostics JSON
-                                </button>
-                                <button
-                                    type="button"
-                                    className="secondary"
-                                    onClick={() => setDiagnosticEntries(readStoredDiagnostics())}
-                                >
-                                    Refresh list
-                                </button>
-                                <button
-                                    type="button"
-                                    className="secondary"
-                                    onClick={handleClearDiagnostics}
-                                    disabled={diagnosticEntries.length === 0}
-                                >
-                                    Clear saved diagnostics
-                                </button>
-                            </div>
 
-                            {diagnosticsNotice ? (
-                                <p className="client-settings-muted">{diagnosticsNotice}</p>
-                            ) : null}
-
-                            {recentDiagnostics.length > 0 ? (
-                                <div className="client-settings-stack">
-                                    {recentDiagnostics.map((entry, index) => {
-                                        const borderColor = entry.severity === "fatal"
-                                            ? "#ef4444"
-                                            : entry.severity === "error"
-                                                ? "#f97316"
-                                                : entry.severity === "warning"
-                                                    ? "#facc15"
-                                                    : "#38bdf8";
-                                        const isNewestSerious = index === 0 && ["fatal", "error"].includes(entry.severity);
-
-                                        return (
-                                            <div
-                                                key={entry.id}
-                                                className="client-settings-security-card"
-                                                style={{
-                                                    borderLeft: `4px solid ${borderColor}`,
-                                                    boxShadow: isNewestSerious ? `0 0 0 1px ${borderColor}` : undefined
-                                                }}
-                                            >
-                                                <div className="client-settings-security-copy">
-                                                    <strong><code>{entry.code}</code></strong>
-                                                    <p>{entry.userMessage || entry.message}</p>
-                                                    <span className="client-settings-muted">
-                                                        {new Date(entry.recordedAt).toLocaleString()}
-                                                        {" · "}
-                                                        {entry.source}.{entry.operation}
-                                                        {entry.status ? ` · HTTP ${entry.status}` : ""}
-                                                        {entry.traceId ? ` · trace ${entry.traceId}` : ""}
-                                                    </span>
-                                                    {settings.debugMode ? (
-                                                        <pre className="friends-debug-details" style={{ marginTop: "10px" }}>
-                                                            {JSON.stringify(entry, null, 2)}
-                                                        </pre>
-                                                    ) : null}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            ) : (
-                                <p className="client-settings-muted">
-                                    No recent diagnostics have been captured on this device yet.
-                                </p>
-                            )}
-                        </div>
                     </CollapsibleSection>
 
                         </>
@@ -1891,7 +1881,87 @@ export default function ClientSettingsModal({
                             </label>
                         </div>
                     </CollapsibleSection>
-                        </>
+
+                    <CollapsibleSection
+                        title="Diagnostics"
+                        description="Recent client-side errors captured on this device for debugging and bug reports."
+                        isOpen={!collapsedSections.keyHealth}
+                        onToggle={() => toggleSection("keyHealth")}
+                    >
+                        <div className="client-settings-stack" style={{ marginTop: "18px" }}>
+                            <div className="client-settings-inline-actions">
+                                <button type="button" onClick={handleCopyDiagnostics}>
+                                    Copy diagnostics JSON
+                                </button>
+                                <button
+                                    type="button"
+                                    className="secondary"
+                                    onClick={() => setDiagnosticEntries(readStoredDiagnostics())}
+                                >
+                                    Refresh list
+                                </button>
+                                <button
+                                    type="button"
+                                    className="secondary"
+                                    onClick={handleClearDiagnostics}
+                                    disabled={diagnosticEntries.length === 0}
+                                >
+                                    Clear saved diagnostics
+                                </button>
+                            </div>
+
+                            {diagnosticsNotice ? (
+                                <p className="client-settings-muted">{diagnosticsNotice}</p>
+                            ) : null}
+
+                            {recentDiagnostics.length > 0 ? (
+                                <div className="client-settings-stack">
+                                    {recentDiagnostics.map((entry, index) => {
+                                        const borderColor = entry.severity === "fatal"
+                                            ? "#ef4444"
+                                            : entry.severity === "error"
+                                                ? "#f97316"
+                                                : entry.severity === "warning"
+                                                    ? "#facc15"
+                                                    : "#38bdf8";
+                                        const isNewestSerious = index === 0 && ["fatal", "error"].includes(entry.severity);
+
+                                        return (
+                                            <div
+                                                key={entry.id}
+                                                className="client-settings-security-card"
+                                                style={{
+                                                    borderLeft: `4px solid ${borderColor}`,
+                                                    boxShadow: isNewestSerious ? `0 0 0 1px ${borderColor}` : undefined
+                                                }}
+                                            >
+                                                <div className="client-settings-security-copy">
+                                                    <strong><code>{entry.code}</code></strong>
+                                                    <p>{entry.userMessage || entry.message}</p>
+                                                    <span className="client-settings-muted">
+                                                        {new Date(entry.recordedAt).toLocaleString()}
+                                                        {" · "}
+                                                        {entry.source}.{entry.operation}
+                                                        {entry.status ? ` · HTTP ${entry.status}` : ""}
+                                                        {entry.traceId ? ` · trace ${entry.traceId}` : ""}
+                                                    </span>
+                                                    {settings.debugMode ? (
+                                                        <pre className="friends-debug-details" style={{ marginTop: "10px" }}>
+                                                            {JSON.stringify(entry, null, 2)}
+                                                        </pre>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="client-settings-muted">
+                                    No recent diagnostics have been captured on this device yet.
+                                </p>
+                            )}
+                        </div>
+                    </CollapsibleSection>                        </>
                     ) : null}
 
                     {activeTab === "profile" ? (
@@ -1932,9 +2002,75 @@ export default function ClientSettingsModal({
                             />
                         </label>
 
+                        <label className="client-settings-field">
+                            <span>Default profile description</span>
+                            <textarea
+                                value={profileDescription}
+                                placeholder="A short description friends can download in DMs"
+                                maxLength={280}
+                                onChange={(event) => setProfileDescription(event.target.value.slice(0, 280))}
+                            />
+                            <small>{profileDescription.length}/280</small>
+                        </label>
+
+                        <div className="client-settings-field">
+                            <span>Games</span>
+                            <div className="client-profile-games-editor">
+                                {profileGames.map((game, index) => (
+                                    <div key={`profile-game-${index}`} className="client-profile-game-row">
+                                        <input
+                                            type="text"
+                                            value={game}
+                                            placeholder="Game title"
+                                            maxLength={40}
+                                            onChange={(event) => handleProfileGameChange(index, event.target.value)}
+                                        />
+                                        <div className="client-profile-game-actions">
+                                            <button
+                                                type="button"
+                                                className="secondary"
+                                                onClick={() => handleMoveProfileGame(index, -1)}
+                                                disabled={index === 0}
+                                                aria-label="Move game up"
+                                            >
+                                                ^
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="secondary"
+                                                onClick={() => handleMoveProfileGame(index, 1)}
+                                                disabled={index === profileGames.length - 1}
+                                                aria-label="Move game down"
+                                            >
+                                                v
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="secondary"
+                                                onClick={() => handleRemoveProfileGame(index)}
+                                            >
+                                                Remove
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                                <div className="client-settings-inline-actions">
+                                    <button
+                                        type="button"
+                                        className="secondary"
+                                        onClick={handleAddProfileGame}
+                                        disabled={profileGames.length >= 6}
+                                    >
+                                        Add game
+                                    </button>
+                                </div>
+                                <small>{profileGames.length}/6 games</small>
+                            </div>
+                        </div>
+
                         <div className="client-settings-inline-actions">
-                            <button type="button" onClick={handleSaveDisplayName} disabled={profileSaving}>
-                                {profileSaving ? "Saving..." : "Save display name"}
+                            <button type="button" onClick={handleSaveProfile} disabled={profileSaving}>
+                                {profileSaving ? "Saving..." : "Save profile"}
                             </button>
                         </div>
                     </CollapsibleSection>
@@ -2021,6 +2157,20 @@ export default function ClientSettingsModal({
 
                             <label className="client-toggle-card">
                                 <div className="client-toggle-copy">
+                                    <strong>Load profile descriptions</strong>
+                                    <p>Downloads default DM profile descriptions from your friends.</p>
+                                </div>
+                                <div className="client-toggle-control">
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.autoLoadProfileDescriptions}
+                                        onChange={(event) => onChange("autoLoadProfileDescriptions", event.target.checked)}
+                                    />
+                                </div>
+                            </label>
+
+                            <label className="client-toggle-card">
+                                <div className="client-toggle-copy">
                                     <strong>Shared servers only</strong>
                                     <p>Keeps profile media loading limited to servers you already share.</p>
                                 </div>
@@ -2101,7 +2251,87 @@ export default function ClientSettingsModal({
                             Add folder
                         </button>
                     </CollapsibleSection>
-                        </>
+
+                    <CollapsibleSection
+                        title="Diagnostics"
+                        description="Recent client-side errors captured on this device for debugging and bug reports."
+                        isOpen={!collapsedSections.keyHealth}
+                        onToggle={() => toggleSection("keyHealth")}
+                    >
+                        <div className="client-settings-stack" style={{ marginTop: "18px" }}>
+                            <div className="client-settings-inline-actions">
+                                <button type="button" onClick={handleCopyDiagnostics}>
+                                    Copy diagnostics JSON
+                                </button>
+                                <button
+                                    type="button"
+                                    className="secondary"
+                                    onClick={() => setDiagnosticEntries(readStoredDiagnostics())}
+                                >
+                                    Refresh list
+                                </button>
+                                <button
+                                    type="button"
+                                    className="secondary"
+                                    onClick={handleClearDiagnostics}
+                                    disabled={diagnosticEntries.length === 0}
+                                >
+                                    Clear saved diagnostics
+                                </button>
+                            </div>
+
+                            {diagnosticsNotice ? (
+                                <p className="client-settings-muted">{diagnosticsNotice}</p>
+                            ) : null}
+
+                            {recentDiagnostics.length > 0 ? (
+                                <div className="client-settings-stack">
+                                    {recentDiagnostics.map((entry, index) => {
+                                        const borderColor = entry.severity === "fatal"
+                                            ? "#ef4444"
+                                            : entry.severity === "error"
+                                                ? "#f97316"
+                                                : entry.severity === "warning"
+                                                    ? "#facc15"
+                                                    : "#38bdf8";
+                                        const isNewestSerious = index === 0 && ["fatal", "error"].includes(entry.severity);
+
+                                        return (
+                                            <div
+                                                key={entry.id}
+                                                className="client-settings-security-card"
+                                                style={{
+                                                    borderLeft: `4px solid ${borderColor}`,
+                                                    boxShadow: isNewestSerious ? `0 0 0 1px ${borderColor}` : undefined
+                                                }}
+                                            >
+                                                <div className="client-settings-security-copy">
+                                                    <strong><code>{entry.code}</code></strong>
+                                                    <p>{entry.userMessage || entry.message}</p>
+                                                    <span className="client-settings-muted">
+                                                        {new Date(entry.recordedAt).toLocaleString()}
+                                                        {" · "}
+                                                        {entry.source}.{entry.operation}
+                                                        {entry.status ? ` · HTTP ${entry.status}` : ""}
+                                                        {entry.traceId ? ` · trace ${entry.traceId}` : ""}
+                                                    </span>
+                                                    {settings.debugMode ? (
+                                                        <pre className="friends-debug-details" style={{ marginTop: "10px" }}>
+                                                            {JSON.stringify(entry, null, 2)}
+                                                        </pre>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="client-settings-muted">
+                                    No recent diagnostics have been captured on this device yet.
+                                </p>
+                            )}
+                        </div>
+                    </CollapsibleSection>                        </>
                     ) : null}
 
                     {activeTab === "general" ? (
@@ -2151,6 +2381,38 @@ export default function ClientSettingsModal({
                     </CollapsibleSection>
 
                     <CollapsibleSection
+                        title="Updates"
+                        description="Check this desktop client for new releases."
+                        isOpen={!collapsedSections.updates}
+                        onToggle={() => toggleSection("updates")}
+                    >
+                        <div className="client-settings-stack">
+                            <div className="client-preview-card">
+                                <h4>Desktop app updates</h4>
+                                <p>{updateStatusLabel}</p>
+                                {updateState?.publishedAt ? (
+                                    <p className="client-settings-muted">
+                                        Published {new Date(updateState.publishedAt).toLocaleString()}
+                                    </p>
+                                ) : null}
+                                {updateState?.notesSummary ? (
+                                    <p className="client-settings-muted">{updateState.notesSummary}</p>
+                                ) : null}
+                                <div className="client-settings-inline-actions">
+                                    <button type="button" onClick={onCheckForUpdates} disabled={updateActionBusy}>
+                                        {updateActionBusy ? "Checking..." : "Check for updates"}
+                                    </button>
+                                    {canOpenReleasePage ? (
+                                        <button type="button" className="secondary" onClick={onOpenReleasesPage}>
+                                            View release
+                                        </button>
+                                    ) : null}
+                                </div>
+                            </div>
+                        </div>
+                    </CollapsibleSection>
+
+                    <CollapsibleSection
                         title="Policies"
                         description="Your current privacy policy and terms documents, kept easy to find after onboarding."
                         isOpen={!collapsedSections.policies}
@@ -2170,7 +2432,87 @@ export default function ClientSettingsModal({
                             This page is meant to grow over time with more shortcuts, helper docs, and policy details.
                         </p>
                     </CollapsibleSection>
-                        </>
+
+                    <CollapsibleSection
+                        title="Diagnostics"
+                        description="Recent client-side errors captured on this device for debugging and bug reports."
+                        isOpen={!collapsedSections.keyHealth}
+                        onToggle={() => toggleSection("keyHealth")}
+                    >
+                        <div className="client-settings-stack" style={{ marginTop: "18px" }}>
+                            <div className="client-settings-inline-actions">
+                                <button type="button" onClick={handleCopyDiagnostics}>
+                                    Copy diagnostics JSON
+                                </button>
+                                <button
+                                    type="button"
+                                    className="secondary"
+                                    onClick={() => setDiagnosticEntries(readStoredDiagnostics())}
+                                >
+                                    Refresh list
+                                </button>
+                                <button
+                                    type="button"
+                                    className="secondary"
+                                    onClick={handleClearDiagnostics}
+                                    disabled={diagnosticEntries.length === 0}
+                                >
+                                    Clear saved diagnostics
+                                </button>
+                            </div>
+
+                            {diagnosticsNotice ? (
+                                <p className="client-settings-muted">{diagnosticsNotice}</p>
+                            ) : null}
+
+                            {recentDiagnostics.length > 0 ? (
+                                <div className="client-settings-stack">
+                                    {recentDiagnostics.map((entry, index) => {
+                                        const borderColor = entry.severity === "fatal"
+                                            ? "#ef4444"
+                                            : entry.severity === "error"
+                                                ? "#f97316"
+                                                : entry.severity === "warning"
+                                                    ? "#facc15"
+                                                    : "#38bdf8";
+                                        const isNewestSerious = index === 0 && ["fatal", "error"].includes(entry.severity);
+
+                                        return (
+                                            <div
+                                                key={entry.id}
+                                                className="client-settings-security-card"
+                                                style={{
+                                                    borderLeft: `4px solid ${borderColor}`,
+                                                    boxShadow: isNewestSerious ? `0 0 0 1px ${borderColor}` : undefined
+                                                }}
+                                            >
+                                                <div className="client-settings-security-copy">
+                                                    <strong><code>{entry.code}</code></strong>
+                                                    <p>{entry.userMessage || entry.message}</p>
+                                                    <span className="client-settings-muted">
+                                                        {new Date(entry.recordedAt).toLocaleString()}
+                                                        {" · "}
+                                                        {entry.source}.{entry.operation}
+                                                        {entry.status ? ` · HTTP ${entry.status}` : ""}
+                                                        {entry.traceId ? ` · trace ${entry.traceId}` : ""}
+                                                    </span>
+                                                    {settings.debugMode ? (
+                                                        <pre className="friends-debug-details" style={{ marginTop: "10px" }}>
+                                                            {JSON.stringify(entry, null, 2)}
+                                                        </pre>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="client-settings-muted">
+                                    No recent diagnostics have been captured on this device yet.
+                                </p>
+                            )}
+                        </div>
+                    </CollapsibleSection>                        </>
                     ) : null}
                 </div>
                 </div>
@@ -2268,3 +2610,4 @@ export default function ClientSettingsModal({
 export function resetClientSettings() {
     return { ...CLIENT_SETTINGS_DEFAULTS };
 }
+

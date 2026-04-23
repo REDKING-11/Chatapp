@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import FriendContextMenu from "../components/FriendContextMenu";
 import FriendsAddFriendModal from "../components/FriendsAddFriendModal";
-import FriendRemovalConfirmModal from "../components/FriendRemovalConfirmModal";
 import FriendConversationSettingsModal from "../components/FriendConversationSettingsModal";
+import FriendSettingsModal from "../components/FriendSettingsModal";
 import FriendsConversationPanel from "../components/FriendsConversationPanel";
 import FriendsCreateGroupModal from "../components/FriendsCreateGroupModal";
 import FriendsHeader from "../components/FriendsHeader";
@@ -139,10 +139,10 @@ export default function FriendsHome({
     const [clientSettingsSnapshot, setClientSettingsSnapshot] = useState(() => loadClientSettings());
     const [forgottenConversationIds, setForgottenConversationIds] = useState({});
     const [friendContextMenu, setFriendContextMenu] = useState(null);
+    const [friendSettingsTarget, setFriendSettingsTarget] = useState(null);
     const [lockPhase, setLockPhase] = useState("hidden");
     const [isEncryptingChat, setIsEncryptingChat] = useState(false);
     const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
-    const [friendRemovalConfirm, setFriendRemovalConfirm] = useState(null);
     const [groupTitle, setGroupTitle] = useState("");
     const [groupMemberIds, setGroupMemberIds] = useState([]);
     const [groupCreateError, setGroupCreateError] = useState("");
@@ -159,6 +159,7 @@ export default function FriendsHome({
     const [directInlineEmbeds, setDirectInlineEmbeds] = useState([]);
     const [groupAttachments, setGroupAttachments] = useState([]);
     const [attachmentTransferStates, setAttachmentTransferStates] = useState({});
+    const [fileShareStates, setFileShareStates] = useState({});
     const [presenceByUserId, setPresenceByUserId] = useState({});
     const [presenceSubscriptionNonce, setPresenceSubscriptionNonce] = useState(0);
     const [messageDeliveryById, setMessageDeliveryById] = useState({});
@@ -235,15 +236,19 @@ export default function FriendsHome({
         setErrorDebugDetails(isDebugModeEnabled() ? debugDetails : "");
     }
 
-    function updateAttachmentTransferState(transferId, patch) {
-        if (!transferId) {
+    function getAttachmentKey(attachment) {
+        return String(attachment?.shareId || attachment?.transferId || "");
+    }
+
+    function updateAttachmentTransferState(attachmentId, patch) {
+        if (!attachmentId) {
             return;
         }
 
         setAttachmentTransferStates((prev) => ({
             ...prev,
-            [String(transferId)]: {
-                ...(prev[String(transferId)] || { status: "idle", progress: 0 }),
+            [String(attachmentId)]: {
+                ...(prev[String(attachmentId)] || { status: "idle", progress: 0 }),
                 ...(patch || {})
             }
         }));
@@ -254,6 +259,46 @@ export default function FriendsHome({
         setDirectInlineEmbeds([]);
         setGroupAttachments([]);
     }
+
+    useEffect(() => {
+        let cancelled = false;
+
+        async function refreshFileShareStates() {
+            const shareIds = Array.from(new Set(
+                (messages || [])
+                    .flatMap((message) => Array.isArray(message?.attachments) ? message.attachments : [])
+                    .map((attachment) => String(attachment?.shareId || ""))
+                    .filter(Boolean)
+            ));
+
+            if (!shareIds.length || !window.fileShares?.get) {
+                if (!cancelled) {
+                    setFileShareStates({});
+                }
+                return;
+            }
+
+            const entries = await Promise.all(
+                shareIds.map(async (shareId) => {
+                    try {
+                        return [shareId, await window.fileShares.get({ shareId })];
+                    } catch {
+                        return [shareId, null];
+                    }
+                })
+            );
+
+            if (!cancelled) {
+                setFileShareStates(Object.fromEntries(entries.filter((entry) => entry[1])));
+            }
+        }
+
+        refreshFileShareStates();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [messages]);
 
     function mergeOrderedById(existingItems, incomingItems, getId) {
         const incomingMap = new Map(
@@ -345,6 +390,36 @@ export default function FriendsHome({
         return data;
     }
 
+    function getActiveMutedFriendNotifications() {
+        const now = Date.now();
+        const raw = clientSettingsSnapshot?.mutedFriendNotificationsById || {};
+        const active = {};
+        let changed = false;
+
+        Object.entries(raw).forEach(([friendId, entry]) => {
+            const normalizedFriendId = String(friendId || "").trim();
+
+            if (!normalizedFriendId) {
+                changed = true;
+                return;
+            }
+
+            if (entry === true) {
+                active[normalizedFriendId] = true;
+                return;
+            }
+
+            const expiresAt = Number(entry);
+            if (Number.isFinite(expiresAt) && expiresAt > now) {
+                active[normalizedFriendId] = Math.floor(expiresAt);
+            } else {
+                changed = true;
+            }
+        });
+
+        return { active, changed };
+    }
+
     async function maybeShowDesktopNotification({ conversationId, message }) {
         if (!window.desktopNotifications || !message || message.direction !== "incoming") {
             return;
@@ -371,11 +446,28 @@ export default function FriendsHome({
             return;
         }
 
+        if (String(clientSettingsSnapshot?.presenceStatus || "").toLowerCase() === "busy") {
+            return;
+        }
+
         const matchingFriend = friendsState.friends.find(
             (friend) => String(friend.conversationId || "") === String(conversationId)
         );
 
         if (matchingFriend) {
+            const { active, changed } = getActiveMutedFriendNotifications();
+            if (changed) {
+                const nextSettings = saveClientSettings({
+                    ...clientSettingsSnapshot,
+                    mutedFriendNotificationsById: active
+                });
+                setClientSettingsSnapshot(nextSettings);
+            }
+
+            if (Boolean(active[String(matchingFriend.friendUserId)])) {
+                return;
+            }
+
             const previewBody = getMessagePreviewText(message) || "New message";
             await window.desktopNotifications.show({
                 title: matchingFriend.friendUsername,
@@ -922,6 +1014,11 @@ export default function FriendsHome({
                     return;
                 }
 
+                if (friendSettingsTarget) {
+                    setFriendSettingsTarget(null);
+                    return;
+                }
+
                 if (showConversationSettings) {
                     setShowConversationSettings(false);
                     return;
@@ -936,10 +1033,6 @@ export default function FriendsHome({
                     setShowCreateGroupModal(false);
                     return;
                 }
-
-                if (friendRemovalConfirm) {
-                    setFriendRemovalConfirm(null);
-                }
             }
         }
 
@@ -948,7 +1041,7 @@ export default function FriendsHome({
     }, [
         activeView,
         friendContextMenu,
-        friendRemovalConfirm,
+        friendSettingsTarget,
         selectedFriend,
         showAddFriendModal,
         showConversationSettings,
@@ -1102,14 +1195,124 @@ export default function FriendsHome({
     useEffect(() => {
         async function handleSecureDmFileSignal(event) {
             const detail = event.detail || {};
-            const transferId = String(detail.transferId || "");
+            const attachmentKey = String(detail.shareId || detail.transferId || "");
 
-            if (!transferId) {
+            if (!attachmentKey) {
                 return;
             }
 
             try {
                 if (detail.type === "dm:file:request") {
+                    if (detail.shareId) {
+                        try {
+                            const prepared = await window.fileShares.prepareDownload({
+                                shareId: detail.shareId
+                            });
+
+                            updateAttachmentTransferState(detail.shareId, {
+                                status: "uploading",
+                                progress: 0,
+                                fileName: prepared.attachment.fileName
+                            });
+
+                            setFileShareStates((prev) => ({
+                                ...prev,
+                                [String(detail.shareId)]: prepared.share
+                            }));
+
+                            await sendSecureDmRealtimeEvent({
+                                token: getStoredAuthToken(),
+                                currentUser,
+                                payload: {
+                                    type: "dm:file:ready",
+                                    targetDeviceId: detail.senderDeviceId,
+                                    shareId: detail.shareId,
+                                    transferId: prepared.attachment.transferId,
+                                    attachment: prepared.attachment
+                                }
+                            });
+
+                            let offset = 0;
+
+                            while (true) {
+                                const chunk = await window.attachmentTransfers.readOutgoingChunk({
+                                    transferId: prepared.attachment.transferId,
+                                    offset,
+                                    length: FILE_TRANSFER_CHUNK_BYTES
+                                });
+
+                                await sendSecureDmRealtimeEvent({
+                                    token: getStoredAuthToken(),
+                                    currentUser,
+                                    payload: {
+                                        type: "dm:file:chunk",
+                                        targetDeviceId: detail.senderDeviceId,
+                                        shareId: detail.shareId,
+                                        transferId: prepared.attachment.transferId,
+                                        chunkBase64: chunk.chunkBase64,
+                                        ivBase64: chunk.ivBase64,
+                                        tagBase64: chunk.tagBase64,
+                                        nextOffset: chunk.nextOffset,
+                                        fileSize: chunk.fileSize
+                                    }
+                                });
+
+                                updateAttachmentTransferState(detail.shareId, {
+                                    status: "uploading",
+                                    progress: chunk.fileSize > 0 ? (chunk.nextOffset / chunk.fileSize) * 100 : 100
+                                });
+
+                                if (chunk.done) {
+                                    break;
+                                }
+
+                                offset = chunk.nextOffset;
+                            }
+
+                            await sendSecureDmRealtimeEvent({
+                                token: getStoredAuthToken(),
+                                currentUser,
+                                payload: {
+                                    type: "dm:file:complete",
+                                    targetDeviceId: detail.senderDeviceId,
+                                    shareId: detail.shareId,
+                                    transferId: prepared.attachment.transferId
+                                }
+                            });
+
+                            updateAttachmentTransferState(detail.shareId, {
+                                status: "complete",
+                                progress: 100
+                            });
+                        } catch (shareError) {
+                            if (detail.shareId) {
+                                try {
+                                    const nextShare = await window.fileShares.get({ shareId: detail.shareId });
+                                    setFileShareStates((prev) => ({
+                                        ...prev,
+                                        [String(detail.shareId)]: nextShare
+                                    }));
+                                } catch {
+                                    // ignore secondary share lookup failures
+                                }
+                            }
+
+                            await sendSecureDmRealtimeEvent({
+                                token: getStoredAuthToken(),
+                                currentUser,
+                                payload: {
+                                    type: "dm:file:error",
+                                    targetDeviceId: detail.senderDeviceId,
+                                    shareId: detail.shareId,
+                                    error: shareError?.message || "That share link is no longer available.",
+                                    replacementShareId: shareError?.replacementShareId || ""
+                                }
+                            });
+                        }
+                        return;
+                    }
+
+                    const transferId = String(detail.transferId || "");
                     const attachmentInfo = await window.attachmentTransfers.getOutgoingInfo({ transferId });
 
                     if (!attachmentInfo) {
@@ -1196,6 +1399,33 @@ export default function FriendsHome({
                 }
 
                 if (detail.type === "dm:file:ready") {
+                    if (detail.shareId) {
+                        const pendingTarget = incomingDownloadTargetsRef.current[String(detail.shareId)];
+
+                        if (!pendingTarget?.filePath || !detail.attachment?.transferId) {
+                            return;
+                        }
+
+                        await window.attachmentTransfers.beginIncomingDownload({
+                            transferId: detail.attachment.transferId,
+                            filePath: pendingTarget.filePath,
+                            attachment: detail.attachment
+                        });
+
+                        incomingDownloadTargetsRef.current[String(detail.shareId)] = {
+                            ...pendingTarget,
+                            transferId: detail.attachment.transferId
+                        };
+
+                        updateAttachmentTransferState(detail.shareId, {
+                            status: "downloading",
+                            progress: 0,
+                            fileName: detail.attachment.fileName || pendingTarget.fileName || "file"
+                        });
+                        return;
+                    }
+
+                    const transferId = String(detail.transferId || "");
                     updateAttachmentTransferState(transferId, {
                         status: "downloading",
                         progress: 0,
@@ -1205,6 +1435,8 @@ export default function FriendsHome({
                 }
 
                 if (detail.type === "dm:file:chunk") {
+                    const transferId = String(detail.transferId || "");
+
                     await window.attachmentTransfers.appendIncomingChunk({
                         transferId,
                         chunkBase64: detail.chunkBase64,
@@ -1212,7 +1444,7 @@ export default function FriendsHome({
                         tagBase64: detail.tagBase64
                     });
 
-                    updateAttachmentTransferState(transferId, {
+                    updateAttachmentTransferState(attachmentKey, {
                         status: "downloading",
                         progress: Number(detail.fileSize) > 0
                             ? (Number(detail.nextOffset || 0) / Number(detail.fileSize)) * 100
@@ -1222,9 +1454,10 @@ export default function FriendsHome({
                 }
 
                 if (detail.type === "dm:file:complete") {
+                    const transferId = String(detail.transferId || "");
                     await window.attachmentTransfers.finishIncomingDownload({ transferId });
-                    delete incomingDownloadTargetsRef.current[transferId];
-                    updateAttachmentTransferState(transferId, {
+                    delete incomingDownloadTargetsRef.current[attachmentKey];
+                    updateAttachmentTransferState(attachmentKey, {
                         status: "complete",
                         progress: 100
                     });
@@ -1232,22 +1465,37 @@ export default function FriendsHome({
                 }
 
                 if (detail.type === "dm:file:error") {
-                    if (incomingDownloadTargetsRef.current[transferId]) {
+                    const transferId = String(detail.transferId || incomingDownloadTargetsRef.current[attachmentKey]?.transferId || "");
+
+                    if (transferId) {
                         await window.attachmentTransfers.cancelIncomingDownload({
                             transferId,
                             removePartial: true
                         });
-                        delete incomingDownloadTargetsRef.current[transferId];
                     }
 
-                    updateAttachmentTransferState(transferId, {
+                    delete incomingDownloadTargetsRef.current[attachmentKey];
+
+                    if (detail.shareId) {
+                        try {
+                            const share = await window.fileShares.get({ shareId: detail.shareId });
+                            setFileShareStates((prev) => ({
+                                ...prev,
+                                [String(detail.shareId)]: share
+                            }));
+                        } catch {
+                            // ignore share refresh failures
+                        }
+                    }
+
+                    updateAttachmentTransferState(attachmentKey, {
                         status: "error",
                         error: detail.error || "Transfer failed"
                     });
                 }
             } catch (transferError) {
                 console.error("Attachment transfer failed:", transferError);
-                updateAttachmentTransferState(transferId, {
+                updateAttachmentTransferState(attachmentKey, {
                     status: "error",
                     error: transferError?.message || "Transfer failed"
                 });
@@ -1610,6 +1858,7 @@ export default function FriendsHome({
         setHasLocalGroupConversationAccess(true);
         setShowConversationSettings(false);
         setFriendContextMenu(null);
+        setFriendSettingsTarget(null);
         setGroupReplyTo(null);
         setGroupEditingMessage(null);
     }
@@ -2193,6 +2442,7 @@ export default function FriendsHome({
 
     function openFriendContextMenu(event, friend) {
         event.preventDefault();
+        setFriendSettingsTarget(null);
 
         setFriendContextMenu({
             friend,
@@ -2249,17 +2499,102 @@ export default function FriendsHome({
         clearErrorState();
     }
 
-    function requestRemoveFriend(friend, hardDelete = false) {
-        setFriendContextMenu(null);
-        setFriendRemovalConfirm({ friend, hardDelete });
-    }
+    function setFriendMuteOption(friend, option) {
+        const friendUserId = String(friend?.friendUserId || "").trim();
 
-    async function handleConfirmRemoveFriend() {
-        if (!friendRemovalConfirm) {
+        if (!friendUserId) {
             return;
         }
 
-        const { friend, hardDelete } = friendRemovalConfirm;
+        const mutedById = {
+            ...(clientSettingsSnapshot.mutedFriendNotificationsById || {})
+        };
+
+        if (option === "indefinite") {
+            mutedById[friendUserId] = true;
+        } else if (typeof option === "number" && Number.isFinite(option) && option > 0) {
+            mutedById[friendUserId] = Date.now() + option;
+        } else if (option === "hour") {
+            mutedById[friendUserId] = Date.now() + (60 * 60 * 1000);
+        } else {
+            delete mutedById[friendUserId];
+        }
+
+        const nextSettings = saveClientSettings({
+            ...clientSettingsSnapshot,
+            mutedFriendNotificationsById: mutedById
+        });
+        setClientSettingsSnapshot(nextSettings);
+    }
+
+    function setFriendProfileNote(friendUserId, note) {
+        const normalizedFriendId = String(friendUserId || "").trim();
+
+        if (!normalizedFriendId) {
+            return;
+        }
+
+        const nextNotes = {
+            ...(clientSettingsSnapshot.friendProfileNotesById || {})
+        };
+        const normalizedNote = String(note || "").slice(0, 500);
+
+        if (normalizedNote.trim()) {
+            nextNotes[normalizedFriendId] = normalizedNote;
+        } else {
+            delete nextNotes[normalizedFriendId];
+        }
+
+        const nextSettings = saveClientSettings({
+            ...clientSettingsSnapshot,
+            friendProfileNotesById: nextNotes
+        });
+        setClientSettingsSnapshot(nextSettings);
+    }
+
+    function openFriendSettings(friend) {
+        if (!friend) {
+            return;
+        }
+
+        setFriendContextMenu(null);
+        setSelectedFriendId(friend.friendUserId);
+        setFriendSettingsTarget(friend);
+    }
+
+    function handleIgnoreVerificationDevice(friendUserId, deviceId) {
+        const normalizedFriendId = String(friendUserId || "").trim();
+        const normalizedDeviceId = String(deviceId || "").trim();
+
+        if (!normalizedFriendId || !normalizedDeviceId) {
+            return;
+        }
+
+        const ignoredByFriend = {
+            ...(clientSettingsSnapshot.ignoredVerificationDevicesByFriend || {})
+        };
+        const nextIgnored = Array.isArray(ignoredByFriend[normalizedFriendId])
+            ? ignoredByFriend[normalizedFriendId].map((value) => String(value))
+            : [];
+
+        if (!nextIgnored.includes(normalizedDeviceId)) {
+            nextIgnored.push(normalizedDeviceId);
+        }
+
+        ignoredByFriend[normalizedFriendId] = nextIgnored;
+
+        const nextSettings = saveClientSettings({
+            ...clientSettingsSnapshot,
+            ignoredVerificationDevicesByFriend: ignoredByFriend
+        });
+        setClientSettingsSnapshot(nextSettings);
+    }
+
+    async function handleRemoveFriend(friend, hardDelete = false) {
+        if (!friend) {
+            return;
+        }
+
         setSubmitting(true);
         clearErrorState();
 
@@ -2273,10 +2608,25 @@ export default function FriendsHome({
 
             await removeFriend(friend.friendshipId, hardDelete ? { hardDelete: true } : {});
             const nextAssignments = { ...friendTags };
+            const nextMutedById = {
+                ...(clientSettingsSnapshot.mutedFriendNotificationsById || {})
+            };
+            const nextIgnoredVerificationDevices = {
+                ...(clientSettingsSnapshot.ignoredVerificationDevicesByFriend || {})
+            };
+            const nextFriendProfileNotes = {
+                ...(clientSettingsSnapshot.friendProfileNotesById || {})
+            };
             delete nextAssignments[String(friend.friendUserId)];
+            delete nextMutedById[String(friend.friendUserId)];
+            delete nextIgnoredVerificationDevices[String(friend.friendUserId)];
+            delete nextFriendProfileNotes[String(friend.friendUserId)];
             setClientSettingsSnapshot(saveClientSettings({
                 ...clientSettingsSnapshot,
-                friendTagAssignments: nextAssignments
+                friendTagAssignments: nextAssignments,
+                mutedFriendNotificationsById: nextMutedById,
+                ignoredVerificationDevicesByFriend: nextIgnoredVerificationDevices,
+                friendProfileNotesById: nextFriendProfileNotes
             }));
 
             if (String(selectedFriendId) === String(friend.friendUserId)) {
@@ -2287,7 +2637,11 @@ export default function FriendsHome({
                 setShowConversationSettings(false);
             }
 
-            setFriendRemovalConfirm(null);
+            if (String(friendSettingsTarget?.friendUserId) === String(friend.friendUserId)) {
+                setFriendSettingsTarget(null);
+            }
+
+            setFriendContextMenu(null);
             await loadFriends();
         } catch (err) {
             showError(err);
@@ -2336,6 +2690,36 @@ export default function FriendsHome({
             fileName: registered.fileName,
             mimeType: registered.mimeType,
             fileSize: registered.fileSize
+        };
+    }
+
+    async function registerDirectFileShare(file) {
+        const filePath = String(file?.path || "").trim();
+
+        if (!filePath || !window.fileShares?.createOrReuse) {
+            return null;
+        }
+
+        const shared = await window.fileShares.createOrReuse({
+            filePath,
+            fileName: file.name,
+            mimeType: file.type || "application/octet-stream"
+        });
+
+        setFileShareStates((prev) => ({
+            ...prev,
+            [String(shared.shareId)]: shared
+        }));
+
+        return {
+            shareId: shared.shareId,
+            fileName: shared.fileName,
+            mimeType: shared.mimeType,
+            fileSize: shared.fileSize,
+            status: shared.status,
+            deprecatedAt: shared.deprecatedAt || "",
+            deprecatedReason: shared.deprecatedReason || "",
+            replacedByShareId: shared.replacedByShareId || ""
         };
     }
 
@@ -2434,6 +2818,16 @@ export default function FriendsHome({
             }
         }
 
+        const shareAttachment = await registerDirectFileShare(file);
+
+        if (shareAttachment) {
+            setDirectAttachments((prev) => [...prev, shareAttachment]);
+            return {
+                kind: "attachment",
+                attachment: shareAttachment
+            };
+        }
+
         const attachment = await registerComposerAttachment(file, arrayBuffer);
         setDirectAttachments((prev) => [...prev, attachment]);
         return {
@@ -2459,8 +2853,8 @@ export default function FriendsHome({
         setGroupAttachments((prev) => [...prev, attachment]);
     }
 
-    function handleRemoveDirectAttachment(transferId) {
-        setDirectAttachments((prev) => prev.filter((entry) => String(entry.transferId) !== String(transferId)));
+    function handleRemoveDirectAttachment(attachmentId) {
+        setDirectAttachments((prev) => prev.filter((entry) => getAttachmentKey(entry) !== String(attachmentId)));
     }
 
     function handleRemoveDirectInlineEmbed(embedId) {
@@ -2495,8 +2889,34 @@ export default function FriendsHome({
         setGroupAttachments((prev) => prev.filter((entry) => String(entry.transferId) !== String(transferId)));
     }
 
+    async function handleResetDirectAttachmentShare(attachment) {
+        const shareId = String(attachment?.shareId || "");
+
+        if (!shareId || !window.fileShares?.reset) {
+            return;
+        }
+
+        try {
+            const result = await window.fileShares.reset({ shareId });
+
+            setFileShareStates((prev) => ({
+                ...prev,
+                [shareId]: result.share,
+                ...(result.replacementShare
+                    ? { [String(result.replacementShare.shareId)]: result.replacementShare }
+                    : {})
+            }));
+        } catch (error) {
+            showError(error, {
+                operation: "fileShares.reset"
+            });
+        }
+    }
+
     async function requestAttachmentDownload({ conversationId, senderDeviceId, attachment }) {
-        if (!conversationId || !senderDeviceId || !attachment?.transferId) {
+        const attachmentKey = getAttachmentKey(attachment);
+
+        if (!conversationId || !senderDeviceId || !attachmentKey) {
             return;
         }
 
@@ -2508,18 +2928,21 @@ export default function FriendsHome({
             return;
         }
 
-        await window.attachmentTransfers.beginIncomingDownload({
-            transferId: attachment.transferId,
-            filePath: saveResult.filePath
-        });
+        if (attachment.transferId && !attachment.shareId) {
+            await window.attachmentTransfers.beginIncomingDownload({
+                transferId: attachment.transferId,
+                filePath: saveResult.filePath
+            });
+        }
 
-        incomingDownloadTargetsRef.current[String(attachment.transferId)] = {
+        incomingDownloadTargetsRef.current[attachmentKey] = {
             filePath: saveResult.filePath,
             fileName: attachment.fileName,
-            expectedBytes: attachment.fileSize
+            expectedBytes: attachment.fileSize,
+            transferId: attachment.transferId || ""
         };
 
-        updateAttachmentTransferState(attachment.transferId, {
+        updateAttachmentTransferState(attachmentKey, {
             status: "requesting",
             progress: 0,
             fileName: attachment.fileName
@@ -2532,7 +2955,8 @@ export default function FriendsHome({
                 type: "dm:file:request",
                 conversationId,
                 targetDeviceId: senderDeviceId,
-                transferId: attachment.transferId
+                transferId: attachment.transferId || "",
+                shareId: attachment.shareId || ""
             }
         });
     }
@@ -2779,7 +3203,9 @@ export default function FriendsHome({
 
     return (
         <main className="main friends-main">
-            <div className="friends-top-chrome">
+            <div className="friends-layout">
+                <div className="friends-sidebar-column">
+                    <div className="friends-top-chrome">
                     <FriendsHeader />
 
                 {syncState.status === "syncing" ? (
@@ -2811,7 +3237,6 @@ export default function FriendsHome({
                 ) : null}
             </div>
 
-            <div className="friends-layout">
                 <FriendsRail
                     currentUser={currentUser}
                     profileMediaHostUrl={profileMediaHostUrl}
@@ -2843,6 +3268,7 @@ export default function FriendsHome({
                     onOpenClientSettings={onOpenClientSettings}
                     onLogout={onLogout}
                 />
+                </div>
 
                 <FriendsConversationPanel
                     currentUser={currentUser}
@@ -2886,6 +3312,7 @@ export default function FriendsHome({
                     canComposeDirectMessage={canComposeDirectMessage}
                     canComposeGroupMessage={canComposeGroupMessage}
                     transferStates={attachmentTransferStates}
+                    fileShareStates={fileShareStates}
                     messageListRef={messageListRef}
                     onGroupComposerChange={setGroupComposer}
                     onSendGroupMessage={handleSendGroupMessage}
@@ -2924,6 +3351,7 @@ export default function FriendsHome({
                     onDirectRemoveAttachment={handleRemoveDirectAttachment}
                     onDirectRemoveInlineEmbed={handleRemoveDirectInlineEmbed}
                     onDirectDownloadAttachment={handleDownloadDirectAttachment}
+                    onDirectResetAttachmentShare={handleResetDirectAttachmentShare}
                     onDirectComposerPaste={handleDirectComposerPaste}
                     onDirectReply={(message) => {
                         setDirectEditingMessage(null);
@@ -2954,6 +3382,7 @@ export default function FriendsHome({
                     currentUser={currentUser}
                     selectedFriend={selectedFriend}
                     effectiveSelectedFriend={effectiveSelectedFriend}
+                    clientSettings={clientSettingsSnapshot}
                     selectedRelayTtlSeconds={selectedRelayTtlSeconds}
                     selectedDisappearingTtlSeconds={selectedDisappearingTtlSeconds}
                     relayPolicy={relayPolicy}
@@ -2982,6 +3411,7 @@ export default function FriendsHome({
                     onRetentionAccept={handleRetentionAccept}
                     onDisappearingRequest={handleDisappearingRequest}
                     onDisappearingAccept={handleDisappearingAccept}
+                    onIgnoreVerificationDevice={handleIgnoreVerificationDevice}
                 />
             ) : null}
 
@@ -3016,24 +3446,40 @@ export default function FriendsHome({
                 />
             ) : null}
 
-            <FriendRemovalConfirmModal
-                confirmation={friendRemovalConfirm}
-                submitting={submitting}
-                onCancel={() => setFriendRemovalConfirm(null)}
-                onConfirm={handleConfirmRemoveFriend}
-            />
+            {friendSettingsTarget ? (
+                <FriendSettingsModal
+                    selectedFriend={friendSettingsTarget}
+                    friendPresence={presenceByUserId[String(friendSettingsTarget.friendUserId)]}
+                    friendNote={clientSettingsSnapshot.friendProfileNotesById?.[String(friendSettingsTarget.friendUserId)] || ""}
+                    clientSettings={clientSettingsSnapshot}
+                    profileMediaHostUrl={profileMediaHostUrl}
+                    submitting={submitting}
+                    onClose={() => setFriendSettingsTarget(null)}
+                    onFriendNoteChange={setFriendProfileNote}
+                    onSetMuteOption={(friend, option) => setFriendMuteOption(friend, option)}
+                    onRequestRemoveFriend={(friend) => handleRemoveFriend(friend)}
+                    onRequestHardDeleteFriend={(friend) => handleRemoveFriend(friend, true)}
+                />
+            ) : null}
 
             <FriendContextMenu
                 contextMenu={friendContextMenu}
+                isMuted={Boolean(getActiveMutedFriendNotifications().active[String(friendContextMenu?.friend?.friendUserId || "")])}
                 friendTagFolders={friendTagFolders}
                 onOpenDm={() => {
                     setSelectedFriendId(friendContextMenu.friend.friendUserId);
                     setFriendContextMenu(null);
                 }}
+                onOpenSettings={() => openFriendSettings(friendContextMenu.friend)}
+                onToggleMute={() => {
+                    const friend = friendContextMenu.friend;
+                    const { active } = getActiveMutedFriendNotifications();
+                    const isMuted = Boolean(active[String(friend.friendUserId)]);
+                    setFriendContextMenu(null);
+                    setFriendMuteOption(friend, isMuted ? "off" : "indefinite");
+                }}
                 onApplyTag={(tagId) => applyFriendTag(friendContextMenu.friend.friendUserId, tagId)}
                 onClearTag={() => clearFriendTag(friendContextMenu.friend.friendUserId)}
-                onRemoveFriend={() => requestRemoveFriend(friendContextMenu.friend)}
-                onHardDeleteFriend={() => requestRemoveFriend(friendContextMenu.friend, true)}
             />
         </main>
     );

@@ -10,8 +10,10 @@ dmEnsureRelayQueueMessageSignatureColumns($db);
 $conversationId = (int)($data['conversationId'] ?? 0);
 $messageId = dmRequireString($data, 'messageId', 'messageId is required');
 $senderDeviceId = dmRequireString($data, 'senderDeviceId', 'senderDeviceId is required');
-$recipientDeviceIds = dmRequireArray($data, 'recipientDeviceIds', 'recipientDeviceIds is required');
+$recipientDeviceIds = dmNormalizeRecipientDeviceIds(dmRequireArray($data, 'recipientDeviceIds', 'recipientDeviceIds is required'));
 $envelope = dmEnsureValidEnvelope($data);
+dmEnsureRecipientCountWithinResourceLimits($recipientDeviceIds);
+dmEnsureEnvelopeWithinResourceLimits($envelope);
 
 if ($conversationId <= 0) {
     jsonResponse(['error' => 'conversationId is required'], 400);
@@ -79,13 +81,7 @@ try {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
         ');
 
-        foreach ($recipientDeviceIds as $recipientDeviceIdRaw) {
-            $recipientDeviceId = dmTrimmedString($recipientDeviceIdRaw);
-
-            if ($recipientDeviceId === null) {
-                continue;
-            }
-
+        foreach ($recipientDeviceIds as $recipientDeviceId) {
             if (!isset($allowedRecipientDeviceIds[$recipientDeviceId])) {
                 continue;
             }

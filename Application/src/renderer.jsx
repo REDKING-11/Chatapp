@@ -1126,10 +1126,18 @@ function App() {
     }
 
     function handleOnboardingComplete(acceptance) {
+        if (typeof acceptance?.autoLoadProfileDescriptions === "boolean") {
+            setClientSettings((prev) => saveClientSettings({
+                ...prev,
+                autoLoadProfileDescriptions: acceptance.autoLoadProfileDescriptions
+            }));
+        }
+
         setOnboardingState(saveOnboardingState({
             completed: true,
             acceptedPrivacy: Boolean(acceptance.acceptedPrivacy),
             acceptedTos: Boolean(acceptance.acceptedTos),
+            autoLoadProfileDescriptions: acceptance?.autoLoadProfileDescriptions !== false,
             completedAt: new Date().toISOString()
         }));
     }
@@ -1209,10 +1217,6 @@ function App() {
         : (isLightTheme ? infoBlackIcon : infoWhiteIcon);
     const updateBannerKey = getUpdateBannerKey(updateState);
     const showUpdateBanner = Boolean(updateBannerKey && updateBannerKey !== dismissedUpdateBannerKey);
-    const updateActionBusy = updateState?.phase === "checking";
-    const updateButtonLabel = updateState?.phase === "checking"
-        ? "Checking..."
-        : "Check for updates";
     const quickSwitcherItems = [
         {
             id: "nav:friends",
@@ -1290,9 +1294,6 @@ function App() {
                             alt=""
                             aria-hidden="true"
                         />
-                    </button>
-                    <button onClick={handleCheckForUpdates} disabled={updateActionBusy}>
-                        {updateButtonLabel}
                     </button>
                     <button onClick={() => setShowClientSettings(true)}>Client Settings</button>
                 </div>
@@ -1405,8 +1406,11 @@ function App() {
                     settings={clientSettings}
                     currentUser={currentUser}
                     profileMediaHostUrl={profileMediaHostUrl}
+                    updateState={updateState}
                     onChange={handleClientSettingChange}
                     onImport={handleClientSettingsImport}
+                    onCheckForUpdates={handleCheckForUpdates}
+                    onOpenReleasesPage={() => window.appUpdates?.openReleasesPage?.()}
                     onUserUpdated={(user) => {
                         setCurrentUser(user);
                         saveAuthUser(user);

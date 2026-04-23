@@ -953,6 +953,9 @@ button.shortcut-info-overview-card:hover {
 
 .profile-dock-status-summary small {
     color: var(--shell-text-muted);
+    min-width: 0;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
 }
 
 .profile-dock-status-pill {
@@ -993,6 +996,7 @@ button.shortcut-info-overview-card:hover {
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
     min-height: 38px;
     border: 1px solid color-mix(in srgb, var(--shell-border) 80%, transparent);
     border-radius: 10px;
@@ -1000,6 +1004,7 @@ button.shortcut-info-overview-card:hover {
     background: color-mix(in srgb, var(--shell-bg) 34%, var(--shell-surface));
     color: var(--shell-text);
     cursor: pointer;
+    text-align: left;
 }
 
 .profile-dock-status-option:hover,
@@ -1090,6 +1095,7 @@ button.shortcut-info-overview-card:hover {
     color: var(--shell-text-muted);
     font-size: 0.74rem;
     line-height: 1.35;
+    overflow-wrap: anywhere;
 }
 
 .profile-dock-server-description {
@@ -2312,7 +2318,7 @@ button.shortcut-info-overview-card:hover {
     --server-notification-text: color-mix(in srgb, var(--shell-text) 94%, white);
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 0;
     height: 100%;
     min-height: 0;
     overflow: hidden;
@@ -2349,8 +2355,9 @@ body[data-client-theme="sunrise"] .friends-main {
 .friends-top-chrome {
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 10px;
     flex-shrink: 0;
+    min-width: 0;
 }
 
 .friends-header {
@@ -2358,10 +2365,12 @@ body[data-client-theme="sunrise"] .friends-main {
     justify-content: space-between;
     align-items: flex-start;
     gap: 16px;
+    min-width: 0;
 }
 
 .friends-header h1 {
-    margin: 0 0 8px;
+    margin: 0 0 4px;
+    font-size: 20px;
 }
 
 .friends-header p,
@@ -2478,6 +2487,15 @@ body[data-client-theme="sunrise"] .friends-main {
     overflow: hidden;
 }
 
+.friends-sidebar-column {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .friends-rail,
 .friends-conversation {
     margin-top: 0;
@@ -2487,6 +2505,7 @@ body[data-client-theme="sunrise"] .friends-main {
     display: flex;
     flex-direction: column;
     gap: 14px;
+    flex: 1;
     min-height: 0;
     overflow: hidden;
 }
@@ -3577,11 +3596,49 @@ body[data-client-theme="light"] .friends-add-icon-button .friends-add-icon-light
 }
 
 .friends-settings-popout {
-    width: min(540px, 100%);
+    width: min(680px, 100%);
+    max-height: min(86vh, 900px);
     margin-top: 0;
     display: flex;
     flex-direction: column;
     gap: 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.friends-friend-settings-popout {
+    width: min(620px, 100%);
+}
+
+.friends-settings-popout::-webkit-scrollbar {
+    width: 12px;
+}
+
+.friends-settings-popout::-webkit-scrollbar-track {
+    background: color-mix(in srgb, var(--server-background) 74%, transparent);
+    border-left: 1px solid color-mix(in srgb, var(--server-surface-alt) 42%, transparent);
+}
+
+.friends-settings-popout::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--server-accent) 70%, white 8%),
+            color-mix(in srgb, var(--server-accent) 42%, var(--server-surface-alt))
+        )
+        padding-box;
+}
+
+.friends-settings-popout::-webkit-scrollbar-thumb:hover {
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--server-accent) 82%, white 10%),
+            color-mix(in srgb, var(--server-accent) 58%, var(--server-surface-alt))
+        )
+        padding-box;
 }
 
 .friends-manage-popout {
@@ -3602,6 +3659,52 @@ body[data-client-theme="light"] .friends-add-icon-button .friends-add-icon-light
 
 .friends-settings-header p {
     margin: 6px 0 0;
+    color: var(--server-text-muted);
+}
+
+.friends-settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 16px;
+    border: 1px solid color-mix(in srgb, var(--server-surface-alt) 86%, transparent);
+    background: color-mix(in srgb, var(--server-background) 88%, black);
+}
+
+.friends-settings-danger-zone {
+    border-color: color-mix(in srgb, var(--server-danger) 26%, var(--server-surface-alt));
+}
+
+.friends-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+}
+
+.friends-checkbox-row input {
+    width: 18px;
+    height: 18px;
+}
+
+.friends-danger-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.friends-inline-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--server-danger) 28%, var(--server-surface-alt));
+    background: color-mix(in srgb, var(--server-background) 86%, black);
+}
+
+.friends-inline-confirm span {
     color: var(--server-text-muted);
 }
 
@@ -3816,6 +3919,101 @@ body[data-client-theme="light"] .friends-add-icon-button .friends-add-icon-light
     background: color-mix(in srgb, var(--server-background) 90%, black);
 }
 
+.friends-settings-profile-card {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px;
+    border-radius: 16px;
+    border: 1px solid color-mix(in srgb, var(--server-accent) 22%, var(--server-surface-alt));
+    background:
+        radial-gradient(circle at top left, color-mix(in srgb, var(--server-accent) 15%, transparent), transparent 48%),
+        color-mix(in srgb, var(--server-background) 88%, black);
+}
+
+.friends-settings-profile-heading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.friends-settings-profile-heading > div:last-child {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.friends-settings-profile-heading span,
+.friends-settings-profile-heading small,
+.friends-profile-description-actions span {
+    color: var(--server-text-muted);
+}
+
+.friends-settings-profile-heading strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.friends-settings-profile-avatar {
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    display: grid;
+    place-items: center;
+    border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--server-accent) 42%, transparent);
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--server-accent) 34%, transparent), transparent),
+        var(--server-surface);
+    color: var(--server-text);
+    font-weight: 800;
+}
+
+.friends-profile-description-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.friends-profile-description-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.friends-profile-description-actions > div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.friends-profile-description-display {
+    min-height: 56px;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--server-surface-alt) 72%, transparent);
+    background: color-mix(in srgb, var(--server-surface) 72%, transparent);
+}
+
+.friends-profile-description-display p {
+    margin: 0;
+    color: var(--server-text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.friends-profile-description-status {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
 .friends-safety-number-card {
     display: flex;
     flex-direction: column;
@@ -3880,6 +4078,20 @@ body[data-client-theme="light"] .friends-add-icon-button .friends-add-icon-light
     gap: 4px;
 }
 
+.friends-verification-device-local-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.friends-verification-device-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .friends-verification-device-meta span {
     color: var(--server-text-muted);
     font-size: 13px;
@@ -3900,26 +4112,50 @@ body[data-client-theme="light"] .friends-add-icon-button .friends-add-icon-light
     padding: 8px 0;
     min-width: 0;
     overflow-y: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--server-accent) 48%, var(--server-surface-alt)) transparent;
 }
 
-.friends-rail-scroll::-webkit-scrollbar,
-.friends-message-list::-webkit-scrollbar {
+.friends-rail-scroll::-webkit-scrollbar {
     width: 8px;
 }
 
-.friends-rail-scroll::-webkit-scrollbar-thumb,
-.friends-message-list::-webkit-scrollbar-thumb {
+.friends-message-list::-webkit-scrollbar {
+    width: 12px;
+}
+
+.friends-rail-scroll::-webkit-scrollbar-thumb {
     background: color-mix(in srgb, var(--server-surface-alt) 78%, transparent);
     border-radius: 999px;
 }
 
-.friends-rail-scroll {
-    scrollbar-color: color-mix(in srgb, var(--server-surface-alt) 78%, transparent) transparent;
+.friends-message-list::-webkit-scrollbar-track {
+    background: transparent;
 }
 
-.friends-message-list {
+.friends-message-list::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--server-accent) 70%, white 8%),
+            color-mix(in srgb, var(--server-accent) 42%, var(--server-surface-alt))
+        )
+        padding-box;
+}
+
+.friends-message-list::-webkit-scrollbar-thumb:hover {
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--server-accent) 84%, white 10%),
+            color-mix(in srgb, var(--server-accent) 58%, var(--server-surface-alt))
+        )
+        padding-box;
+}
+
+.friends-rail-scroll {
     scrollbar-color: color-mix(in srgb, var(--server-surface-alt) 78%, transparent) transparent;
 }
 
@@ -5992,7 +6228,8 @@ body[data-high-contrast="true"] .client-settings-section {
     gap: 8px;
 }
 
-.client-settings-field input {
+.client-settings-field input,
+.client-settings-field textarea {
     width: 100%;
     min-height: 44px;
     padding: 10px 12px;
@@ -6000,6 +6237,16 @@ body[data-high-contrast="true"] .client-settings-section {
     border: 1px solid var(--shell-border);
     background: var(--shell-input);
     color: var(--shell-text);
+}
+
+.client-settings-field textarea {
+    min-height: 96px;
+    resize: vertical;
+    line-height: 1.45;
+}
+
+.client-settings-field small {
+    color: var(--shell-text-muted);
 }
 
 .client-settings-field span {
@@ -6165,6 +6412,438 @@ body[data-high-contrast="true"] .client-settings-section {
 
 .client-profile-name-stack span {
     color: var(--shell-text-muted);
+}
+
+.client-profile-games-editor {
+    display: grid;
+    gap: 10px;
+}
+
+.client-profile-game-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+}
+
+.client-profile-game-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.client-profile-game-actions button {
+    min-width: 40px;
+}
+
+.profile-shared-card {
+    overflow: hidden;
+}
+
+.profile-shared-banner,
+.friends-settings-profile-banner {
+    position: relative;
+    min-height: 130px;
+    background:
+        radial-gradient(circle at 76% 20%, rgba(255, 255, 255, 0.55) 0 5px, transparent 6px),
+        radial-gradient(circle at 68% 34%, rgba(255, 255, 255, 0.42) 0 3px, transparent 4px),
+        linear-gradient(135deg, color-mix(in srgb, var(--shell-accent) 84%, #4ade80), #2563eb);
+    background-size: cover;
+    background-position: center;
+}
+
+.profile-shared-banner-overlay,
+.profile-dock-card-banner-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(5, 10, 24, 0.12), rgba(5, 10, 24, 0.74));
+}
+
+.profile-shared-hero {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: start;
+}
+
+.profile-shared-hero-self {
+    margin-top: -46px;
+}
+
+.profile-shared-hero-media,
+.profile-dock-button-media {
+    position: relative;
+}
+
+.profile-shared-avatar,
+.profile-dock-card-avatar {
+    overflow: hidden;
+}
+
+.profile-shared-avatar-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.profile-shared-presence-dot,
+.profile-dock-button-status-dot {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    border: 3px solid var(--shell-surface);
+    background: #22c55e;
+}
+
+.profile-shared-presence-dot.is-free,
+.profile-dock-button-status-dot.is-free {
+    background: #38bdf8;
+}
+
+.profile-shared-presence-dot.is-busy,
+.profile-dock-button-status-dot.is-busy {
+    background: #ef4444;
+}
+
+.profile-shared-presence-dot.is-chilling,
+.profile-dock-button-status-dot.is-chilling {
+    background: #f59e0b;
+}
+
+.profile-shared-presence-dot.is-off,
+.profile-dock-button-status-dot.is-off {
+    background: #64748b;
+}
+
+.profile-shared-hero-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.profile-shared-hero-copy strong,
+.profile-shared-handle {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.profile-shared-hero-self .profile-shared-hero-copy strong,
+.profile-shared-hero-self .profile-shared-handle {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.profile-shared-eyebrow {
+    color: var(--shell-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0;
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.profile-shared-handle {
+    color: var(--shell-text-muted);
+    font-size: 0.86rem;
+}
+
+.profile-shared-status-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.profile-shared-status-row small {
+    color: var(--shell-text-muted);
+    min-width: 0;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.profile-shared-hero-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.profile-shared-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.profile-shared-section-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+}
+
+.profile-shared-section-header > div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.profile-shared-section-header span {
+    color: var(--shell-text-muted);
+    font-size: 0.78rem;
+}
+
+.profile-shared-section-panel {
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 78%, transparent);
+    background: color-mix(in srgb, var(--shell-bg) 42%, var(--shell-surface));
+}
+
+.profile-shared-copy,
+.profile-shared-empty {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.profile-shared-empty {
+    color: var(--shell-text-muted);
+}
+
+.profile-shared-games-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
+    gap: 10px;
+}
+
+.profile-shared-game-tile {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-height: 56px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 78%, transparent);
+    background: color-mix(in srgb, var(--shell-surface-alt) 84%, transparent);
+}
+
+.profile-shared-game-tile strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.84rem;
+}
+
+.profile-shared-game-badge {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.12);
+    color: white;
+    font-size: 0.76rem;
+    font-weight: 700;
+}
+
+.profile-shared-game-tile.is-magic {
+    background: linear-gradient(135deg, rgba(79, 70, 229, 0.26), rgba(56, 189, 248, 0.2));
+}
+
+.profile-shared-game-tile.is-sky {
+    background: linear-gradient(135deg, rgba(14, 165, 233, 0.24), rgba(96, 165, 250, 0.18));
+}
+
+.profile-shared-game-tile.is-ember {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.22), rgba(245, 158, 11, 0.18));
+}
+
+.profile-shared-game-tile.is-crimson {
+    background: linear-gradient(135deg, rgba(244, 63, 94, 0.24), rgba(190, 24, 93, 0.18));
+}
+
+.profile-shared-game-tile.is-sunset {
+    background: linear-gradient(135deg, rgba(249, 115, 22, 0.22), rgba(234, 179, 8, 0.18));
+}
+
+.profile-shared-game-tile.is-forest {
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.22), rgba(20, 184, 166, 0.16));
+}
+
+.profile-shared-game-tile.is-steel {
+    background: linear-gradient(135deg, rgba(100, 116, 139, 0.28), rgba(51, 65, 85, 0.18));
+}
+
+.profile-shared-game-tile.is-violet {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.22), rgba(99, 102, 241, 0.18));
+}
+
+.profile-shared-game-tile.is-neutral {
+    background: color-mix(in srgb, var(--shell-surface-alt) 84%, transparent);
+}
+
+.profile-dock-button {
+    min-height: 68px;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 16px;
+}
+
+.profile-dock-avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+}
+
+.profile-dock-meta {
+    gap: 3px;
+    flex: 1 1 auto;
+}
+
+.profile-dock-meta strong {
+    font-size: 0.9rem;
+}
+
+.profile-dock-meta-handle,
+.profile-dock-meta-status {
+    color: var(--shell-text-muted);
+    font-size: 0.72rem;
+    line-height: 1.15;
+}
+
+.profile-dock-button-chevron {
+    flex: 0 0 auto;
+    color: var(--shell-text-muted);
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+
+.profile-dock-card {
+    width: min(404px, calc(100vw - 28px));
+    border-radius: 20px;
+}
+
+.profile-dock-card-banner {
+    min-height: 120px;
+    overflow: hidden;
+}
+
+.profile-dock-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 0 16px 16px;
+}
+
+.profile-shared-hero.profile-shared-hero-self {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 14px;
+}
+
+.profile-dock-card-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-self: start;
+}
+
+.profile-dock-card-actions button {
+    width: 34px;
+    height: 34px;
+}
+
+.profile-dock-status-panel {
+    margin-top: 0;
+}
+
+.profile-dock-status-summary {
+    align-items: flex-start;
+}
+
+.profile-dock-status-summary > * {
+    min-width: 0;
+}
+
+.profile-dock-status-option span:last-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.profile-dock-host-note {
+    margin-top: 0;
+}
+
+@media (max-width: 520px) {
+    .profile-dock-card {
+        width: min(384px, calc(100vw - 20px));
+    }
+
+    .profile-shared-hero.profile-shared-hero-self {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .profile-dock-card-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-end;
+    }
+}
+
+.friends-friend-settings-popout {
+    width: min(760px, 100%);
+}
+
+.friends-settings-profile-card {
+    padding: 0;
+    gap: 0;
+}
+
+.friends-settings-profile-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 0 16px 16px;
+}
+
+.friends-settings-profile-avatar {
+    width: 74px;
+    height: 74px;
+    flex: 0 0 74px;
+    border-radius: 22px;
+    border: 5px solid var(--shell-surface);
+}
+
+.friends-profile-note-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.friends-profile-note-field textarea {
+    width: 100%;
+    min-height: 110px;
+    resize: vertical;
+    border: 1px solid color-mix(in srgb, var(--server-accent) 24%, var(--server-surface-alt));
+    border-radius: 14px;
+    padding: 12px 14px;
+    background: color-mix(in srgb, var(--server-surface) 84%, black);
+    color: var(--server-text);
+}
+
+.friends-profile-note-field textarea::placeholder {
+    color: var(--server-text-muted);
+}
+
+.friends-profile-note-field small {
+    align-self: flex-end;
+    color: var(--server-text-muted);
 }
 
 .client-settings-muted p {
@@ -6698,6 +7377,7 @@ body[data-high-contrast="true"] .client-settings-section {
 .settings-field textarea,
 .settings-field select,
 .client-settings-field input,
+.client-settings-field textarea,
 .client-settings-field select {
     min-width: 0;
 }
@@ -6844,6 +7524,10 @@ body[data-high-contrast="true"] .client-settings-section {
 
     .friends-layout {
         flex: none;
+        overflow: visible;
+    }
+
+    .friends-sidebar-column {
         overflow: visible;
     }
 
@@ -7146,6 +7830,11 @@ body[data-high-contrast="true"] .client-settings-section {
     min-width: 0;
 }
 
+.composer-attachment-chip.is-share {
+    border-color: rgba(92, 201, 140, 0.28);
+    background: rgba(92, 201, 140, 0.08);
+}
+
 .composer-attachment-chip span {
     min-width: 0;
     overflow: hidden;
@@ -7300,6 +7989,11 @@ body[data-high-contrast="true"] .client-settings-section {
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
+.message-attachment-card.is-deprecated {
+    border-color: rgba(255, 107, 107, 0.22);
+    background: linear-gradient(180deg, rgba(255, 107, 107, 0.08), rgba(255, 107, 107, 0.04));
+}
+
 .message-attachment-header {
     display: flex;
     align-items: flex-start;
@@ -7407,6 +8101,16 @@ body[data-high-contrast="true"] .client-settings-section {
     background: linear-gradient(180deg, rgba(255, 147, 77, 0.24), rgba(255, 147, 77, 0.14));
 }
 
+.message-attachment-button.is-secondary {
+    border-color: rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.message-attachment-button.is-secondary:hover {
+    border-color: rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.14);
+}
+
 .message-attachment-progress {
     display: flex;
     flex-direction: column;
@@ -7431,6 +8135,12 @@ body[data-high-contrast="true"] .client-settings-section {
     height: 100%;
     border-radius: inherit;
     background: linear-gradient(90deg, rgba(255, 147, 77, 0.9), rgba(255, 196, 77, 0.9));
+}
+
+.message-attachment-share-note {
+    color: rgba(255, 220, 220, 0.9);
+    font-size: 0.78rem;
+    line-height: 1.35;
 }
 
 .composer-emoji-picker {
@@ -8005,6 +8715,7 @@ body[data-high-contrast="true"] .client-settings-section {
         overflow: hidden;
     }
 
+    .friends-sidebar-column,
     .friends-rail,
     .friends-conversation {
         height: 100%;

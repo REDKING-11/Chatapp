@@ -222,6 +222,10 @@ function formatFileSize(bytes) {
     return `${value} B`;
 }
 
+function getAttachmentKey(attachment) {
+    return String(attachment?.shareId || attachment?.transferId || "");
+}
+
 function getAttachmentStatusLabel(transferState, progress, isOutgoing) {
     if (!transferState || transferState.status === "idle") {
         return isOutgoing ? "Ready to share" : "Available";
@@ -250,7 +254,9 @@ function MessageAttachmentList({
     attachments,
     transferStates,
     isOutgoing,
-    onDownloadAttachment
+    fileShareStates,
+    onDownloadAttachment,
+    onResetAttachmentShare
 }) {
     if (!Array.isArray(attachments) || attachments.length === 0) {
         return null;
@@ -259,11 +265,21 @@ function MessageAttachmentList({
     return (
         <div className="message-attachment-list">
             {attachments.map((attachment) => {
-                const transferState = transferStates?.[String(attachment.transferId)] || null;
+                const attachmentKey = getAttachmentKey(attachment);
+                const transferState = transferStates?.[attachmentKey] || null;
+                const fileShareState = attachment?.shareId ? fileShareStates?.[String(attachment.shareId)] || null : null;
                 const progress = Math.max(0, Math.min(100, Math.round(Number(transferState?.progress ?? 0))));
-                const canDownload = !isOutgoing && (!transferState || ["idle", "error", "complete"].includes(transferState.status));
-                const statusLabel = getAttachmentStatusLabel(transferState, progress, isOutgoing);
-                const statusTone = transferState?.status === "error"
+                const effectiveStatusLabel = fileShareState?.status === "missing"
+                    ? "Deprecated - file missing"
+                    : fileShareState?.status === "changed"
+                        ? "Deprecated - replaced"
+                        : fileShareState?.status === "deprecated"
+                            ? "Deprecated"
+                            : getAttachmentStatusLabel(transferState, progress, isOutgoing);
+                const canDownload = !isOutgoing
+                    && (!fileShareState || fileShareState.status === "active")
+                    && (!transferState || ["idle", "error", "complete"].includes(transferState.status));
+                const statusTone = transferState?.status === "error" || (fileShareState && fileShareState.status !== "active")
                     ? "is-error"
                     : transferState?.status === "complete"
                         ? "is-complete"
@@ -272,13 +288,16 @@ function MessageAttachmentList({
                             : "";
 
                 return (
-                    <div key={attachment.transferId} className="message-attachment-card">
+                    <div key={attachmentKey} className={`message-attachment-card ${fileShareState && fileShareState.status !== "active" ? "is-deprecated" : ""}`.trim()}>
                         <div className="message-attachment-header">
                             <div className="message-attachment-badge" aria-hidden="true">FILE</div>
                             <div className="message-attachment-meta">
                                 <strong title={attachment.fileName}>{attachment.fileName}</strong>
                                 <div className="message-attachment-details">
                                     <span>{formatFileSize(attachment.fileSize)}</span>
+                                    {attachment.shareId ? (
+                                        <small>{fileShareState?.status === "active" ? "Reusable share" : "Deprecated share"}</small>
+                                    ) : null}
                                     {attachment.mimeType ? (
                                         <small>{attachment.mimeType}</small>
                                     ) : null}
@@ -286,10 +305,15 @@ function MessageAttachmentList({
                             </div>
                         </div>
                         <div className="message-attachment-footer">
-                            <span className={`message-attachment-status ${statusTone}`.trim()}>{statusLabel}</span>
+                            <span className={`message-attachment-status ${statusTone}`.trim()}>{effectiveStatusLabel}</span>
                             {canDownload ? (
                                 <button type="button" className="message-attachment-button" onClick={() => onDownloadAttachment?.(attachment)}>
                                     Download
+                                </button>
+                            ) : null}
+                            {isOutgoing && attachment.shareId && fileShareState?.status === "active" ? (
+                                <button type="button" className="message-attachment-button is-secondary" onClick={() => onResetAttachmentShare?.(attachment)}>
+                                    Reset link
                                 </button>
                             ) : null}
                         </div>
@@ -298,7 +322,12 @@ function MessageAttachmentList({
                                 <div className="message-attachment-progress-bar">
                                     <span style={{ width: `${progress}%` }} />
                                 </div>
-                                <small>{statusLabel}</small>
+                                <small>{effectiveStatusLabel}</small>
+                            </div>
+                        ) : null}
+                        {fileShareState?.replacedByShareId ? (
+                            <div className="message-attachment-share-note">
+                                Replaced by a newer share link.
                             </div>
                         ) : null}
                     </div>
@@ -316,10 +345,10 @@ function PendingAttachmentList({ attachments, onRemove }) {
     return (
         <div className="composer-attachment-list">
             {attachments.map((attachment) => (
-                <div key={attachment.transferId} className="composer-attachment-chip">
+                <div key={getAttachmentKey(attachment)} className={`composer-attachment-chip ${attachment.shareId ? "is-share" : ""}`.trim()}>
                     <span title={attachment.fileName}>{attachment.fileName}</span>
-                    <small>{formatFileSize(attachment.fileSize)}</small>
-                    <button type="button" onClick={() => onRemove?.(attachment.transferId)} aria-label={`Remove ${attachment.fileName}`}>
+                    <small>{attachment.shareId ? "Reusable share" : formatFileSize(attachment.fileSize)}</small>
+                    <button type="button" onClick={() => onRemove?.(getAttachmentKey(attachment))} aria-label={`Remove ${attachment.fileName}`}>
                         x
                     </button>
                 </div>
@@ -834,7 +863,9 @@ function MessageList({
                                         attachments={attachments}
                                         transferStates={transferStates}
                                         isOutgoing={isOutgoing}
+                                        fileShareStates={fileShareStates}
                                         onDownloadAttachment={(attachment) => onDownloadAttachment?.(message, attachment)}
+                                        onResetAttachmentShare={isOutgoing ? onDirectResetAttachmentShare : null}
                                     />
                                     {!message.isDeleted ? (
                                         <MessageReactions
@@ -1473,8 +1504,10 @@ function DirectConversationView({
     onDirectRemoveAttachment,
     onDirectRemoveInlineEmbed,
     onDirectDownloadAttachment,
+    onDirectResetAttachmentShare,
     messageDeliveryById,
     transferStates,
+    fileShareStates,
     onDirectComposerPaste,
     onCancelDirectAction
 }) {

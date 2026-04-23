@@ -52,6 +52,9 @@ let realtimeRetryAvailableAt = 0;
 let realtimeLastFailureMessage = "";
 const REALTIME_RETRY_COOLDOWN_MS = 15000;
 const REALTIME_RELAY_ACK_TIMEOUT_MS = 5000;
+const REALTIME_RELAY_FETCH_MORE_DELAY_MS = 2500;
+const HTTP_RELAY_FETCH_MORE_DELAY_MS = 1000;
+const HTTP_RELAY_FETCH_MAX_BATCHES = 5;
 const outboundConversationIdByMessageId = new Map();
 const pendingDeliveryStateQueue = createPendingDeliveryStateQueue();
 const pendingRealtimeRelayAckWaiters = new Map();
@@ -89,6 +92,12 @@ function rejectAllPendingRealtimeRelayAcks(error) {
     waiter.reject(error);
   });
   pendingRealtimeRelayAckWaiters.clear();
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function isMissingLocalConversationError(error) {
@@ -997,6 +1006,14 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
               importedCount: 0
             });
           }
+
+          if (payload.hasMore && socket.readyState === WebSocket.OPEN) {
+            window.setTimeout(() => {
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "dm:fetchRelay" }));
+              }
+            }, REALTIME_RELAY_FETCH_MORE_DELAY_MS);
+          }
           return;
         }
 
@@ -1831,86 +1848,69 @@ export async function pullRelayMessages({ token, currentUser }) {
     return [];
   }
 
-  const relayRes = await fetchWithNetworkErrorContext(
-    `${CORE_API_BASE}/dm/relay/pending.php?deviceId=${encodeURIComponent(device.deviceId)}`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    }
-  );
-  let relayData;
-
-  try {
-    relayData = await parseJsonResponse(relayRes, {
-      fallbackMessage: "Failed to load relay messages",
-      source: "dm",
-      operation: "relay.poll",
-      method: "GET"
-    });
-  } catch (error) {
-    const relayError = classifyDmRelayPollError(error, {
-      endpoint: `${CORE_API_BASE}/dm/relay/pending.php`,
-      deviceId: String(device.deviceId || "")
-    });
-
-    recordAppDiagnostic(relayError);
-    throw relayError;
-  }
-
   const imported = [];
+  let relayData = { items: [], hasMore: false };
+  let batchCount = 0;
 
-  if ((relayData.items || []).length > 0) {
-    dispatchRealtimeEvent("secureDmSyncState", {
-      status: "syncing",
-      source: "poll",
-      pendingCount: relayData.items.length
-    });
-  }
-
-  for (const item of relayData.items) {
-    let message;
-    let senderDevice = item.senderDevice || null;
-    const senderDevices = !senderDevice && item.senderUserId
-      ? await fetchUserDmDevices({
-          token,
-          userId: item.senderUserId,
-          includeRevoked: true,
-          requiredDeviceId: item.senderDeviceId
-        })
-      : { devices: [] };
-    if (!senderDevice) {
-      senderDevice = (senderDevices.devices || []).find(
-        (device) => String(device.deviceId) === String(item.senderDeviceId)
-      ) || null;
+  do {
+    if (batchCount > 0) {
+      await delay(HTTP_RELAY_FETCH_MORE_DELAY_MS);
     }
 
-    if (!senderDevice && item.senderDeviceId) {
-      recordMissingSenderDeviceDiagnostic({
-        relayItem: item,
-        currentUser,
-        context: "relay-poll"
-      });
-      continue;
-    }
+    const relayRes = await fetchWithNetworkErrorContext(
+      `${CORE_API_BASE}/dm/relay/pending.php?deviceId=${encodeURIComponent(device.deviceId)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }
+    );
 
     try {
-      message = await window.secureDm.receiveMessage({
-        userId: currentUser.id,
-        username: currentUser.username,
-        conversationId: item.conversationId,
-        relayItem: item,
-        senderDevice
+      relayData = await parseJsonResponse(relayRes, {
+        fallbackMessage: "Failed to load relay messages",
+        source: "dm",
+        operation: "relay.poll",
+        method: "GET"
       });
     } catch (error) {
-      if (isMissingLocalConversationError(error)) {
-        dispatchRealtimeEvent("secureDmConversationAccessRequired", {
-          conversationId: item.conversationId
-        });
-        continue;
+      const relayError = classifyDmRelayPollError(error, {
+        endpoint: `${CORE_API_BASE}/dm/relay/pending.php`,
+        deviceId: String(device.deviceId || "")
+      });
+
+      recordAppDiagnostic(relayError);
+      throw relayError;
+    }
+
+    batchCount += 1;
+
+    if ((relayData.items || []).length > 0) {
+      dispatchRealtimeEvent("secureDmSyncState", {
+        status: "syncing",
+        source: "poll",
+        pendingCount: relayData.items.length
+      });
+    }
+
+    for (const item of relayData.items || []) {
+      let message;
+      let senderDevice = item.senderDevice || null;
+      const senderDevices = !senderDevice && item.senderUserId
+        ? await fetchUserDmDevices({
+            token,
+            userId: item.senderUserId,
+            includeRevoked: true,
+            requiredDeviceId: item.senderDeviceId
+          })
+        : { devices: [] };
+      if (!senderDevice) {
+        senderDevice = (senderDevices.devices || []).find(
+          (device) => String(device.deviceId) === String(item.senderDeviceId)
+        ) || null;
       }
 
-      if (isMissingSenderBundleError(error)) {
+      if (!senderDevice && item.senderDeviceId) {
         recordMissingSenderDeviceDiagnostic({
           relayItem: item,
           currentUser,
@@ -1919,23 +1919,49 @@ export async function pullRelayMessages({ token, currentUser }) {
         continue;
       }
 
-      throw error;
-    }
+      try {
+        message = await window.secureDm.receiveMessage({
+          userId: currentUser.id,
+          username: currentUser.username,
+          conversationId: item.conversationId,
+          relayItem: item,
+          senderDevice
+        });
+      } catch (error) {
+        if (isMissingLocalConversationError(error)) {
+          dispatchRealtimeEvent("secureDmConversationAccessRequired", {
+            conversationId: item.conversationId
+          });
+          continue;
+        }
 
-    if (message?.imported === true) {
-      imported.push(message);
-    }
+        if (isMissingSenderBundleError(error)) {
+          recordMissingSenderDeviceDiagnostic({
+            relayItem: item,
+            currentUser,
+            context: "relay-poll"
+          });
+          continue;
+        }
 
-    await acknowledgeRelayDelivery({
-      token,
-      currentUser,
-      relayId: item.relayId,
-      deviceId: device.deviceId,
-      fallbackMessage: "Failed to acknowledge relay message",
-      userMessage: "Chatapp imported a secure DM but could not confirm it with the server.",
-      conversationId: item.conversationId
-    });
-  }
+        throw error;
+      }
+
+      if (message?.imported === true) {
+        imported.push(message);
+      }
+
+      await acknowledgeRelayDelivery({
+        token,
+        currentUser,
+        relayId: item.relayId,
+        deviceId: device.deviceId,
+        fallbackMessage: "Failed to acknowledge relay message",
+        userMessage: "Chatapp imported a secure DM but could not confirm it with the server.",
+        conversationId: item.conversationId
+      });
+    }
+  } while (relayData.hasMore && batchCount < HTTP_RELAY_FETCH_MAX_BATCHES);
 
   if (imported.length > 0) {
     dispatchRealtimeEvent("secureDmSyncState", {

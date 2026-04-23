@@ -1,0 +1,31 @@
+[Unit]
+Description=Chatapp realtime websocket service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/chatapp-realtime
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--max-old-space-size=128
+EnvironmentFile=-/var/www/chatapp-realtime/.env
+ExecStart=/usr/bin/node /var/www/chatapp-realtime/app.js
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=0
+User=www-data
+Group=www-data
+MemoryAccounting=true
+MemoryHigh=160M
+MemoryMax=220M
+CPUAccounting=true
+CPUQuota=60%
+TasksMax=64
+LimitNOFILE=4096
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
