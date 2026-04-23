@@ -37,6 +37,22 @@ function userProfileUsernameTagSelect(PDO $db, string $tableAlias, string $resul
     return $tableAlias . '.username_tag AS ' . $resultAlias;
 }
 
+function userProfileDescriptionSelect(PDO $db, string $tableAlias, string $resultAlias = 'profile_description'): string {
+    if (!userProfileColumnExists($db, 'users', 'profile_description')) {
+        return 'NULL AS ' . $resultAlias;
+    }
+
+    return $tableAlias . '.profile_description AS ' . $resultAlias;
+}
+
+function userProfileGamesSelect(PDO $db, string $tableAlias, string $resultAlias = 'profile_games'): string {
+    if (!userProfileColumnExists($db, 'users', 'profile_games')) {
+        return 'NULL AS ' . $resultAlias;
+    }
+
+    return $tableAlias . '.profile_games AS ' . $resultAlias;
+}
+
 function userProfileTrimmedString($value): ?string {
     if (!is_string($value)) {
         return null;
@@ -44,6 +60,55 @@ function userProfileTrimmedString($value): ?string {
 
     $trimmed = trim($value);
     return $trimmed !== '' ? $trimmed : null;
+}
+
+function userProfileNormalizeDescription($value): ?string {
+    if (!is_string($value)) {
+        return null;
+    }
+
+    $trimmed = trim($value);
+    return $trimmed !== '' ? substr($trimmed, 0, 280) : null;
+}
+
+function userProfileNormalizeGames($value): array {
+    if (is_string($value)) {
+        $decoded = json_decode($value, true);
+        $value = json_last_error() === JSON_ERROR_NONE ? $decoded : [];
+    }
+
+    if (!is_array($value)) {
+        return [];
+    }
+
+    $games = [];
+    $seen = [];
+
+    foreach ($value as $entry) {
+        if (!is_string($entry)) {
+            continue;
+        }
+
+        $normalized = trim($entry);
+        if ($normalized === '') {
+            continue;
+        }
+
+        $normalized = substr($normalized, 0, 40);
+        $dedupeKey = strtolower($normalized);
+        if (isset($seen[$dedupeKey])) {
+            continue;
+        }
+
+        $seen[$dedupeKey] = true;
+        $games[] = $normalized;
+
+        if (count($games) >= 6) {
+            break;
+        }
+    }
+
+    return $games;
 }
 
 function userProfileParseHandle(string $username): array {
@@ -98,7 +163,9 @@ function userProfileFromRow(array $row, string $usernameKey = 'username', string
         'usernameBase' => $parsed['usernameBase'],
         'usernameTag' => $usernameTag,
         'displayName' => $displayName,
-        'displayLabel' => $displayName ?? $parsed['usernameBase']
+        'displayLabel' => $displayName ?? $parsed['usernameBase'],
+        'profileDescription' => userProfileNormalizeDescription($row['profile_description'] ?? null),
+        'profileGames' => userProfileNormalizeGames($row['profile_games'] ?? [])
     ];
 }
 

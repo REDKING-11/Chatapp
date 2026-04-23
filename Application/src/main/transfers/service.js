@@ -1,12 +1,29 @@
 import fs from "node:fs";
 import path from "node:path";
 import { app, dialog } from "electron";
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+import {
+  deriveShareStatus,
+  normalizeFilePathKey,
+  normalizeShareRegistry,
+  resolveFileShareForRequest,
+  resetFileShare,
+  syncFileShareSelection
+} from "./shareRegistryCore";
+import {
+  assertIncomingChunkLength,
+  assertIncomingDownloadComplete,
+  classifyIncomingChunkOffset,
+  normalizeIncomingOffset
+} from "./downloadIntegrity";
 
 const outgoingTransfers = new Map();
 const incomingTransfers = new Map();
 const incomingAttachmentSecrets = new Map();
 const ATTACHMENT_CHUNK_ALGORITHM = "aes-256-gcm-chunked-v1";
+const FILE_SHARE_REGISTRY_NAME = "file-shares.json";
+
+let cachedShareRegistry = null;
 
 function toSafeBaseName(value) {
   const normalized = String(value || "download").trim();
@@ -16,6 +33,73 @@ function toSafeBaseName(value) {
 
 function getDefaultSavePath(fileName) {
   return path.join(app.getPath("downloads"), toSafeBaseName(fileName));
+}
+
+function getFileShareRegistryPath() {
+  return path.join(app.getPath("userData"), FILE_SHARE_REGISTRY_NAME);
+}
+
+function loadFileShareRegistry() {
+  if (cachedShareRegistry) {
+    return cachedShareRegistry;
+  }
+
+  try {
+    const raw = fs.readFileSync(getFileShareRegistryPath(), "utf8");
+    cachedShareRegistry = normalizeShareRegistry(JSON.parse(raw));
+  } catch {
+    cachedShareRegistry = normalizeShareRegistry({ shares: [] });
+  }
+
+  return cachedShareRegistry;
+}
+
+function saveFileShareRegistry(registry) {
+  cachedShareRegistry = normalizeShareRegistry(registry);
+  const filePath = getFileShareRegistryPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(cachedShareRegistry, null, 2), "utf8");
+  return cachedShareRegistry;
+}
+
+function nextShareId() {
+  return `share_${randomUUID()}`;
+}
+
+function nextTransferId() {
+  return `file_${randomUUID()}`;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function getMimeTypeFromFilePath(filePath) {
+  const extension = path.extname(String(filePath || "")).toLowerCase();
+
+  switch (extension) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".txt":
+      return "text/plain";
+    case ".md":
+      return "text/markdown";
+    case ".json":
+      return "application/json";
+    case ".pdf":
+      return "application/pdf";
+    case ".zip":
+      return "application/zip";
+    default:
+      return "application/octet-stream";
+  }
 }
 
 function createAttachmentSecret() {
@@ -65,23 +149,108 @@ function decryptAttachmentChunk({ chunkBase64, ivBase64, tagBase64 }, secret) {
   ]);
 }
 
+function registerOutgoingTransferEntry(entry) {
+  const normalizedEntry = {
+    transferId: String(entry.transferId || nextTransferId()),
+    fileName: toSafeBaseName(entry.fileName),
+    mimeType: String(entry.mimeType || "application/octet-stream"),
+    fileSize: Math.max(0, Number(entry.fileSize) || 0),
+    secret: entry.secret || createAttachmentSecret(),
+    buffer: Buffer.isBuffer(entry.buffer) ? entry.buffer : null,
+    filePath: entry.filePath ? String(entry.filePath) : "",
+    createdAt: entry.createdAt || nowIso(),
+    shareId: entry.shareId ? String(entry.shareId) : ""
+  };
+
+  outgoingTransfers.set(normalizedEntry.transferId, normalizedEntry);
+  return normalizedEntry;
+}
+
+function readFileSnapshot(filePath, fallback = {}) {
+  try {
+    const stats = fs.statSync(String(filePath || ""));
+
+    if (!stats.isFile()) {
+      return {
+        exists: false,
+        reason: "missing"
+      };
+    }
+
+    return {
+      exists: true,
+      filePath: String(filePath),
+      fileName: toSafeBaseName(fallback.fileName || path.basename(String(filePath || ""))),
+      mimeType: String(fallback.mimeType || getMimeTypeFromFilePath(filePath)),
+      fileSize: stats.size,
+      modifiedMs: Math.round(stats.mtimeMs || 0)
+    };
+  } catch {
+    return {
+      exists: false,
+      reason: "missing"
+    };
+  }
+}
+
+function buildPublicFileShare(share, options = {}) {
+  if (!share) {
+    return null;
+  }
+
+  const status = deriveShareStatus(share);
+
+  return {
+    shareId: share.shareId,
+    status,
+    fileName: share.fileName,
+    mimeType: share.mimeType,
+    fileSize: share.fileSize,
+    updatedAt: share.updatedAt || share.createdAt || "",
+    deprecatedAt: share.deprecatedAt || "",
+    deprecatedReason: share.deprecatedReason || "",
+    replacedByShareId: share.replacedByShareId || "",
+    filePath: options.includePath ? share.filePath : undefined
+  };
+}
+
+function getShareOrThrow(shareId) {
+  const registry = loadFileShareRegistry();
+  const share = registry.shares.find((entry) => entry.shareId === String(shareId || ""));
+
+  if (!share) {
+    throw new Error("Share could not be found");
+  }
+
+  return share;
+}
+
+function buildAttachmentPayload(entry) {
+  return {
+    transferId: entry.transferId,
+    fileName: entry.fileName,
+    mimeType: entry.mimeType,
+    fileSize: entry.fileSize,
+    encryption: {
+      algorithm: entry.secret.algorithm,
+      keyBase64: entry.secret.keyBase64
+    }
+  };
+}
+
 export function registerOutgoingAttachment({ transferId, fileName, mimeType, arrayBuffer }) {
   if (!transferId) {
     throw new Error("transferId is required");
   }
 
   const buffer = Buffer.from(arrayBuffer || []);
-  const entry = {
+  const entry = registerOutgoingTransferEntry({
     transferId: String(transferId),
-    fileName: toSafeBaseName(fileName),
-    mimeType: String(mimeType || "application/octet-stream"),
+    fileName,
+    mimeType,
     fileSize: buffer.byteLength,
-    secret: createAttachmentSecret(),
-    buffer,
-    createdAt: new Date().toISOString()
-  };
-
-  outgoingTransfers.set(entry.transferId, entry);
+    buffer
+  });
 
   return {
     transferId: entry.transferId,
@@ -92,6 +261,112 @@ export function registerOutgoingAttachment({ transferId, fileName, mimeType, arr
   };
 }
 
+export function createOrReuseFileShare({ filePath, fileName, mimeType }) {
+  const snapshot = readFileSnapshot(filePath, { fileName, mimeType });
+
+  if (!snapshot.exists) {
+    throw new Error("That file is no longer available to share.");
+  }
+
+  const result = syncFileShareSelection({
+    registry: loadFileShareRegistry(),
+    filePath: snapshot.filePath,
+    fileName: snapshot.fileName,
+    mimeType: snapshot.mimeType,
+    fileSize: snapshot.fileSize,
+    modifiedMs: snapshot.modifiedMs,
+    now: nowIso(),
+    createShareId: nextShareId
+  });
+
+  saveFileShareRegistry(result.registry);
+
+  return {
+    ...buildPublicFileShare(result.share, { includePath: true }),
+    action: result.action
+  };
+}
+
+export function listFileShares() {
+  const registry = loadFileShareRegistry();
+
+  return {
+    shares: registry.shares
+      .slice()
+      .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")))
+      .map((entry) => buildPublicFileShare(entry, { includePath: true }))
+  };
+}
+
+export function getFileShare({ shareId }) {
+  const share = getShareOrThrow(shareId);
+  return buildPublicFileShare(share, { includePath: true });
+}
+
+export function resetOutgoingFileShare({ shareId }) {
+  const currentShare = getShareOrThrow(shareId);
+  const snapshot = readFileSnapshot(currentShare.filePath, {
+    fileName: currentShare.fileName,
+    mimeType: currentShare.mimeType
+  });
+  const result = resetFileShare({
+    registry: loadFileShareRegistry(),
+    shareId,
+    snapshot,
+    now: nowIso(),
+    createShareId: nextShareId
+  });
+
+  saveFileShareRegistry(result.registry);
+
+  return {
+    share: buildPublicFileShare(result.share, { includePath: true }),
+    replacementShare: buildPublicFileShare(result.replacementShare, { includePath: true })
+  };
+}
+
+export function prepareOutgoingFileShareDownload({ shareId }) {
+  const currentShare = getShareOrThrow(shareId);
+  const resolution = resolveFileShareForRequest({
+    registry: loadFileShareRegistry(),
+    shareId,
+    snapshot: readFileSnapshot(currentShare.filePath, {
+      fileName: currentShare.fileName,
+      mimeType: currentShare.mimeType
+    }),
+    now: nowIso(),
+    createShareId: nextShareId
+  });
+
+  saveFileShareRegistry(resolution.registry);
+
+  if (!resolution.ok) {
+    const error = new Error(resolution.errorMessage || "That share is not available.");
+    error.code = resolution.errorCode;
+    error.shareId = String(shareId || "");
+    error.replacementShareId = resolution.replacementShareId || "";
+    throw error;
+  }
+
+  const session = registerOutgoingTransferEntry({
+    transferId: nextTransferId(),
+    fileName: resolution.share.fileName,
+    mimeType: resolution.share.mimeType,
+    fileSize: resolution.share.fileSize,
+    filePath: resolution.share.filePath,
+    shareId: resolution.share.shareId
+  });
+
+  return {
+    share: buildPublicFileShare(resolution.share, { includePath: true }),
+    attachment: {
+      ...buildAttachmentPayload(session),
+      shareId: resolution.share.shareId,
+      status: "active"
+    }
+  };
+}
+
 export function buildOutgoingAttachmentPayload({ transferId }) {
   const entry = outgoingTransfers.get(String(transferId || ""));
 
@@ -99,15 +374,66 @@ export function buildOutgoingAttachmentPayload({ transferId }) {
     throw new Error("Attachment is no longer available on this device");
   }
 
-  return {
-    transferId: entry.transferId,
-    fileName: entry.fileName,
-    mimeType: entry.mimeType,
-    fileSize: entry.fileSize,
-    encryption: {
-      algorithm: entry.secret.algorithm,
-      keyBase64: entry.secret.keyBase64
+  return buildAttachmentPayload(entry);
+}
+
+export function buildOutgoingFileSharePayload({ shareId }) {
+  const share = getShareOrThrow(shareId);
+  const resolution = resolveFileShareForRequest({
+    registry: loadFileShareRegistry(),
+    shareId,
+    snapshot: readFileSnapshot(share.filePath, {
+      fileName: share.fileName,
+      mimeType: share.mimeType
+    }),
+    now: nowIso(),
+    createShareId: nextShareId
+  });
+
+  saveFileShareRegistry(resolution.registry);
+
+  if (!resolution.ok) {
+    if (resolution.replacementShareId) {
+      const replacementShare = resolution.registry.shares.find(
+        (entry) => entry.shareId === resolution.replacementShareId
+      );
+
+      if (replacementShare) {
+        return {
+          shareId: replacementShare.shareId,
+          fileName: replacementShare.fileName,
+          mimeType: replacementShare.mimeType,
+          fileSize: replacementShare.fileSize,
+          status: "active",
+          deprecatedAt: "",
+          deprecatedReason: "",
+          replacedByShareId: ""
+        };
+      }
     }
+
+    const fallbackShare = resolution.share || share;
+    return {
+      shareId: fallbackShare.shareId,
+      fileName: fallbackShare.fileName,
+      mimeType: fallbackShare.mimeType,
+      fileSize: fallbackShare.fileSize,
+      status: deriveShareStatus(fallbackShare),
+      deprecatedAt: fallbackShare.deprecatedAt || "",
+      deprecatedReason: fallbackShare.deprecatedReason || "",
+      replacedByShareId: fallbackShare.replacedByShareId || ""
+    };
+  }
+
+  return {
+    shareId: resolution.share.shareId,
+    fileName: resolution.share.fileName,
+    mimeType: resolution.share.mimeType,
+    fileSize: resolution.share.fileSize,
+    status: "active",
+    deprecatedAt: "",
+    deprecatedReason: "",
+    replacedByShareId: ""
   };
 }
 
@@ -137,6 +463,7 @@ export function getOutgoingAttachmentInfo({ transferId }) {
 
   return {
     transferId: entry.transferId,
+    shareId: entry.shareId || "",
     fileName: entry.fileName,
     mimeType: entry.mimeType,
     fileSize: entry.fileSize,
@@ -154,11 +481,26 @@ export function readOutgoingAttachmentChunk({ transferId, offset = 0, length = 6
   const safeOffset = Math.max(0, Number(offset) || 0);
   const safeLength = Math.max(1024, Number(length) || 65536);
   const nextOffset = Math.min(entry.fileSize, safeOffset + safeLength);
-  const chunk = entry.buffer.subarray(safeOffset, nextOffset);
+  let chunk = Buffer.alloc(0);
+
+  if (entry.buffer) {
+    chunk = entry.buffer.subarray(safeOffset, nextOffset);
+  } else if (entry.filePath) {
+    const fileHandle = fs.openSync(entry.filePath, "r");
+    try {
+      const chunkLength = Math.max(0, nextOffset - safeOffset);
+      chunk = Buffer.alloc(chunkLength);
+      fs.readSync(fileHandle, chunk, 0, chunkLength, safeOffset);
+    } finally {
+      fs.closeSync(fileHandle);
+    }
+  }
+
   const encryptedChunk = encryptAttachmentChunk(chunk, entry.secret);
 
   return {
     transferId: entry.transferId,
+    shareId: entry.shareId || "",
     fileName: entry.fileName,
     mimeType: entry.mimeType,
     fileSize: entry.fileSize,
@@ -184,9 +526,13 @@ export async function chooseAttachmentSavePath({ defaultName }) {
   };
 }
 
-export function beginIncomingDownload({ transferId, filePath }) {
+export function beginIncomingDownload({ transferId, filePath, attachment = null, expectedBytes = null }) {
   if (!transferId || !filePath) {
     throw new Error("transferId and filePath are required");
+  }
+
+  if (attachment) {
+    registerIncomingAttachmentPayload(attachment);
   }
 
   const secret = incomingAttachmentSecrets.get(String(transferId || ""));
@@ -197,12 +543,16 @@ export function beginIncomingDownload({ transferId, filePath }) {
 
   const normalizedPath = String(filePath);
   const writeStream = fs.createWriteStream(normalizedPath);
+  const resolvedExpectedBytes = expectedBytes ?? secret.fileSize ?? attachment?.fileSize ?? null;
   const entry = {
     transferId: String(transferId),
     filePath: normalizedPath,
     secret,
     writeStream,
-    bytesWritten: 0
+    bytesWritten: 0,
+    expectedBytes: resolvedExpectedBytes === null || resolvedExpectedBytes === undefined
+      ? null
+      : normalizeIncomingOffset(resolvedExpectedBytes)
   };
 
   incomingTransfers.set(entry.transferId, entry);
@@ -210,15 +560,44 @@ export function beginIncomingDownload({ transferId, filePath }) {
   return {
     transferId: entry.transferId,
     filePath: entry.filePath,
-    bytesWritten: entry.bytesWritten
+    bytesWritten: entry.bytesWritten,
+    expectedBytes: entry.expectedBytes
   };
 }
 
-export async function appendIncomingDownloadChunk({ transferId, chunkBase64, ivBase64, tagBase64 }) {
+export async function appendIncomingDownloadChunk({ transferId, chunkBase64, ivBase64, tagBase64, offset = null, nextOffset = null, fileSize = null }) {
   const entry = incomingTransfers.get(String(transferId || ""));
 
   if (!entry) {
     throw new Error("Incoming transfer was not initialized");
+  }
+
+  if (fileSize !== null && fileSize !== undefined) {
+    entry.expectedBytes = normalizeIncomingOffset(fileSize);
+  }
+
+  const hasExplicitOffsets = offset !== null
+    && offset !== undefined
+    && nextOffset !== null
+    && nextOffset !== undefined;
+
+  if (hasExplicitOffsets) {
+    const offsetDecision = classifyIncomingChunkOffset({
+      bytesWritten: entry.bytesWritten,
+      offset,
+      nextOffset
+    });
+
+    if (offsetDecision.action === "duplicate") {
+      return {
+        transferId: entry.transferId,
+        bytesWritten: entry.bytesWritten,
+        expectedBytes: entry.expectedBytes,
+        offset: offsetDecision.offset,
+        nextOffset: offsetDecision.nextOffset,
+        duplicate: true
+      };
+    }
   }
 
   const buffer = decryptAttachmentChunk({
@@ -226,6 +605,29 @@ export async function appendIncomingDownloadChunk({ transferId, chunkBase64, ivB
     ivBase64,
     tagBase64
   }, entry.secret);
+
+  const resolvedOffset = hasExplicitOffsets
+    ? normalizeIncomingOffset(offset)
+    : entry.bytesWritten;
+  const resolvedNextOffset = hasExplicitOffsets
+    ? normalizeIncomingOffset(nextOffset)
+    : entry.bytesWritten + buffer.byteLength;
+
+  const offsetDecision = classifyIncomingChunkOffset({
+    bytesWritten: entry.bytesWritten,
+    offset: resolvedOffset,
+    nextOffset: resolvedNextOffset
+  });
+
+  if (entry.expectedBytes !== null && resolvedNextOffset > entry.expectedBytes) {
+    throw new Error("Incoming file chunk exceeds the expected download size");
+  }
+
+  assertIncomingChunkLength({
+    offset: offsetDecision.offset,
+    nextOffset: offsetDecision.nextOffset,
+    byteLength: buffer.byteLength
+  });
 
   await new Promise((resolve, reject) => {
     entry.writeStream.write(buffer, (error) => {
@@ -238,11 +640,15 @@ export async function appendIncomingDownloadChunk({ transferId, chunkBase64, ivB
     });
   });
 
-  entry.bytesWritten += buffer.byteLength;
+  entry.bytesWritten = offsetDecision.nextOffset;
 
   return {
     transferId: entry.transferId,
-    bytesWritten: entry.bytesWritten
+    bytesWritten: entry.bytesWritten,
+    expectedBytes: entry.expectedBytes,
+    offset: offsetDecision.offset,
+    nextOffset: offsetDecision.nextOffset,
+    duplicate: false
   };
 }
 
@@ -253,16 +659,35 @@ export async function finishIncomingDownload({ transferId }) {
     return { ok: true, transferId: String(transferId || "") };
   }
 
-  await new Promise((resolve, reject) => {
-    entry.writeStream.end((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-
-      resolve();
+  try {
+    assertIncomingDownloadComplete({
+      bytesWritten: entry.bytesWritten,
+      expectedBytes: entry.expectedBytes
     });
-  });
+
+    await new Promise((resolve, reject) => {
+      entry.writeStream.end((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
+  } catch (error) {
+    entry.writeStream.destroy();
+    incomingTransfers.delete(entry.transferId);
+    incomingAttachmentSecrets.delete(entry.transferId);
+
+    try {
+      fs.unlinkSync(entry.filePath);
+    } catch {
+      // Best effort cleanup.
+    }
+
+    throw error;
+  }
 
   incomingTransfers.delete(entry.transferId);
   incomingAttachmentSecrets.delete(entry.transferId);

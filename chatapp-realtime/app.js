@@ -14,6 +14,7 @@ const {
   DEFAULT_PRESENCE_STATUS,
   updateDevicePresence
 } = require("./presence");
+
 const {
   createFixedWindowRateLimiter,
   createRelayPage,
@@ -23,6 +24,9 @@ const {
 } = require("./limits");
 
 const LIMITS = loadRealtimeLimits();
+const MAX_DM_ENVELOPE_BYTES = Number(process.env.MAX_DM_ENVELOPE_BYTES || 1536 * 1024);
+const MAX_WS_MESSAGES_PER_SECOND = Number(process.env.MAX_WS_MESSAGES_PER_SECOND || 30);
+const RELAY_FETCH_COOLDOWN_MS = Number(process.env.RELAY_FETCH_COOLDOWN_MS || 2000);
 const WS_AUTH_TIMEOUT_MS = 10000;
 const WS_HEARTBEAT_INTERVAL_MS = 30000;
 const SHUTDOWN_TIMEOUT_MS = 10000;
@@ -60,6 +64,26 @@ let rateLimitedConnectionCount = 0;
 let backpressureCloseCount = 0;
 let relayQueueColumnsEnsured = false;
 let relayQueueColumnsEnsuredPromise = null;
+
+function logFatalAndExit(label, error) {
+  console.error(`[fatal] ${label}`, error);
+  process.exitCode = 1;
+  try {
+    server.close(() => process.exit(1));
+  } catch (closeError) {
+    console.error("[fatal] failed to close server cleanly", closeError);
+    process.exit(1);
+  }
+  setTimeout(() => process.exit(1), 5000).unref();
+}
+
+process.on("uncaughtException", (error) => {
+  logFatalAndExit("uncaught exception", error);
+});
+
+process.on("unhandledRejection", (error) => {
+  logFatalAndExit("unhandled rejection", error);
+});
 let shutdownStarted = false;
 
 function getSocketCounts() {
@@ -159,6 +183,10 @@ function sendJson(ws, payload) {
   }
 
   return false;
+}
+
+function getEnvelopeSizeBytes(parts) {
+  return parts.reduce((total, value) => total + Buffer.byteLength(String(value || ""), "utf8"), 0);
 }
 
 function normalizeSubscribedUserIds(userIds) {
@@ -618,6 +646,9 @@ wss.on("connection", (ws) => {
 
   let authedDeviceId = null;
   let authedUserId = null;
+  let messageWindowStartedAt = Date.now();
+  let messageCountInWindow = 0;
+  let lastRelayFetchAt = 0;
   const rateLimiter = createFixedWindowRateLimiter({
     limit: LIMITS.wsMessageRateLimit,
     windowMs: LIMITS.wsMessageRateWindowMs
@@ -639,6 +670,27 @@ wss.on("connection", (ws) => {
 
   ws.on("message", async (raw) => {
     try {
+      const now = Date.now();
+
+      if (now - messageWindowStartedAt >= 1000) {
+        messageWindowStartedAt = now;
+        messageCountInWindow = 0;
+      }
+
+      messageCountInWindow += 1;
+
+      if (messageCountInWindow > MAX_WS_MESSAGES_PER_SECOND) {
+        rateLimitedConnectionCount += 1;
+        sendJson(ws, {
+          type: "error",
+          code: "RATE_LIMITED",
+          error: "Too many realtime messages. Please retry shortly.",
+          retryAfterMs: 1000
+        });
+        closeSocket(ws, 4008, "Rate limit exceeded");
+        return;
+      }
+
       const rawBytes = Buffer.isBuffer(raw)
         ? raw.length
         : Buffer.byteLength(String(raw));
@@ -807,6 +859,14 @@ wss.on("connection", (ws) => {
         }
 
         const normalizedRecipientDeviceIds = recipientNormalization.items;
+
+        const envelopeSizeBytes = getEnvelopeSizeBytes([ciphertext, nonce, aad, tag, signature]);
+
+        if (envelopeSizeBytes > MAX_DM_ENVELOPE_BYTES) {
+          sendJson(ws, { type: "error", error: "Encrypted DM payload is too large" });
+          return;
+        }
+
         const allowedRecipients = normalizedRecipientDeviceIds.filter((recipientDeviceId) =>
           allowedRecipientDeviceIds.has(recipientDeviceId)
         );
@@ -895,6 +955,19 @@ wss.on("connection", (ws) => {
       }
 
       if (data.type === "dm:fetchRelay") {
+        const now = Date.now();
+
+        if (now - lastRelayFetchAt < RELAY_FETCH_COOLDOWN_MS) {
+          sendJson(ws, {
+            type: "error",
+            code: "RATE_LIMITED",
+            error: "Relay fetch rate limit exceeded",
+            retryAfterMs: Math.max(0, RELAY_FETCH_COOLDOWN_MS - (now - lastRelayFetchAt))
+          });
+          return;
+        }
+
+        lastRelayFetchAt = now;
         await ensureRelayQueueMessageSignatureColumns();
         const afterRelayId = Number(data.afterRelayId || 0);
         const relayWhereClauses = [
@@ -1025,6 +1098,11 @@ wss.on("connection", (ws) => {
       }
     }
   });
+
+});
+
+server.on("error", (error) => {
+  logFatalAndExit("server error", error);
 });
 
 const heartbeatInterval = setInterval(() => {
@@ -1090,10 +1168,6 @@ process.once("SIGTERM", () => {
 
 process.once("SIGINT", () => {
   shutdown("SIGINT");
-});
-
-process.on("unhandledRejection", (error) => {
-  console.error("Unhandled realtime rejection:", error);
 });
 
 server.listen(process.env.PORT || 3010, () => {

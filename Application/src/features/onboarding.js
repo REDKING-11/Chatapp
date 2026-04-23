@@ -4,6 +4,7 @@ const DEFAULT_STATE = {
     completed: false,
     acceptedPrivacy: false,
     acceptedTos: false,
+    autoLoadProfileDescriptions: true,
     completedAt: null
 };
 

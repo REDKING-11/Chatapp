@@ -68,11 +68,22 @@ export async function registerUser({ username, password, email, phone }) {
     return parseJsonResponse(res, "Register failed");
 }
 
-export async function updateUserProfile({ displayName }) {
+export async function updateUserProfile({ displayName, profileDescription, profileGames }) {
+    const body = {};
+    if (displayName !== undefined) {
+        body.displayName = displayName;
+    }
+    if (profileDescription !== undefined) {
+        body.profileDescription = profileDescription;
+    }
+    if (profileGames !== undefined) {
+        body.profileGames = profileGames;
+    }
+
     const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/profile.php`, {
         method: "POST",
         headers: buildAuthRequestHeaders(true),
-        body: JSON.stringify({ displayName })
+        body: JSON.stringify(body)
     });
 
     return parseJsonResponse(res, "Failed to update profile");

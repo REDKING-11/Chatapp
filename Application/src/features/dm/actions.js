@@ -52,6 +52,9 @@ let realtimeRetryAvailableAt = 0;
 let realtimeLastFailureMessage = "";
 const REALTIME_RETRY_COOLDOWN_MS = 15000;
 const REALTIME_RELAY_ACK_TIMEOUT_MS = 5000;
+const REALTIME_RELAY_FETCH_MORE_DELAY_MS = 2500;
+const HTTP_RELAY_FETCH_MORE_DELAY_MS = 1000;
+const HTTP_RELAY_FETCH_MAX_BATCHES = 5;
 const RELAY_SYNC_MAX_PAGES_PER_PULL = 5;
 const outboundConversationIdByMessageId = new Map();
 const pendingDeliveryStateQueue = createPendingDeliveryStateQueue();
@@ -90,6 +93,12 @@ function rejectAllPendingRealtimeRelayAcks(error) {
     waiter.reject(error);
   });
   pendingRealtimeRelayAckWaiters.clear();
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function isMissingLocalConversationError(error) {
@@ -1039,6 +1048,14 @@ export async function ensureRealtimeConnection({ token, currentUser }) {
               source: "realtime",
               importedCount: 0
             });
+          }
+
+          if (payload.hasMore && socket.readyState === WebSocket.OPEN) {
+            window.setTimeout(() => {
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "dm:fetchRelay" }));
+              }
+            }, REALTIME_RELAY_FETCH_MORE_DELAY_MS);
           }
           return;
         }

@@ -111,6 +111,33 @@ export async function fetchFriends() {
     }
 }
 
+export async function fetchFriendProfileDescription({ friendUserId }) {
+    try {
+        const res = await fetchWithNetworkErrorContext(
+            `${CORE_API_BASE}/friends/profile_description.php?friendUserId=${encodeURIComponent(friendUserId)}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${getStoredAuthToken()}`
+                }
+            }
+        );
+
+        return await parseJsonResponse(res, {
+            fallbackMessage: "Failed to load friend profile description",
+            source: "friends",
+            operation: "friends.profileDescription.fetch",
+            method: "GET"
+        });
+    } catch (error) {
+        throw wrapFriendsError(error, {
+            code: "FRIENDS_PROFILE_DESCRIPTION_FETCH_FAILED",
+            userMessage: "Could not load that friend's profile description right now.",
+            operation: "friends.profileDescription.fetch",
+            friendUserId: String(friendUserId || "")
+        });
+    }
+}
+
 export async function fetchHistoryAccessStatus({ friendUserId, conversationId }) {
     const res = await fetch(
         `${CORE_API_BASE}/friends/history_status.php?friendUserId=${encodeURIComponent(friendUserId)}&conversationId=${encodeURIComponent(conversationId)}`,
