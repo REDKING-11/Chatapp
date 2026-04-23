@@ -2,12 +2,13 @@ import { useLayoutEffect, useRef, useState } from "react";
 
 export default function FriendContextMenu({
     contextMenu,
+    isMuted,
     friendTagFolders,
     onOpenDm,
+    onOpenSettings,
+    onToggleMute,
     onApplyTag,
-    onClearTag,
-    onRemoveFriend,
-    onHardDeleteFriend
+    onClearTag
 }) {
     const menuRef = useRef(null);
     const [position, setPosition] = useState(null);
@@ -63,12 +64,12 @@ export default function FriendContextMenu({
                 Open DM
             </button>
 
-            <button className="server-context-item" disabled>
+            <button className="server-context-item" onClick={onOpenSettings}>
                 Settings
             </button>
 
-            <button className="server-context-item" disabled>
-                Mute
+            <button className="server-context-item" onClick={onToggleMute}>
+                {isMuted ? "Unmute notifications" : "Mute notifications"}
             </button>
 
             {friendTagFolders.map((folder) => (
@@ -100,13 +101,6 @@ export default function FriendContextMenu({
                 </div>
             </div>
 
-            <button className="server-context-item danger" onClick={onRemoveFriend}>
-                Remove friend
-            </button>
-
-            <button className="server-context-item danger" onClick={onHardDeleteFriend}>
-                Hard delete
-            </button>
         </div>
     );
 }

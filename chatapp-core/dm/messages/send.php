@@ -14,6 +14,8 @@ $recipientDeviceIds = dmNormalizeRecipientDeviceIds(
     dmRequireArray($data, 'recipientDeviceIds', 'recipientDeviceIds is required')
 );
 $envelope = dmEnsureValidEnvelope($data);
+dmEnsureRecipientCountWithinResourceLimits($recipientDeviceIds);
+dmEnsureEnvelopeWithinResourceLimits($envelope);
 
 if ($conversationId <= 0) {
     jsonResponse(['error' => 'conversationId is required'], 400);

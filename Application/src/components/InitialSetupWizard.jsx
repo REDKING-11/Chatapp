@@ -22,6 +22,9 @@ export default function InitialSetupWizard({
     const [stepIndex, setStepIndex] = useState(0);
     const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
     const [acceptedTos, setAcceptedTos] = useState(false);
+    const [autoLoadProfileDescriptions, setAutoLoadProfileDescriptions] = useState(
+        currentSettings?.autoLoadProfileDescriptions !== false
+    );
     const [importStatus, setImportStatus] = useState("");
     const [importError, setImportError] = useState("");
     const [openPolicy, setOpenPolicy] = useState("");
@@ -62,7 +65,8 @@ export default function InitialSetupWizard({
 
         onComplete({
             acceptedPrivacy: true,
-            acceptedTos: true
+            acceptedTos: true,
+            autoLoadProfileDescriptions
         });
     }
 
@@ -117,6 +121,15 @@ export default function InitialSetupWizard({
                                 Import Previous Settings
                             </button>
                         </div>
+
+                        <label className="onboarding-check">
+                            <input
+                                type="checkbox"
+                                checked={autoLoadProfileDescriptions}
+                                onChange={(event) => setAutoLoadProfileDescriptions(event.target.checked)}
+                            />
+                            <span>Auto-download DM profile descriptions from your friends.</span>
+                        </label>
 
                         {importStatus ? <p className="onboarding-success">{importStatus}</p> : null}
                         {importError ? <p className="auth-error">{importError}</p> : null}

@@ -1,7 +1,7 @@
 import {
     DEFAULT_PRESENCE_STATUS,
     PRESENCE_STATUS_IDS
-} from "./presence";
+} from "./presence.js";
 
 const STORAGE_KEY = "clientSettings:v1";
 const EXPORT_KIND = "chatapp-client-settings";
@@ -152,11 +152,15 @@ export const CLIENT_SETTINGS_DEFAULTS = {
     debugMode: false,
     friendTagFolders: DEFAULT_FRIEND_TAG_FOLDERS,
     friendTagAssignments: {},
+    friendProfileNotesById: {},
+    ignoredVerificationDevicesByFriend: {},
+    mutedFriendNotificationsById: {},
     chatIdentityStyle: "profileMedia",
     chatNameMode: "displayName",
     chatMessageAlignment: "split",
     autoLoadProfileAvatars: true,
     autoLoadProfileBanners: false,
+    autoLoadProfileDescriptions: true,
     sharedServerProfileMediaOnly: true
 };
 
@@ -166,7 +170,7 @@ export const CLIENT_SETTINGS_SECTION_KEYS = {
     chatIdentity: ["chatIdentityStyle", "chatNameMode", "chatMessageAlignment"],
     accessibility: ["reducedMotion", "highContrast", "colorBlindMode", "dyslexicFont"],
     developer: ["debugMode"],
-    profileMedia: ["autoLoadProfileAvatars", "autoLoadProfileBanners", "sharedServerProfileMediaOnly"]
+    profileMedia: ["autoLoadProfileAvatars", "autoLoadProfileBanners", "autoLoadProfileDescriptions", "sharedServerProfileMediaOnly"]
 };
 
 export const CLIENT_SETTINGS_TAB_KEYS = {
@@ -260,6 +264,76 @@ function sanitizeFriendTagFolders(rawFolders) {
     return nextFolders;
 }
 
+function sanitizeFriendProfileNotesById(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return {};
+    }
+
+    return Object.entries(raw).reduce((next, [friendId, note]) => {
+        const normalizedFriendId = String(friendId || "").trim();
+        if (!normalizedFriendId || typeof note !== "string") {
+            return next;
+        }
+
+        next[normalizedFriendId] = note.slice(0, 500);
+        return next;
+    }, {});
+}
+
+function sanitizeIgnoredVerificationDevicesByFriend(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return {};
+    }
+
+    return Object.entries(raw).reduce((next, [friendId, rawDeviceIds]) => {
+        const normalizedFriendId = String(friendId || "").trim();
+
+        if (!normalizedFriendId || !Array.isArray(rawDeviceIds)) {
+            return next;
+        }
+
+        const normalizedDeviceIds = Array.from(
+            new Set(
+                rawDeviceIds
+                    .map((deviceId) => String(deviceId || "").trim())
+                    .filter(Boolean)
+            )
+        );
+
+        if (normalizedDeviceIds.length > 0) {
+            next[normalizedFriendId] = normalizedDeviceIds;
+        }
+
+        return next;
+    }, {});
+}
+
+function sanitizeMutedFriendNotificationsById(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return {};
+    }
+
+    return Object.entries(raw).reduce((next, [friendId, muted]) => {
+        const normalizedFriendId = String(friendId || "").trim();
+
+        if (!normalizedFriendId) {
+            return next;
+        }
+
+        if (muted === true) {
+            next[normalizedFriendId] = true;
+            return next;
+        }
+
+        const expiresAt = Number(muted);
+        if (Number.isFinite(expiresAt) && expiresAt > 0) {
+            next[normalizedFriendId] = Math.floor(expiresAt);
+        }
+
+        return next;
+    }, {});
+}
+
 function sanitizeSettings(raw) {
     if (!raw || typeof raw !== "object") {
         return { ...CLIENT_SETTINGS_DEFAULTS };
@@ -308,6 +382,9 @@ function sanitizeSettings(raw) {
     next.debugMode = Boolean(next.debugMode);
     next.friendTagFolders = sanitizeFriendTagFolders(next.friendTagFolders);
     next.friendTagAssignments = sanitizeFriendTagAssignments(next.friendTagAssignments);
+    next.friendProfileNotesById = sanitizeFriendProfileNotesById(next.friendProfileNotesById);
+    next.ignoredVerificationDevicesByFriend = sanitizeIgnoredVerificationDevicesByFriend(next.ignoredVerificationDevicesByFriend);
+    next.mutedFriendNotificationsById = sanitizeMutedFriendNotificationsById(next.mutedFriendNotificationsById);
     if (!["profileMedia", "minimal"].includes(next.chatIdentityStyle)) {
         next.chatIdentityStyle = CLIENT_SETTINGS_DEFAULTS.chatIdentityStyle;
     }
@@ -319,6 +396,7 @@ function sanitizeSettings(raw) {
     }
     next.autoLoadProfileAvatars = Boolean(next.autoLoadProfileAvatars);
     next.autoLoadProfileBanners = Boolean(next.autoLoadProfileBanners);
+    next.autoLoadProfileDescriptions = Boolean(next.autoLoadProfileDescriptions);
     next.sharedServerProfileMediaOnly = Boolean(next.sharedServerProfileMediaOnly);
 
     return next;

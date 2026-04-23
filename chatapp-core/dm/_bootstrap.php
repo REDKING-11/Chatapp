@@ -8,6 +8,9 @@ const DM_RELAY_TTL_SECONDS = 86400;
 const DM_ALLOWED_RELAY_TTLS = [0, 3600, 21600, 43200, 86400];
 const DM_MESSAGE_TTL_SECONDS = 0;
 const DM_ALLOWED_MESSAGE_TTLS = [0, 86400, 259200, 604800, 1209600, 2592000, 5184000, 10368000, 15552000];
+const DM_RELAY_FETCH_LIMIT = 50;
+const DM_MAX_ENVELOPE_BYTES = 1572864;
+const DM_MAX_RECIPIENTS = 50;
 
 function dmColumnExists(PDO $db, string $table, string $column): bool {
     static $cache = [];
@@ -302,12 +305,44 @@ function dmRequireArray(array $data, string $key, string $message): array {
     return $value;
 }
 
+function dmUtf8SizeBytes($value): int {
+    return strlen((string)$value);
+}
+
+function dmEnvelopeSizeBytes(array $envelope): int {
+    return dmUtf8SizeBytes($envelope['ciphertext'] ?? '')
+        + dmUtf8SizeBytes($envelope['nonce'] ?? '')
+        + dmUtf8SizeBytes($envelope['aad'] ?? '')
+        + dmUtf8SizeBytes($envelope['tag'] ?? '')
+        + dmUtf8SizeBytes($envelope['signature'] ?? '');
+}
+
+function dmEnsureEnvelopeWithinResourceLimits(array $envelope): void {
+    if (dmEnvelopeSizeBytes($envelope) > DM_MAX_ENVELOPE_BYTES) {
+        jsonResponse([
+            'error' => 'Encrypted DM payload is too large',
+            'code' => 'DM_PAYLOAD_TOO_LARGE',
+            'maxBytes' => DM_MAX_ENVELOPE_BYTES
+        ], 413);
+    }
+}
+
+function dmEnsureRecipientCountWithinResourceLimits(array $recipientDeviceIds): void {
+    if (count($recipientDeviceIds) > DM_MAX_RECIPIENTS) {
+        jsonResponse([
+            'error' => 'Too many DM recipients',
+            'code' => 'DM_TOO_MANY_RECIPIENTS',
+            'maxRecipients' => DM_MAX_RECIPIENTS
+        ], 413);
+    }
+}
+
 function dmMaxRecipientDevices(): int {
     return chatappEnvInt('CHATAPP_MAX_RECIPIENT_DEVICES', 50, 1, 10000);
 }
 
 function dmRelayFetchLimit(): int {
-    return chatappEnvInt('CHATAPP_RELAY_FETCH_LIMIT', 100, 1, 1000);
+    return chatappEnvInt('CHATAPP_RELAY_FETCH_LIMIT', DM_RELAY_FETCH_LIMIT, 1, 1000);
 }
 
 function dmCleanupBatchSize(): int {

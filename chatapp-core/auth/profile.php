@@ -8,29 +8,60 @@ $user = requireAuth();
 $db = getDb();
 $data = readJsonInput();
 
-if (!userProfileColumnExists($db, 'users', 'display_name')) {
-    jsonResponse(['error' => 'display_name column is missing'], 500);
+$hasDisplayNameColumn = userProfileColumnExists($db, 'users', 'display_name');
+$hasProfileDescriptionColumn = userProfileColumnExists($db, 'users', 'profile_description');
+$hasProfileGamesColumn = userProfileColumnExists($db, 'users', 'profile_games');
+
+$hasDisplayNameInput = array_key_exists('displayName', $data);
+$hasProfileDescriptionInput = array_key_exists('profileDescription', $data);
+$hasProfileGamesInput = array_key_exists('profileGames', $data);
+
+if (!$hasDisplayNameInput && !$hasProfileDescriptionInput && !$hasProfileGamesInput) {
+    jsonResponse(['error' => 'displayName, profileDescription, or profileGames is required'], 400);
 }
 
-if (!array_key_exists('displayName', $data)) {
-    jsonResponse(['error' => 'displayName is required'], 400);
+$updates = [];
+$params = [];
+
+if ($hasDisplayNameInput && $hasDisplayNameColumn) {
+    $displayName = trim((string)$data['displayName']);
+
+    if ($displayName !== '' && (strlen($displayName) < 2 || strlen($displayName) > 64)) {
+        jsonResponse(['error' => 'Display name must be between 2 and 64 characters'], 400);
+    }
+
+    $updates[] = 'display_name = ?';
+    $params[] = $displayName !== '' ? $displayName : null;
 }
 
-$displayName = trim((string)$data['displayName']);
+if ($hasProfileDescriptionInput && $hasProfileDescriptionColumn) {
+    if ($data['profileDescription'] !== null && !is_string($data['profileDescription'])) {
+        jsonResponse(['error' => 'profileDescription must be text'], 400);
+    }
 
-if ($displayName !== '' && (strlen($displayName) < 2 || strlen($displayName) > 64)) {
-    jsonResponse(['error' => 'Display name must be between 2 and 64 characters'], 400);
+    $profileDescription = userProfileNormalizeDescription($data['profileDescription'] ?? null);
+    $updates[] = 'profile_description = ?';
+    $params[] = $profileDescription;
 }
 
-$stmt = $db->prepare('
-    UPDATE users
-    SET display_name = ?
-    WHERE id = ?
-');
-$stmt->execute([
-    $displayName !== '' ? $displayName : null,
-    (int)$user['id']
-]);
+if ($hasProfileGamesInput && $hasProfileGamesColumn) {
+    if ($data['profileGames'] !== null && !is_array($data['profileGames'])) {
+        jsonResponse(['error' => 'profileGames must be a list'], 400);
+    }
+
+    $profileGames = userProfileNormalizeGames($data['profileGames'] ?? []);
+    $updates[] = 'profile_games = ?';
+    $params[] = !empty($profileGames) ? json_encode($profileGames) : null;
+}
+
+if (!empty($updates)) {
+    $params[] = (int)$user['id'];
+    $stmt = $db->prepare(sprintf(
+        'UPDATE users SET %s WHERE id = ?',
+        implode(', ', $updates)
+    ));
+    $stmt->execute($params);
+}
 
 $stmt = $db->prepare('
     SELECT
@@ -39,7 +70,9 @@ $stmt = $db->prepare('
         email,
         phone,
         ' . userProfileDisplayNameSelect($db, 'users') . ',
-        ' . userProfileUsernameTagSelect($db, 'users') . '
+        ' . userProfileUsernameTagSelect($db, 'users') . ',
+        ' . userProfileDescriptionSelect($db, 'users') . ',
+        ' . userProfileGamesSelect($db, 'users') . '
     FROM users
     WHERE id = ?
     LIMIT 1

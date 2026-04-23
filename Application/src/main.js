@@ -33,11 +33,16 @@ import {
   appendIncomingDownloadChunk,
   beginIncomingDownload,
   cancelIncomingDownload,
+  createOrReuseFileShare,
   chooseAttachmentSavePath,
   finishIncomingDownload,
+  getFileShare,
   getOutgoingAttachmentInfo,
+  listFileShares,
+  prepareOutgoingFileShareDownload,
   readOutgoingAttachmentChunk,
-  registerOutgoingAttachment
+  registerOutgoingAttachment,
+  resetOutgoingFileShare
 } from './main/transfers/service';
 import {
   clearStoredAuthToken,
@@ -318,6 +323,11 @@ const registerAttachmentTransferIpc = () => {
   ipcMain.handle('attachment-transfers:append-incoming-chunk', (_event, payload) => appendIncomingDownloadChunk(payload));
   ipcMain.handle('attachment-transfers:finish-incoming-download', (_event, payload) => finishIncomingDownload(payload));
   ipcMain.handle('attachment-transfers:cancel-incoming-download', (_event, payload) => cancelIncomingDownload(payload));
+  ipcMain.handle('file-shares:create-or-reuse', (_event, payload) => createOrReuseFileShare(payload));
+  ipcMain.handle('file-shares:get', (_event, payload) => getFileShare(payload));
+  ipcMain.handle('file-shares:list', () => listFileShares());
+  ipcMain.handle('file-shares:reset', (_event, payload) => resetOutgoingFileShare(payload));
+  ipcMain.handle('file-shares:prepare-download', (_event, payload) => prepareOutgoingFileShareDownload(payload));
 };
 
 // This method will be called when Electron has finished

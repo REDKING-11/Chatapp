@@ -108,6 +108,7 @@ export default function FriendConversationSettingsModal({
     currentUser,
     selectedFriend,
     effectiveSelectedFriend,
+    clientSettings,
     selectedRelayTtlSeconds,
     selectedDisappearingTtlSeconds,
     relayPolicy,
@@ -128,7 +129,8 @@ export default function FriendConversationSettingsModal({
     onRetentionRequest,
     onRetentionAccept,
     onDisappearingRequest,
-    onDisappearingAccept
+    onDisappearingAccept,
+    onIgnoreVerificationDevice
 }) {
     const [verification, setVerification] = useState(null);
     const [verificationLoading, setVerificationLoading] = useState(false);
@@ -233,9 +235,33 @@ export default function FriendConversationSettingsModal({
         }
     }
 
+    function handleDoNotVerify(deviceId) {
+        if (!selectedFriend?.friendUserId || !deviceId) {
+            return;
+        }
+
+        onIgnoreVerificationDevice?.(selectedFriend.friendUserId, deviceId);
+        setVerification((prev) => (
+            prev
+                ? {
+                    ...prev,
+                    remoteDevices: (prev.remoteDevices || []).filter((device) => String(device.deviceId) !== String(deviceId))
+                }
+                : prev
+        ));
+    }
+
     if (!selectedFriend) {
         return null;
     }
+
+    const ignoredVerificationDeviceIds = Array.isArray(clientSettings?.ignoredVerificationDevicesByFriend?.[String(selectedFriend.friendUserId)])
+        ? clientSettings.ignoredVerificationDevicesByFriend[String(selectedFriend.friendUserId)].map((deviceId) => String(deviceId))
+        : [];
+    const visibleRemoteDevices = (verification?.remoteDevices || []).filter(
+        (device) => !ignoredVerificationDeviceIds.includes(String(device.deviceId))
+    );
+    const hiddenRemoteDeviceCount = Math.max(0, (verification?.remoteDevices || []).length - visibleRemoteDevices.length);
 
     return (
         <div className="friends-settings-overlay" onClick={onClose}>
@@ -371,14 +397,14 @@ export default function FriendConversationSettingsModal({
 
                             <div className="friends-verification-device-list">
                                 <div className="friends-verification-device friends-verification-device-local">
-                                    <div>
+                                    <div className="friends-verification-device-local-meta">
                                         <strong>This device</strong>
                                         <span>{verification.localDevice?.deviceName || "Current device"}</span>
                                     </div>
                                     <code>{verification.localDevice?.fingerprint || "Unavailable"}</code>
                                 </div>
 
-                                {(verification.remoteDevices || []).map((device) => (
+                                {visibleRemoteDevices.map((device) => (
                                     <div key={device.deviceId} className="friends-verification-device">
                                         <div className="friends-verification-device-meta">
                                             <div>
@@ -390,19 +416,36 @@ export default function FriendConversationSettingsModal({
                                                 </span>
                                             </div>
 
-                                            <button
-                                                type="button"
-                                                disabled={verificationActionId === String(device.deviceId)}
-                                                onClick={() => handleToggleDeviceVerification(device.deviceId, !device.isVerified)}
-                                            >
-                                                {device.isVerified ? "Unverify" : "Mark verified"}
-                                            </button>
+                                            <div className="friends-verification-device-actions">
+                                                <button
+                                                    type="button"
+                                                    disabled={verificationActionId === String(device.deviceId)}
+                                                    onClick={() => handleToggleDeviceVerification(device.deviceId, !device.isVerified)}
+                                                >
+                                                    {device.isVerified ? "Unverify" : "Mark verified"}
+                                                </button>
+
+                                                <button
+                                                    type="button"
+                                                    className="friends-secondary-button"
+                                                    disabled={verificationActionId === String(device.deviceId)}
+                                                    onClick={() => handleDoNotVerify(device.deviceId)}
+                                                >
+                                                    Do not verify
+                                                </button>
+                                            </div>
                                         </div>
 
                                         <code>{device.fingerprint}</code>
                                     </div>
                                 ))}
                             </div>
+
+                            {hiddenRemoteDeviceCount > 0 ? (
+                                <small className="friends-retention-note">
+                                    Hidden from verification list: {hiddenRemoteDeviceCount}
+                                </small>
+                            ) : null}
                         </>
                     ) : (
                         <small className="friends-retention-note">

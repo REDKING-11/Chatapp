@@ -12,6 +12,19 @@ import {
     PRESENCE_OPTIONS
 } from "../features/presence";
 
+const KNOWN_GAME_TONES = {
+    "league of legends": "is-magic",
+    paladins: "is-sky",
+    "dota 2": "is-ember",
+    valorant: "is-crimson",
+    overwatch: "is-sunset",
+    minecraft: "is-forest",
+    terraria: "is-forest",
+    "counter-strike 2": "is-steel",
+    cs2: "is-steel",
+    destiny: "is-violet"
+};
+
 function getUserLabel(user) {
     return user?.displayName || user?.usernameBase || user?.username || "User";
 }
@@ -36,6 +49,69 @@ function getInitials(label) {
     }
 
     return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+}
+
+function normalizeProfileGames(games) {
+    if (!Array.isArray(games)) {
+        return [];
+    }
+
+    const seen = new Set();
+
+    return games.reduce((next, game) => {
+        const normalizedGame = String(game || "").trim();
+        const dedupeKey = normalizedGame.toLowerCase();
+
+        if (!normalizedGame || seen.has(dedupeKey)) {
+            return next;
+        }
+
+        seen.add(dedupeKey);
+        next.push(normalizedGame.slice(0, 40));
+        return next;
+    }, []).slice(0, 6);
+}
+
+function getGameTileTone(game) {
+    const normalized = String(game || "").trim().toLowerCase();
+    return KNOWN_GAME_TONES[normalized] || "is-neutral";
+}
+
+function getGameTileInitials(game) {
+    const normalized = String(game || "").trim();
+    if (!normalized) {
+        return "?";
+    }
+
+    const parts = normalized.split(/\s+/).filter(Boolean);
+    if (parts.length === 1) {
+        return parts[0].slice(0, 2).toUpperCase();
+    }
+
+    return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+}
+
+function ProfileGamesRow({ games, emptyLabel = "No games added yet." }) {
+    if (!games.length) {
+        return <p className="profile-shared-empty">{emptyLabel}</p>;
+    }
+
+    return (
+        <div className="profile-shared-games-row">
+            {games.map((game) => (
+                <div
+                    key={game}
+                    className={`profile-shared-game-tile ${getGameTileTone(game)}`.trim()}
+                    title={game}
+                >
+                    <span className="profile-shared-game-badge" aria-hidden="true">
+                        {getGameTileInitials(game)}
+                    </span>
+                    <strong>{game}</strong>
+                </div>
+            ))}
+        </div>
+    );
 }
 
 export default function ProfileDock({
@@ -67,6 +143,11 @@ export default function ProfileDock({
     const hasServerProfile = Boolean(backendUrl);
     const presenceStatus = clientSettings?.presenceStatus || "online";
     const presenceMeta = getConfiguredPresenceMeta(presenceStatus);
+    const profileBio = String(currentUser?.profileDescription || "").trim();
+    const profileGames = useMemo(
+        () => normalizeProfileGames(currentUser?.profileGames),
+        [currentUser?.profileGames]
+    );
 
     useEffect(() => {
         async function loadManifest() {
@@ -274,48 +355,79 @@ export default function ProfileDock({
                         className="profile-dock-card-banner"
                         style={bannerUrl ? { backgroundImage: `url(${bannerUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
                     >
-                        <span className="profile-dock-card-star profile-dock-card-star-large" />
-                        <span className="profile-dock-card-star profile-dock-card-star-small" />
+                        <div className="profile-dock-card-banner-overlay" />
                     </div>
 
                     <div className="profile-dock-card-body">
-                        <div className="profile-dock-card-avatar-wrap">
-                            <div className="profile-dock-avatar profile-dock-card-avatar">
-                                {avatarUrl ? <img src={avatarUrl} alt={userLabel} className="profile-dock-avatar-image" /> : initials}
+                        <section className="profile-shared-hero profile-shared-hero-self">
+                            <div className="profile-shared-hero-media">
+                                <div className="profile-dock-avatar profile-dock-card-avatar">
+                                    {avatarUrl ? <img src={avatarUrl} alt={userLabel} className="profile-dock-avatar-image" /> : initials}
+                                </div>
+                                <span className={`profile-dock-card-status-dot is-${presenceStatus}`.trim()} />
                             </div>
-                            <span className={`profile-dock-card-status-dot is-${presenceStatus}`.trim()} />
-                        </div>
 
-                        <div className="profile-dock-card-actions">
-                            <button type="button" title="Profile card">
-                                <span>v</span>
-                            </button>
-                            <button type="button" title="Copy handle" onClick={handleCopyHandle}>
-                                <span>#</span>
-                            </button>
-                            <button
-                                type="button"
-                                title="Client settings"
-                                onClick={() => {
-                                    setIsCardOpen(false);
-                                    onOpenClientSettings?.();
-                                }}
-                            >
-                                <span>o</span>
-                            </button>
-                        </div>
+                            <div className="profile-shared-hero-copy">
+                                <span className="profile-shared-eyebrow">Your profile</span>
+                                <strong>{userLabel}</strong>
+                                <span className="profile-shared-handle">{userHandle}</span>
+                                <div className="profile-shared-status-row">
+                                    <span className={`profile-dock-status-pill is-${presenceStatus}`.trim()}>
+                                        {presenceMeta.label}
+                                    </span>
+                                    <small>{presenceMeta.detail}</small>
+                                </div>
+                            </div>
 
-                        <div className="profile-dock-card-meta">
-                            <strong>{userLabel}</strong>
-                            <span>{userHandle}</span>
-                        </div>
+                            <div className="profile-dock-card-actions">
+                                <button
+                                    type="button"
+                                    title="Copy handle"
+                                    onClick={handleCopyHandle}
+                                >
+                                    #
+                                </button>
+                                <button
+                                    type="button"
+                                    title="Client settings"
+                                    onClick={() => {
+                                        setIsCardOpen(false);
+                                        onOpenClientSettings?.();
+                                    }}
+                                >
+                                    o
+                                </button>
+                            </div>
+                        </section>
+
+                        <section className="profile-shared-section">
+                            <div className="profile-shared-section-header">
+                                <div>
+                                    <strong>Bio</strong>
+                                    <span>Default profile description shown in DMs.</span>
+                                </div>
+                            </div>
+                            <div className="profile-shared-section-panel">
+                                <p className="profile-shared-copy">
+                                    {profileBio || "Add a short bio in Client Settings so friends can download it in DMs."}
+                                </p>
+                            </div>
+                        </section>
+
+                        <section className="profile-shared-section">
+                            <div className="profile-shared-section-header">
+                                <div>
+                                    <strong>Games</strong>
+                                    <span>The titles you want people to notice first.</span>
+                                </div>
+                            </div>
+                            <ProfileGamesRow games={profileGames} emptyLabel="No games added yet." />
+                        </section>
 
                         <div className="profile-dock-status-panel">
                             <div className="profile-dock-status-summary">
-                                <span className={`profile-dock-status-pill is-${presenceStatus}`.trim()}>
-                                    {presenceMeta.label}
-                                </span>
-                                <small>{presenceMeta.detail}</small>
+                                <span className="profile-shared-eyebrow">Presence</span>
+                                <small>Desktop notifications still honor your busy status.</small>
                             </div>
 
                             <div className="profile-dock-status-grid" aria-label="Presence status">
@@ -334,15 +446,15 @@ export default function ProfileDock({
                         </div>
 
                         <div className="profile-dock-host-note">
-                            Edit your display name, avatar, and background from Client Settings, Profile.
+                            Edit your bio, games, avatar, and background from Client Settings, Profile.
                         </div>
 
                         {hasServerProfile ? (
                             <div className="profile-dock-server-description">
                                 <div className="profile-dock-server-description-header">
                                     <div>
-                                        <strong>Server Description</strong>
-                                        <span>Only you can edit this for this server.</span>
+                                        <strong>Server description</strong>
+                                        <span>This stays specific to the current server.</span>
                                     </div>
                                     <button
                                         type="button"
@@ -354,7 +466,7 @@ export default function ProfileDock({
                                             setIsEditingServerDescription((prev) => !prev);
                                         }}
                                     >
-                                        <span>o</span>
+                                        o
                                     </button>
                                 </div>
 
@@ -475,12 +587,19 @@ export default function ProfileDock({
                 }}
                 title={userHandle}
             >
-                <div className="profile-dock-avatar">
-                    {avatarUrl ? <img src={avatarUrl} alt={userLabel} className="profile-dock-avatar-image" /> : initials}
+                <div className="profile-dock-button-media">
+                    <div className="profile-dock-avatar">
+                        {avatarUrl ? <img src={avatarUrl} alt={userLabel} className="profile-dock-avatar-image" /> : initials}
+                    </div>
+                    <span className={`profile-dock-card-status-dot profile-dock-button-status-dot is-${presenceStatus}`.trim()} />
                 </div>
                 <div className="profile-dock-meta">
                     <strong>{userLabel}</strong>
-                    <span>{userHandle} · {presenceMeta.label}</span>
+                    <span className="profile-dock-meta-handle">{userHandle}</span>
+                    <span className="profile-dock-meta-status">{presenceMeta.label}</span>
+                </div>
+                <div className="profile-dock-button-chevron" aria-hidden="true">
+                    {isCardOpen ? "^" : ">"}
                 </div>
             </button>
         </div>
