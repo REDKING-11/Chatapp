@@ -14,12 +14,31 @@ const {
   DEFAULT_PRESENCE_STATUS,
   updateDevicePresence
 } = require("./presence");
+const {
+  createFixedWindowRateLimiter,
+  createRelayPage,
+  loadRealtimeLimits,
+  normalizePositiveIntegers,
+  normalizeUniqueStrings
+} = require("./limits");
+
+const LIMITS = loadRealtimeLimits();
+const WS_AUTH_TIMEOUT_MS = 10000;
+const WS_HEARTBEAT_INTERVAL_MS = 30000;
+const SHUTDOWN_TIMEOUT_MS = 10000;
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: LIMITS.wsMaxPayloadBytes }));
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+server.requestTimeout = 30000;
+server.headersTimeout = 15000;
+server.keepAliveTimeout = 10000;
+
+const wss = new WebSocket.Server({
+  server,
+  maxPayload: LIMITS.wsMaxPayloadBytes
+});
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -28,54 +47,149 @@ const pool = mysql.createPool({
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true,
-  connectionLimit: 10
+  connectionLimit: LIMITS.dbConnectionLimit,
+  queueLimit: LIMITS.dbQueueLimit
 });
 
 const onlineDevices = new Map();
 const presenceSubscriptions = new Map();
 const tableExistsCache = new Map();
 const columnExistsCache = new Map();
-const WS_AUTH_TIMEOUT_MS = 10000;
+let rejectedConnectionCount = 0;
+let rateLimitedConnectionCount = 0;
+let backpressureCloseCount = 0;
 let relayQueueColumnsEnsured = false;
 let relayQueueColumnsEnsuredPromise = null;
+let shutdownStarted = false;
+
+function getSocketCounts() {
+  const sockets = Array.from(wss.clients);
+  const authenticated = sockets.filter((ws) => ws.chatappAuthenticated === true).length;
+
+  return {
+    total: sockets.length,
+    authenticated,
+    unauthenticated: sockets.length - authenticated
+  };
+}
 
 app.get("/health", async (_req, res) => {
+  const socketCounts = getSocketCounts();
+  const memory = process.memoryUsage();
+
   try {
     await pool.query("SELECT 1");
-    res.json({ ok: true, onlineDevices: onlineDevices.size });
+    res.json({
+      ok: true,
+      db: { ok: true },
+      uptimeSeconds: Math.round(process.uptime()),
+      memory: {
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+        heapTotal: memory.heapTotal,
+        external: memory.external
+      },
+      sockets: {
+        ...socketCounts,
+        maxConnections: LIMITS.wsMaxConnections,
+        maxUnauthenticated: LIMITS.wsMaxUnauthenticatedConnections
+      },
+      onlineDevices: onlineDevices.size,
+      presenceSubscriptions: presenceSubscriptions.size,
+      rejectedConnectionCount,
+      rateLimitedConnectionCount,
+      backpressureCloseCount
+    });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({
+      ok: false,
+      db: {
+        ok: false,
+        error: error.message
+      },
+      uptimeSeconds: Math.round(process.uptime()),
+      sockets: socketCounts,
+      onlineDevices: onlineDevices.size,
+      presenceSubscriptions: presenceSubscriptions.size
+    });
   }
 });
 
-function sendJson(ws, payload) {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(payload));
+app.use((error, _req, res, next) => {
+  if (error?.type === "entity.too.large") {
+    res.status(413).json({
+      ok: false,
+      error: "Request body is too large",
+      limit: LIMITS.wsMaxPayloadBytes
+    });
+    return;
+  }
+
+  next(error);
+});
+
+function closeSocket(ws, code, reason) {
+  if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+    ws.close(code, reason);
   }
 }
 
-function normalizeSubscribedUserIds(userIds) {
-  return [
-    ...new Set(
-      (Array.isArray(userIds) ? userIds : [])
-        .map((userId) => Number(userId))
-        .filter((userId) => Number.isInteger(userId) && userId > 0)
-    )
-  ];
+function sendJson(ws, payload) {
+  if (ws.readyState === WebSocket.OPEN) {
+    const message = JSON.stringify(payload);
+    const messageBytes = Buffer.byteLength(message);
+
+    if (ws.bufferedAmount + messageBytes > LIMITS.wsMaxBufferedBytes) {
+      backpressureCloseCount += 1;
+      closeSocket(ws, 1013, "Send buffer limit exceeded");
+      return false;
+    }
+
+    try {
+      ws.send(message, (error) => {
+        if (error) {
+          closeSocket(ws, 1011, "Send failed");
+        }
+      });
+      return true;
+    } catch (_error) {
+      closeSocket(ws, 1011, "Send failed");
+      return false;
+    }
+  }
+
+  return false;
 }
 
-function sendPresenceSnapshot(ws, userIds) {
-  const normalizedUserIds = normalizeSubscribedUserIds(userIds);
+function normalizeSubscribedUserIds(userIds) {
+  return normalizePositiveIntegers(userIds, LIMITS.wsMaxPresenceSubscriptions);
+}
 
+function sendPresenceSnapshot(ws, userIds, meta = {}) {
   sendJson(ws, {
     type: "presence:snapshot",
-    items: normalizedUserIds.map((userId) => createPresencePayload(onlineDevices, userId))
+    items: userIds.map((userId) => createPresencePayload(onlineDevices, userId)),
+    limit: LIMITS.wsMaxPresenceSubscriptions,
+    truncated: Boolean(meta.truncated)
   });
 }
 
 function updatePresenceSubscription(ws, userIds) {
-  presenceSubscriptions.set(ws, new Set(normalizeSubscribedUserIds(userIds)));
-  sendPresenceSnapshot(ws, userIds);
+  const normalized = normalizeSubscribedUserIds(userIds);
+
+  if (normalized.truncated) {
+    sendJson(ws, {
+      type: "presence:limit",
+      code: "PRESENCE_SUBSCRIPTION_LIMIT",
+      error: `Presence subscriptions are limited to ${normalized.limit} users per socket`,
+      limit: normalized.limit
+    });
+  }
+
+  presenceSubscriptions.set(ws, new Set(normalized.items));
+  sendPresenceSnapshot(ws, normalized.items, {
+    truncated: normalized.truncated
+  });
 }
 
 function clearPresenceSubscription(ws) {
@@ -475,8 +589,39 @@ async function getConversationRelayTtlSeconds(conversationId) {
 }
 
 wss.on("connection", (ws) => {
+  if (wss.clients.size > LIMITS.wsMaxConnections) {
+    rejectedConnectionCount += 1;
+    sendJson(ws, {
+      type: "error",
+      code: "SERVER_BUSY",
+      error: "Realtime server is at its connection limit"
+    });
+    closeSocket(ws, 1013, "Connection limit reached");
+    return;
+  }
+
+  ws.chatappAuthenticated = false;
+  ws.chatappAuthedDeviceId = null;
+  ws.expectedRelayAckIds = new Set();
+  ws.isAlive = true;
+
+  if (getSocketCounts().unauthenticated > LIMITS.wsMaxUnauthenticatedConnections) {
+    rejectedConnectionCount += 1;
+    sendJson(ws, {
+      type: "auth:error",
+      code: "SERVER_BUSY",
+      error: "Realtime server has too many unauthenticated connections"
+    });
+    closeSocket(ws, 1013, "Unauthenticated connection limit reached");
+    return;
+  }
+
   let authedDeviceId = null;
   let authedUserId = null;
+  const rateLimiter = createFixedWindowRateLimiter({
+    limit: LIMITS.wsMessageRateLimit,
+    windowMs: LIMITS.wsMessageRateWindowMs
+  });
   const authTimeout = setTimeout(() => {
     if (!authedDeviceId && ws.readyState === WebSocket.OPEN) {
       sendJson(ws, { type: "auth:error", error: "Authentication timed out" });
@@ -484,9 +629,66 @@ wss.on("connection", (ws) => {
     }
   }, WS_AUTH_TIMEOUT_MS);
 
+  ws.on("pong", () => {
+    ws.isAlive = true;
+  });
+
+  ws.on("error", (error) => {
+    console.warn("Realtime socket error:", error.message);
+  });
+
   ws.on("message", async (raw) => {
     try {
-      const data = JSON.parse(raw.toString());
+      const rawBytes = Buffer.isBuffer(raw)
+        ? raw.length
+        : Buffer.byteLength(String(raw));
+
+      if (rawBytes > LIMITS.wsMaxPayloadBytes) {
+        sendJson(ws, {
+          type: "error",
+          code: "PAYLOAD_TOO_LARGE",
+          error: "Realtime message payload is too large",
+          limit: LIMITS.wsMaxPayloadBytes
+        });
+        closeSocket(ws, 1009, "Payload too large");
+        return;
+      }
+
+      let data;
+
+      try {
+        data = JSON.parse(raw.toString());
+      } catch (_error) {
+        const rateState = rateLimiter.check();
+
+        if (!rateState.allowed) {
+          rateLimitedConnectionCount += 1;
+          closeSocket(ws, 4008, "Rate limit exceeded");
+          return;
+        }
+
+        sendJson(ws, { type: "error", code: "INVALID_JSON", error: "Invalid JSON payload" });
+        return;
+      }
+
+      const expectedRelayAck = data.type === "dm:ack"
+        && ws.expectedRelayAckIds?.has(String(data.relayId || "").trim());
+
+      if (!expectedRelayAck) {
+        const rateState = rateLimiter.check();
+
+        if (!rateState.allowed) {
+          rateLimitedConnectionCount += 1;
+          sendJson(ws, {
+            type: "error",
+            code: "RATE_LIMITED",
+            error: "Too many realtime messages. Please retry shortly.",
+            retryAfterMs: rateState.retryAfterMs
+          });
+          closeSocket(ws, 4008, "Rate limit exceeded");
+          return;
+        }
+      }
 
       if (data.type === "auth") {
         if (authedDeviceId) {
@@ -514,6 +716,8 @@ wss.on("connection", (ws) => {
 
         authedUserId = authResult.userId;
         authedDeviceId = authResult.deviceId;
+        ws.chatappAuthenticated = true;
+        ws.chatappAuthedDeviceId = authedDeviceId;
 
         const existingConnection = onlineDevices.get(authedDeviceId);
 
@@ -591,13 +795,18 @@ wss.on("connection", (ws) => {
           return;
         }
 
-        const normalizedRecipientDeviceIds = [
-          ...new Set(
-            recipientDeviceIds
-              .map((recipientDeviceId) => String(recipientDeviceId || "").trim())
-              .filter(Boolean)
-          )
-        ];
+        const recipientNormalization = normalizeUniqueStrings(recipientDeviceIds, LIMITS.dmMaxRecipientDevices);
+
+        if (recipientNormalization.truncated) {
+          sendJson(ws, {
+            type: "error",
+            code: "DM_RECIPIENT_LIMIT",
+            error: `dm:send supports at most ${recipientNormalization.limit} recipient devices`
+          });
+          return;
+        }
+
+        const normalizedRecipientDeviceIds = recipientNormalization.items;
         const allowedRecipients = normalizedRecipientDeviceIds.filter((recipientDeviceId) =>
           allowedRecipientDeviceIds.has(recipientDeviceId)
         );
@@ -611,8 +820,9 @@ wss.on("connection", (ws) => {
         for (const recipientDeviceId of allowedRecipients) {
           const onlineTarget = onlineDevices.get(recipientDeviceId);
 
-          if (onlineTarget) {
-            sendJson(onlineTarget.ws, {
+          if (
+            onlineTarget
+            && sendJson(onlineTarget.ws, {
               type: "dm:deliver",
               relayId: null,
               conversationId: normalizedConversationId,
@@ -624,7 +834,8 @@ wss.on("connection", (ws) => {
               aad: String(aad),
               tag: String(tag),
               signature: String(signature)
-            });
+            })
+          ) {
             deliveredRecipientCount += 1;
           } else {
             undelivered.push(recipientDeviceId);
@@ -685,36 +896,53 @@ wss.on("connection", (ws) => {
 
       if (data.type === "dm:fetchRelay") {
         await ensureRelayQueueMessageSignatureColumns();
+        const afterRelayId = Number(data.afterRelayId || 0);
+        const relayWhereClauses = [
+          "recipient_device_id = ?",
+          "acked_at IS NULL",
+          "expires_at > UTC_TIMESTAMP()"
+        ];
+        const relayParams = [authedDeviceId];
+
+        if (Number.isInteger(afterRelayId) && afterRelayId > 0) {
+          relayWhereClauses.push("id > ?");
+          relayParams.push(afterRelayId);
+        }
 
         const [rows] = await pool.query(
           `
           SELECT id, message_id, conversation_id, sender_user_id, recipient_device_id, sender_device_id, ciphertext, nonce, aad, tag, message_signature, created_at, expires_at
           FROM dm_relay_queue
-          WHERE recipient_device_id = ?
-            AND acked_at IS NULL
-            AND expires_at > UTC_TIMESTAMP()
-          ORDER BY created_at ASC
+          WHERE ${relayWhereClauses.join(" AND ")}
+          ORDER BY id ASC
+          LIMIT ${LIMITS.dmMaxRelayFetchItems + 1}
           `,
-          [authedDeviceId]
+          relayParams
         );
+        const relayPage = createRelayPage(rows, LIMITS.dmMaxRelayFetchItems, (row) => ({
+          relayId: row.id,
+          messageId: row.message_id,
+          conversationId: row.conversation_id,
+          senderUserId: row.sender_user_id == null ? null : Number(row.sender_user_id),
+          recipientDeviceId: row.recipient_device_id,
+          senderDeviceId: row.sender_device_id,
+          ciphertext: row.ciphertext,
+          nonce: row.nonce,
+          aad: row.aad,
+          tag: row.tag,
+          signature: row.message_signature,
+          createdAt: row.created_at,
+          expiresAt: row.expires_at
+        }));
+        relayPage.items.forEach((item) => {
+          if (item.relayId != null) {
+            ws.expectedRelayAckIds.add(String(item.relayId));
+          }
+        });
 
         sendJson(ws, {
           type: "dm:relayItems",
-          items: rows.map((row) => ({
-            relayId: row.id,
-            messageId: row.message_id,
-            conversationId: row.conversation_id,
-            senderUserId: row.sender_user_id == null ? null : Number(row.sender_user_id),
-            recipientDeviceId: row.recipient_device_id,
-            senderDeviceId: row.sender_device_id,
-            ciphertext: row.ciphertext,
-            nonce: row.nonce,
-            aad: row.aad,
-            tag: row.tag,
-            signature: row.message_signature,
-            createdAt: row.created_at,
-            expiresAt: row.expires_at
-          }))
+          ...relayPage
         });
         return;
       }
@@ -748,6 +976,7 @@ wss.on("connection", (ws) => {
           sendJson(ws, { type: "error", error: "relayId is required" });
           return;
         }
+        ws.expectedRelayAckIds.delete(String(normalizedRelayId));
 
         const [relayRows] = await pool.query(
           `
@@ -784,6 +1013,8 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     clearTimeout(authTimeout);
     clearPresenceSubscription(ws);
+    ws.chatappAuthenticated = false;
+    ws.chatappAuthedDeviceId = null;
 
     if (authedDeviceId) {
       const existingConnection = onlineDevices.get(authedDeviceId);
@@ -794,6 +1025,75 @@ wss.on("connection", (ws) => {
       }
     }
   });
+});
+
+const heartbeatInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      return;
+    }
+
+    ws.isAlive = false;
+
+    try {
+      ws.ping();
+    } catch (_error) {
+      ws.terminate();
+    }
+  });
+}, WS_HEARTBEAT_INTERVAL_MS);
+
+wss.on("close", () => {
+  clearInterval(heartbeatInterval);
+});
+
+async function shutdown(signal) {
+  if (shutdownStarted) {
+    return;
+  }
+
+  shutdownStarted = true;
+  console.log(`Received ${signal}; shutting down realtime server`);
+  clearInterval(heartbeatInterval);
+
+  for (const ws of wss.clients) {
+    sendJson(ws, {
+      type: "error",
+      code: "SERVER_SHUTTING_DOWN",
+      error: "Realtime server is shutting down"
+    });
+    closeSocket(ws, 1012, "Server restart");
+  }
+
+  const forceExit = setTimeout(() => {
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+  forceExit.unref();
+
+  server.close(async () => {
+    try {
+      await pool.end();
+    } catch (error) {
+      console.error("Failed to close MySQL pool:", error);
+    }
+
+    process.exit(0);
+  });
+
+  wss.close();
+}
+
+process.once("SIGTERM", () => {
+  shutdown("SIGTERM");
+});
+
+process.once("SIGINT", () => {
+  shutdown("SIGINT");
+});
+
+process.on("unhandledRejection", (error) => {
+  console.error("Unhandled realtime rejection:", error);
 });
 
 server.listen(process.env.PORT || 3010, () => {

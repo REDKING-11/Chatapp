@@ -6,7 +6,8 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "start": "node app.js"
+    "start": "node app.js",
+    "test": "node --test *.test.js"
   },
   "author": "REDKING_11",
   "license": "Apache-2.0",

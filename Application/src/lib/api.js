@@ -58,6 +58,29 @@ function buildLocalServiceUnavailableMessage(requestUrl) {
     return "";
 }
 
+function getRequestOrigin(requestUrl) {
+    const normalizedUrl = normalizeRequestUrl(requestUrl);
+
+    if (!normalizedUrl) {
+        return "";
+    }
+
+    try {
+        return new URL(normalizedUrl).origin;
+    } catch {
+        return "";
+    }
+}
+
+export function isApiNetworkUnavailableError(error) {
+    const code = String(error?.code || "").trim();
+
+    return Boolean(error?.isNetworkError)
+        || code === "API_NETWORK_FETCH_FAILED"
+        || code === "API_TIMEOUT"
+        || isNetworkStyleError(error);
+}
+
 export function annotateNetworkError(error, requestUrl) {
     if (!isNetworkStyleError(error)) {
         return error;
@@ -65,10 +88,13 @@ export function annotateNetworkError(error, requestUrl) {
 
     const message = buildLocalServiceUnavailableMessage(requestUrl);
     const normalizedUrl = normalizeRequestUrl(requestUrl);
+    const origin = getRequestOrigin(requestUrl);
     const wrappedError = createAppDiagnosticError({
         code: error?.name === "AbortError" ? "API_TIMEOUT" : "API_NETWORK_FETCH_FAILED",
         message: String(error?.message || error || "Network request failed"),
-        userMessage: message || "Could not reach the server. Check your connection and try again.",
+        userMessage: message || (origin
+            ? `Could not reach ${origin}. The backend may be offline or restarting.`
+            : "Could not reach the server. The backend may be offline or restarting."),
         source: "api",
         operation: "request",
         severity: "error",

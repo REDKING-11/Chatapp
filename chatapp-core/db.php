@@ -42,8 +42,41 @@ function getDb(): PDO {
     return $pdo;
 }
 
+function chatappEnvInt(string $name, int $default, int $min, int $max): int {
+    $raw = getenv($name);
+
+    if ($raw === false || $raw === '') {
+        return $default;
+    }
+
+    if (!is_numeric($raw)) {
+        return $default;
+    }
+
+    return max($min, min($max, (int)$raw));
+}
+
 function readJsonInput(): array {
+    $maxBytes = chatappEnvInt('CHATAPP_JSON_MAX_BYTES', 1048576, 1024, 16777216);
+    $contentLength = $_SERVER['CONTENT_LENGTH'] ?? '';
+
+    if (is_numeric($contentLength) && (int)$contentLength > $maxBytes) {
+        jsonResponse([
+            'error' => 'Request body is too large',
+            'limit' => $maxBytes
+        ], 413);
+    }
+
     $input = file_get_contents('php://input');
+    $input = $input === false ? '' : $input;
+
+    if (strlen($input) > $maxBytes) {
+        jsonResponse([
+            'error' => 'Request body is too large',
+            'limit' => $maxBytes
+        ], 413);
+    }
+
     $data = json_decode($input, true);
 
     return is_array($data) ? $data : [];

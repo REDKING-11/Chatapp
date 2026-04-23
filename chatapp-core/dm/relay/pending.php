@@ -5,6 +5,7 @@ require_once __DIR__ . '/../_bootstrap.php';
 $user = requireAuth();
 $db = getDb();
 $deviceId = dmTrimmedString($_GET['deviceId'] ?? null);
+$afterRelayId = (int)($_GET['afterRelayId'] ?? 0);
 dmEnsureRelayQueueMessageSignatureColumns($db);
 
 if ($deviceId === null) {
@@ -31,19 +32,37 @@ if ($deviceState['status'] === 'revoked') {
     ], 409);
 }
 
+$limit = dmRelayFetchLimit();
+$whereClauses = [
+    'recipient_device_id = ?',
+    'acked_at IS NULL',
+    'expires_at > UTC_TIMESTAMP()'
+];
+$params = [$deviceId];
+
+if ($afterRelayId > 0) {
+    $whereClauses[] = 'id > ?';
+    $params[] = $afterRelayId;
+}
+
 $stmt = $db->prepare('
     SELECT id, message_id, conversation_id, sender_user_id, sender_device_id, sender_device_name, sender_encryption_public_key, sender_signing_public_key, sender_key_version, sender_bundle_signature, ciphertext, nonce, aad, tag, message_signature
     FROM dm_relay_queue
-    WHERE recipient_device_id = ?
-      AND acked_at IS NULL
-      AND expires_at > UTC_TIMESTAMP()
+    WHERE ' . implode(' AND ', $whereClauses) . '
     ORDER BY id ASC
+    LIMIT ' . ($limit + 1) . '
 ');
-$stmt->execute([$deviceId]);
+$stmt->execute($params);
 $rows = $stmt->fetchAll();
+$hasMore = count($rows) > $limit;
+$pageRows = array_slice($rows, 0, $limit);
+$nextAfterRelayId = count($pageRows) > 0 ? (int)$pageRows[count($pageRows) - 1]['id'] : null;
 
 jsonResponse([
     'relayTtlSeconds' => DM_RELAY_TTL_SECONDS,
+    'limit' => $limit,
+    'hasMore' => $hasMore,
+    'nextAfterRelayId' => $nextAfterRelayId,
     'items' => array_map(function ($row) use ($db) {
         $senderDevice = null;
 
@@ -89,5 +108,5 @@ jsonResponse([
             'tag' => $row['tag'],
             'signature' => $row['message_signature']
         ];
-    }, $rows)
+    }, $pageRows)
 ]);
