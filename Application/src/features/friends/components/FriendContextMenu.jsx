@@ -65,7 +65,7 @@ export default function FriendContextMenu({
             </button>
 
             <button className="server-context-item" onClick={onOpenSettings}>
-                Settings
+                Profile
             </button>
 
             <button className="server-context-item" onClick={onToggleMute}>

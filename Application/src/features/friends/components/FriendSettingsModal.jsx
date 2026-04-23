@@ -6,18 +6,6 @@ import {
 } from "../../profile/actions";
 import { fetchFriendProfileDescription } from "../actions";
 
-const MUTE_DURATION_OPTIONS = [
-    { label: "15 min", durationMs: 15 * 60 * 1000 },
-    { label: "30 min", durationMs: 30 * 60 * 1000 },
-    { label: "1 hour", durationMs: 60 * 60 * 1000 },
-    { label: "2 hours", durationMs: 2 * 60 * 60 * 1000 },
-    { label: "4 hours", durationMs: 4 * 60 * 60 * 1000 },
-    { label: "6 hours", durationMs: 6 * 60 * 60 * 1000 },
-    { label: "8 hours", durationMs: 8 * 60 * 60 * 1000 },
-    { label: "12 hours", durationMs: 12 * 60 * 60 * 1000 },
-    { label: "24 hours", durationMs: 24 * 60 * 60 * 1000 }
-];
-
 const KNOWN_GAME_TONES = {
     "league of legends": "is-magic",
     paladins: "is-sky",
@@ -114,19 +102,14 @@ export default function FriendSettingsModal({
     friendNote,
     clientSettings,
     profileMediaHostUrl,
-    submitting,
     onClose,
-    onFriendNoteChange,
-    onSetMuteOption,
-    onRequestRemoveFriend,
-    onRequestHardDeleteFriend
+    onFriendNoteChange
 }) {
     const [friendProfileDescription, setFriendProfileDescription] = useState("");
     const [friendProfileGames, setFriendProfileGames] = useState([]);
     const [friendProfileDescriptionLoading, setFriendProfileDescriptionLoading] = useState(false);
     const [friendProfileDescriptionError, setFriendProfileDescriptionError] = useState("");
     const [friendProfileDescriptionFetchedAt, setFriendProfileDescriptionFetchedAt] = useState(null);
-    const [dangerConfirmAction, setDangerConfirmAction] = useState("");
     const [profileManifest, setProfileManifest] = useState(null);
     const [avatarUrl, setAvatarUrl] = useState(null);
     const [bannerUrl, setBannerUrl] = useState(null);
@@ -144,7 +127,6 @@ export default function FriendSettingsModal({
         setFriendProfileGames([]);
         setFriendProfileDescriptionError("");
         setFriendProfileDescriptionFetchedAt(null);
-        setDangerConfirmAction("");
     }, [selectedFriend?.friendUserId]);
 
     useEffect(() => {
@@ -307,25 +289,13 @@ export default function FriendSettingsModal({
         return null;
     }
 
-    const mutedById = clientSettings?.mutedFriendNotificationsById || {};
-    const muteEntry = mutedById[String(selectedFriend.friendUserId)];
-    const now = Date.now();
-    const isTimedMute = typeof muteEntry === "number" && Number.isFinite(muteEntry) && muteEntry > now;
-    const isIndefiniteMute = muteEntry === true;
-    const isMuted = isIndefiniteMute || isTimedMute;
-    const muteLabel = isIndefiniteMute
-        ? "Muted indefinitely."
-        : isTimedMute
-            ? `Muted until ${new Date(muteEntry).toLocaleString()}.`
-            : "Notifications are on.";
-
     return (
         <div className="friends-settings-overlay" onClick={onClose}>
             <div className="friends-settings-popout friends-friend-settings-popout panel-card" onClick={(event) => event.stopPropagation()}>
                 <div className="friends-settings-header">
                     <div>
-                        <h2>Friend settings</h2>
-                        <p>Profile, private notes, and personal DM preferences for {friendHandle}.</p>
+                        <h2>Friend profile</h2>
+                        <p>Shared profile details and your private note for {friendHandle}.</p>
                     </div>
 
                     <button
@@ -431,105 +401,6 @@ export default function FriendSettingsModal({
                         </section>
                     </div>
                 </section>
-
-                <section className="friends-settings-section">
-                    <div className="friends-retention-copy">
-                        <strong>Basic settings</strong>
-                        <span>Personal preferences for this friend.</span>
-                    </div>
-
-                    <small className="friends-retention-note">{muteLabel}</small>
-
-                    <div className="friends-danger-actions">
-                        {MUTE_DURATION_OPTIONS.map((option) => (
-                            <button
-                                key={option.label}
-                                type="button"
-                                className="friends-secondary-button"
-                                onClick={() => onSetMuteOption?.(selectedFriend, option.durationMs)}
-                            >
-                                {option.label}
-                            </button>
-                        ))}
-                        <button
-                            type="button"
-                            className="friends-secondary-button"
-                            onClick={() => onSetMuteOption?.(selectedFriend, "indefinite")}
-                        >
-                            Mute indefinitely
-                        </button>
-                        <button
-                            type="button"
-                            className="friends-secondary-button"
-                            onClick={() => onSetMuteOption?.(selectedFriend, "off")}
-                            disabled={!isMuted}
-                        >
-                            Unmute
-                        </button>
-                    </div>
-                </section>
-
-                <section className="friends-settings-section friends-settings-danger-zone">
-                    <div className="friends-retention-copy">
-                        <strong>Danger zone</strong>
-                        <span>Actions that change or remove your DM relationship.</span>
-                    </div>
-
-                    <div className="friends-danger-actions">
-                        <button
-                            type="button"
-                            className="friends-secondary-button"
-                            disabled={submitting}
-                            onClick={() => setDangerConfirmAction("remove")}
-                        >
-                            Remove friend
-                        </button>
-                        <button
-                            type="button"
-                            className="server-context-item danger friends-confirm-danger"
-                            disabled={submitting}
-                            onClick={() => setDangerConfirmAction("hardDelete")}
-                        >
-                            Hard delete friend
-                        </button>
-                    </div>
-                </section>
-
-                {dangerConfirmAction ? (
-                    <div className="friends-inline-confirm">
-                        <strong>Are you sure?</strong>
-                        <span>
-                            {dangerConfirmAction === "hardDelete"
-                                ? "Hard delete removes this friend and deletes local DM history on this device."
-                                : "Remove friend takes them off your list, but conversation can return if re-added."}
-                        </span>
-                        <div className="friends-danger-actions">
-                            <button
-                                type="button"
-                                className="friends-secondary-button"
-                                onClick={() => setDangerConfirmAction("")}
-                                disabled={submitting}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
-                                className="server-context-item danger friends-confirm-danger"
-                                onClick={() => {
-                                    if (dangerConfirmAction === "hardDelete") {
-                                        onRequestHardDeleteFriend?.(selectedFriend);
-                                    } else {
-                                        onRequestRemoveFriend?.(selectedFriend);
-                                    }
-                                    setDangerConfirmAction("");
-                                }}
-                                disabled={submitting}
-                            >
-                                {dangerConfirmAction === "hardDelete" ? "Yes, hard delete" : "Yes, remove friend"}
-                            </button>
-                        </div>
-                    </div>
-                ) : null}
             </div>
         </div>
     );

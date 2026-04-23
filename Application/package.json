@@ -1,7 +1,7 @@
 {
   "name": "chatapp",
   "productName": "LibreChat",
-  "version": "0.1.5-alpha",
+  "version": "0.1.6-alpha",
   "description": "Privacy-first desktop chat with local-first encrypted messaging.",
   "main": ".vite/build/main.js",
   "private": true,

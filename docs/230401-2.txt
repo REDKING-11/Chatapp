@@ -1,0 +1,226 @@
+**What this file covers**
+- This note is a detailed write-up of the work completed across this chat thread.
+- It includes the DM file-transfer reliability work, the compact chat-profile and profile-dock work, the friend-profile/conversation-settings split, the markdown/Mermaid fixes, the chat refresh/flicker fixes, and the verified recovery / password reset / password change work.
+
+**Slow Reliable Large File Transfers**
+- Changed DM file delivery away from "push chunks as fast as possible" and toward an ack-driven transfer flow that advances one encrypted chunk at a time.
+- Kept the existing `64 KiB` encrypted chunk size instead of trying to "fix" the problem by raising websocket payload or buffer limits.
+- Added chunk acknowledgement behavior so the sender waits for the receiver to confirm each chunk before reading and sending the next one.
+- Added retry behavior for missing acks, with bounded retries instead of infinite resend loops.
+- Added shared sender throttling so one device serving multiple downloads does not hammer the realtime socket and trip buffer/rate limits.
+- Made the receiver idempotent by offset so duplicate retried chunks are acknowledged but not appended twice.
+- Added out-of-order offset rejection so a corrupted or skipped write does not silently poison the partial file on disk.
+- Added written-byte / expected-byte tracking so completion is only accepted when the final file size matches what the sender announced.
+- Kept the server lightweight: the realtime service still forwards `dm:file:*` signals without buffering file contents or persisting chunks.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\dm\fileTransferFlow.js](C:\Users\REDKING\Projects\Chatapp\Application\src\features\dm\fileTransferFlow.js:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\main\dm\service.js](C:\Users\REDKING\Projects\Chatapp\Application\src\main\dm\service.js:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\main\transfers\service.js](C:\Users\REDKING\Projects\Chatapp\Application\src\main\transfers\service.js:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\main\transfers\downloadIntegrity.js](C:\Users\REDKING\Projects\Chatapp\Application\src\main\transfers\downloadIntegrity.js:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-realtime\app.js](C:\Users\REDKING\Projects\Chatapp\chatapp-realtime\app.js:1)
+
+**Compact Chat User Profiles And Context Menus**
+- Added Discord-style compact user profile popups for chat message senders.
+- Restricted the interactive target to the sender avatar/name area instead of the whole message row, so reply/selection behavior stays intact.
+- Added left-click / keyboard open behavior for the compact profile popup.
+- Added right-click / context-menu-key handling for a small chat-user context menu.
+- Added lightweight disabled placeholder actions where real message/mention/add-friend actions do not exist yet, instead of leaving the menu empty or falling back to browser defaults.
+- Added the compact profile behavior for:
+  - known friends
+  - the local/current user
+  - unknown or group participants
+- Added viewport clamping and internal scrolling so compact popups do not render offscreen on smaller widths/heights.
+- Renamed the friend right-click action from `Settings` to `Profile`.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\FriendsConversationPanel.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\FriendsConversationPanel.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\FriendContextMenu.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\FriendContextMenu.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\ChatUserProfilePopover.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\ChatUserProfilePopover.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\ChatUserContextMenu.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\ChatUserContextMenu.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\lib\popoverPosition.js](C:\Users\REDKING\Projects\Chatapp\Application\src\lib\popoverPosition.js:1)
+
+**Bottom-Left Self Profile Dock Fixes**
+- Moved the self-profile popup/context surface out of the sidebar layout and into a viewport-level portal so it no longer gets clipped by the sidebar or viewport edges.
+- Positioned that popup from the dock button's bounding rect using fixed coordinates instead of letting the sidebar layout constrain it.
+- Added viewport clamping and max-height logic so tall self-profile content becomes scrollable instead of getting cut off.
+- Fixed the open-position behavior so the self profile opens centered over the bottom dock trigger rather than offset awkwardly to one side.
+- Adjusted the centered hero/profile layout for the dock surface after the anchor bug fix so the popup aligns with the opening point instead of visually drifting.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\ProfileDock.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\components\ProfileDock.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\lib\popoverPosition.js](C:\Users\REDKING\Projects\Chatapp\Application\src\lib\popoverPosition.js:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\index.css](C:\Users\REDKING\Projects\Chatapp\Application\src\index.css:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\tests\popover-position.test.mjs](C:\Users\REDKING\Projects\Chatapp\Application\tests\popover-position.test.mjs:1)
+
+**Friend Profile Versus Conversation Settings Split**
+- Changed the full friend profile modal so it behaves like an actual profile surface instead of a mixed profile-plus-controls dump.
+- Kept profile-focused content there:
+  - avatar/banner
+  - presence
+  - bio
+  - games
+  - downloaded friend profile data
+  - private note
+- Moved operational controls into conversation settings:
+  - mute notifications
+  - danger-zone actions
+  - note editing
+- Added a `Friend preferences` area in conversation settings for the shared private note editor.
+- Added a scrollable mute selector there, using the same wheel/scroll interaction style as the other conversation settings controls.
+- Kept the friend note visible in both the full profile and conversation settings while keeping the data in sync.
+- Kept the friend right-click `Profile` action opening the full friend profile surface, while the conversation header/settings area remains the place for operational controls.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\FriendSettingsModal.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\FriendSettingsModal.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\FriendConversationSettingsModal.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\FriendConversationSettingsModal.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\index.css](C:\Users\REDKING\Projects\Chatapp\Application\src\index.css:1)
+
+**Markdown And Mermaid Crash Fixes**
+- Fixed the `MarkdownContent.jsx:281 Cannot read properties of null (reading 'firstChild')` Mermaid crash that happened when async diagram rendering raced against React rerenders or unmounts.
+- Added lifecycle / node-connected guards so Mermaid and chart enhancement only write into DOM that still belongs to the current mounted message content.
+- Switched Mermaid rendering toward direct `mermaid.render(...)` handling so each block owns its own render result instead of relying on a more fragile batch path.
+- Made Mermaid/chart failures stay local to the markdown block instead of escaping as uncaught promise errors into the app.
+- Stopped React from quietly restoring the raw placeholder shell over an already-rendered Mermaid SVG on later rerenders.
+- Kept chart/diagram failure output safer by avoiding raw `innerHTML` style fallback writes for error content.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\MarkdownContent.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\components\MarkdownContent.jsx:1)
+
+**Chat Refresh / Flicker Fixes**
+- Tracked down the apparent "chat refresh every ~10-15 seconds" glitch to background friend/group sidebar refresh churn rather than a literal full reload.
+- Reused unchanged friend/group/invite objects during background refreshes so the active conversation tree does not get rebuilt unnecessarily.
+- Stabilized the conversation markdown/link context so it only changes when the actual friend/participant fields change, instead of when a surrounding container object gets recreated.
+- Prevented markdown enhancement from rerunning just because object identity changed.
+- Reduced the visual effect where Markdown/Mermaid blocks looked like they were reloading or falling back during those background refreshes.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\FriendsConversationPanel.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\features\friends\components\FriendsConversationPanel.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\MarkdownContent.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\components\MarkdownContent.jsx:1)
+
+**Verified Recovery, Password Reset, And Password Change**
+- Added a full recovery and password-management layer across the core auth backend and the desktop app.
+- Extended the auth payload returned by `auth/me.php` and related auth responses so the app now receives a `recovery` object with:
+  - `verifiedEmail`
+  - `emailVerifiedAt`
+  - `pendingEmail`
+  - `hasRecoveryKeys`
+  - `recoveryKeysRequired`
+
+**Backend auth / schema work**
+- Added runtime schema bootstrap support for:
+  - `users.email_verified_at`
+  - `auth_email_code_challenges`
+  - `auth_recovery_codes`
+- Added helpers for:
+  - email normalization
+  - numeric verification/reset code generation and hashing
+  - recovery key generation and hashing
+  - challenge creation / resend cooldown / attempt counting / consumption
+  - recovery payload building
+  - recovery-key batch generation and one-time consumption
+  - password hash replacement
+  - session revocation
+  - DM device revocation
+- Updated auth payload construction so login/me/register/profile all return the richer user payload with recovery state included.
+- Added mail sender config support via `CHATAPP_MAIL_FROM` and `CHATAPP_MAIL_FROM_NAME`.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\_bootstrap.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth_required.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth_required.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\config.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\config.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\login.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\login.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\me.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\me.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\profile.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\profile.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\register.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\register.php:1)
+
+**New auth endpoints**
+- Added new authenticated endpoints for:
+  - recovery status
+  - recovery key generation/regeneration
+  - recovery email verification start
+  - recovery email verification confirm
+  - recovery email remove
+  - password change
+- Added unauthenticated endpoints for:
+  - password reset request
+  - password reset confirm
+- Password reset supports three methods:
+  - verified email code
+  - enabled authenticator/TOTP
+  - one unused recovery key
+- Password reset revokes:
+  - all sessions
+  - all DM device trust
+- Signed-in password change:
+  - requires current password
+  - requires TOTP too when MFA is enabled
+  - rotates to a fresh current session token
+  - revokes other sessions
+  - revokes DM device trust
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\recovery_status.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\recovery_status.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\recovery_keys_regenerate.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\recovery_keys_regenerate.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\email_verification_start.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\email_verification_start.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\email_verification_confirm.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\email_verification_confirm.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\email_verification_remove.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\email_verification_remove.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\password_reset_request.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\password_reset_request.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\password_reset_confirm.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\password_reset_confirm.php:1)
+  - [C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\password_change.php](C:\Users\REDKING\Projects\Chatapp\chatapp-core\auth\password_change.php:1)
+
+**Auth screen / account UI work**
+- Re-enabled the optional email field during registration in the desktop auth screen.
+- Added a real `Forgot password?` flow to the auth screen with reset-method selection for:
+  - email code
+  - authenticator
+  - recovery key
+- Added the email reset request step and the final reset confirmation step in the renderer.
+- Added recovery email management in Client Settings > Account:
+  - add/start verify
+  - resend verify
+  - confirm code
+  - replace email
+  - remove email
+- Added recovery key generation in Client Settings, with copy/download-once behavior.
+- Added a password-change card in Client Settings > Account.
+- Added a required recovery-key gate modal after sign-in for accounts missing recovery keys, so the app blocks normal use until a recovery-key batch has been generated and saved.
+- Main files:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\features\auth\actions.js](C:\Users\REDKING\Projects\Chatapp\Application\src\features\auth\actions.js:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\AuthScreen.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\components\AuthScreen.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\ClientSettingsModal.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\components\ClientSettingsModal.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\components\RecoveryKeysGateModal.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\components\RecoveryKeysGateModal.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\renderer.jsx](C:\Users\REDKING\Projects\Chatapp\Application\src\renderer.jsx:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\src\index.css](C:\Users\REDKING\Projects\Chatapp\Application\src\index.css:1)
+
+**Behavior / security assumptions kept in this chat**
+- Verified email is required before email-based password reset is trusted.
+- Recovery keys are the required fallback path for all accounts going forward.
+- No manual admin recovery path was added.
+- Accounts that are already locked out and have none of:
+  - verified email
+  - MFA
+  - previously generated recovery keys
+  remain unrecoverable in this implementation.
+- Password reset does not auto-login the user afterward.
+
+**Tests And Verification**
+- Added and/or used focused test coverage for the work in this chat, including:
+  - [C:\Users\REDKING\Projects\Chatapp\Application\tests\file-transfer-flow.test.mjs](C:\Users\REDKING\Projects\Chatapp\Application\tests\file-transfer-flow.test.mjs:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\tests\download-integrity.test.mjs](C:\Users\REDKING\Projects\Chatapp\Application\tests\download-integrity.test.mjs:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\tests\popover-position.test.mjs](C:\Users\REDKING\Projects\Chatapp\Application\tests\popover-position.test.mjs:1)
+  - [C:\Users\REDKING\Projects\Chatapp\Application\tests\run-tests.mjs](C:\Users\REDKING\Projects\Chatapp\Application\tests\run-tests.mjs:1)
+- Verification run during this chat included:
+  - `npm test` in `Application`
+  - `php -l` on the touched auth/config PHP files
+  - `npm exec vite -- build --config vite.renderer.config.mjs --outDir .vite/check-renderer --emptyOutDir`
+- The renderer build first hit the usual sandbox `spawn EPERM` problem and then passed when rerun outside the sandbox.
+- Existing non-blocking warnings that still showed up:
+  - PHP startup warning about local `date.timezone` being set to `2`
+  - Node module-type warning during tests
+  - Vite large-chunk warning during renderer build
+
+**Short summary**
+- This chat ended up being a wide pass across reliability, profile UX, markdown rendering stability, and account security.
+- The biggest user-facing results are:
+  - large files can transfer slowly and more safely instead of blowing up the socket
+  - chat users now have compact profile/context surfaces
+  - the self profile dock behaves properly
+  - Mermaid/markdown no longer glitch or crash as easily
+  - recovery email, recovery keys, password reset, and password change now exist end to end

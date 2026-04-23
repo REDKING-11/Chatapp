@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ChatUserContextMenu from "../components/ChatUserContextMenu";
+import ChatUserProfilePopover from "../components/ChatUserProfilePopover";
 import FriendContextMenu from "../components/FriendContextMenu";
 import FriendsAddFriendModal from "../components/FriendsAddFriendModal";
 import FriendConversationSettingsModal from "../components/FriendConversationSettingsModal";
@@ -148,6 +150,8 @@ export default function FriendsHome({
     const [forgottenConversationIds, setForgottenConversationIds] = useState({});
     const [friendContextMenu, setFriendContextMenu] = useState(null);
     const [friendSettingsTarget, setFriendSettingsTarget] = useState(null);
+    const [chatUserProfileTarget, setChatUserProfileTarget] = useState(null);
+    const [chatUserContextMenu, setChatUserContextMenu] = useState(null);
     const [lockPhase, setLockPhase] = useState("hidden");
     const [isEncryptingChat, setIsEncryptingChat] = useState(false);
     const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
@@ -325,17 +329,62 @@ export default function FriendsHome({
         };
     }, [messages]);
 
+    function shallowEqualRecord(left, right) {
+        if (left === right) {
+            return true;
+        }
+
+        if (!left || !right || typeof left !== "object" || typeof right !== "object") {
+            return false;
+        }
+
+        const leftKeys = Object.keys(left);
+        const rightKeys = Object.keys(right);
+
+        if (leftKeys.length !== rightKeys.length) {
+            return false;
+        }
+
+        return leftKeys.every((key) => Object.prototype.hasOwnProperty.call(right, key) && Object.is(left[key], right[key]));
+    }
+
+    function areSameArrayReferences(leftItems, rightItems) {
+        const left = Array.isArray(leftItems) ? leftItems : [];
+        const right = Array.isArray(rightItems) ? rightItems : [];
+
+        return left.length === right.length && left.every((item, index) => item === right[index]);
+    }
+
+    function reconcileItemsByIndex(existingItems, incomingItems) {
+        const existing = Array.isArray(existingItems) ? existingItems : [];
+        const incoming = Array.isArray(incomingItems) ? incomingItems : [];
+        let changed = existing.length !== incoming.length;
+
+        const next = incoming.map((item, index) => {
+            if (shallowEqualRecord(existing[index], item)) {
+                return existing[index];
+            }
+
+            changed = true;
+            return item;
+        });
+
+        return changed ? next : existing;
+    }
+
     function mergeOrderedById(existingItems, incomingItems, getId) {
+        const existing = Array.isArray(existingItems) ? existingItems : [];
         const incomingMap = new Map(
             (incomingItems || []).map((item) => [String(getId(item)), item])
         );
         const merged = [];
 
-        (existingItems || []).forEach((item) => {
+        existing.forEach((item) => {
             const key = String(getId(item));
 
             if (incomingMap.has(key)) {
-                merged.push(incomingMap.get(key));
+                const incomingItem = incomingMap.get(key);
+                merged.push(shallowEqualRecord(item, incomingItem) ? item : incomingItem);
                 incomingMap.delete(key);
             }
         });
@@ -344,7 +393,7 @@ export default function FriendsHome({
             merged.push(item);
         });
 
-        return merged;
+        return areSameArrayReferences(existing, merged) ? existing : merged;
     }
 
     function applyOpenedFriendConversation(friendToLoad, data) {
@@ -522,13 +571,27 @@ export default function FriendsHome({
 
         try {
             const data = await fetchFriends();
-            setFriendsState((prev) => ({
-                incomingRequests: data.incomingRequests || [],
-                outgoingRequests: data.outgoingRequests || [],
-                friends: preserveOrder
+            setFriendsState((prev) => {
+                const incomingRequests = reconcileItemsByIndex(prev.incomingRequests, data.incomingRequests || []);
+                const outgoingRequests = reconcileItemsByIndex(prev.outgoingRequests, data.outgoingRequests || []);
+                const friends = preserveOrder
                     ? mergeOrderedById(prev.friends, data.friends || [], (friend) => friend.friendUserId)
-                    : (data.friends || [])
-            }));
+                    : reconcileItemsByIndex(prev.friends, data.friends || []);
+
+                if (
+                    incomingRequests === prev.incomingRequests
+                    && outgoingRequests === prev.outgoingRequests
+                    && friends === prev.friends
+                ) {
+                    return prev;
+                }
+
+                return {
+                    incomingRequests,
+                    outgoingRequests,
+                    friends
+                };
+            });
 
             if (!selectedFriendIdRef.current && (data.friends || []).length > 0) {
                 setSelectedFriendId(data.friends[0].friendUserId);
@@ -560,14 +623,18 @@ export default function FriendsHome({
             const existingConversations = groupConversationsRef.current;
             const mergedConversations = preserveOrder
                 ? mergeOrderedById(existingConversations, conversations || [], (conversation) => conversation.id)
-                : [
+                : reconcileItemsByIndex(existingConversations, [
                     ...(conversations || []),
                     ...existingConversations.filter(
                         (conversation) => !(conversations || []).some((entry) => String(entry.id) === String(conversation.id))
                     )
-                ];
+                ]);
 
-            setGroupConversations(mergedConversations);
+            setGroupConversations((prev) => (
+                areSameArrayReferences(prev, mergedConversations)
+                    ? prev
+                    : mergedConversations
+            ));
             setSelectedGroupConversationId((prev) => {
                 const desiredId = preferredConversationId || prev || selectedGroupConversationIdRef.current;
 
@@ -598,7 +665,8 @@ export default function FriendsHome({
 
     async function loadGroupInvites({ background = false } = {}) {
         try {
-            setGroupInvites(await fetchPendingGroupInvites());
+            const invites = await fetchPendingGroupInvites();
+            setGroupInvites((prev) => reconcileItemsByIndex(prev, invites));
         } catch (err) {
             if (!background) {
                 showError(err, {
@@ -1034,6 +1102,16 @@ export default function FriendsHome({
             }
 
             if (action === "closeOverlay") {
+                if (chatUserContextMenu) {
+                    setChatUserContextMenu(null);
+                    return;
+                }
+
+                if (chatUserProfileTarget) {
+                    setChatUserProfileTarget(null);
+                    return;
+                }
+
                 if (friendContextMenu) {
                     setFriendContextMenu(null);
                     return;
@@ -1065,6 +1143,8 @@ export default function FriendsHome({
         return () => window.removeEventListener("chatapp-shortcut", handleShortcut);
     }, [
         activeView,
+        chatUserContextMenu,
+        chatUserProfileTarget,
         friendContextMenu,
         friendSettingsTarget,
         selectedFriend,
@@ -1954,6 +2034,8 @@ export default function FriendsHome({
         setSelectedFriendId(friendUserId);
         setDirectReplyTo(null);
         setDirectEditingMessage(null);
+        setChatUserProfileTarget(null);
+        setChatUserContextMenu(null);
     }
 
     function handleSelectGroupConversation(conversationId) {
@@ -1963,6 +2045,8 @@ export default function FriendsHome({
         setShowConversationSettings(false);
         setFriendContextMenu(null);
         setFriendSettingsTarget(null);
+        setChatUserProfileTarget(null);
+        setChatUserContextMenu(null);
         setGroupReplyTo(null);
         setGroupEditingMessage(null);
     }
@@ -2547,12 +2631,90 @@ export default function FriendsHome({
     function openFriendContextMenu(event, friend) {
         event.preventDefault();
         setFriendSettingsTarget(null);
+        setChatUserProfileTarget(null);
+        setChatUserContextMenu(null);
 
         setFriendContextMenu({
             friend,
             x: event.clientX + 10,
             y: event.clientY
         });
+    }
+
+    function getCurrentUserHandle() {
+        if (currentUser?.usernameTag && currentUser?.usernameBase) {
+            return `${currentUser.usernameBase}#${currentUser.usernameTag}`;
+        }
+
+        return currentUser?.handle || currentUser?.username || "unknown";
+    }
+
+    function getCurrentUserDisplayName() {
+        return currentUser?.displayName
+            || currentUser?.displayLabel
+            || currentUser?.usernameBase
+            || currentUser?.username
+            || "You";
+    }
+
+    function getFriendByUserId(userId) {
+        const normalizedUserId = String(userId || "").trim();
+
+        if (!normalizedUserId) {
+            return null;
+        }
+
+        return (friendsState.friends || []).find((friend) => (
+            String(friend?.friendUserId || "") === normalizedUserId
+        )) || null;
+    }
+
+    function normalizeChatUserTarget(target) {
+        const normalizedUserId = String(target?.userId || "").trim();
+        const isSelf = Boolean(normalizedUserId && String(currentUser?.id) === normalizedUserId) || target?.source === "self";
+        const friend = isSelf ? null : getFriendByUserId(normalizedUserId);
+        const fallbackAnchorRect = {
+            left: Number(target?.x) || 12,
+            top: Number(target?.y) || 12,
+            right: (Number(target?.x) || 12) + 1,
+            bottom: (Number(target?.y) || 12) + 1,
+            width: 1,
+            height: 1
+        };
+
+        return {
+            ...target,
+            userId: normalizedUserId,
+            source: isSelf ? "self" : friend ? "friend" : (target?.source || "unknown"),
+            displayName: isSelf
+                ? getCurrentUserDisplayName()
+                : (target?.displayName || friend?.friendDisplayName || friend?.friendUsernameBase || friend?.friendUsername || "User"),
+            handle: isSelf
+                ? getCurrentUserHandle()
+                : (target?.handle || friend?.friendHandle || friend?.friendUsername || "unknown"),
+            anchorRect: target?.anchorRect || fallbackAnchorRect
+        };
+    }
+
+    function openChatUserProfile(target) {
+        const normalizedTarget = normalizeChatUserTarget(target);
+
+        if (!normalizedTarget.userId && !normalizedTarget.displayName) {
+            return;
+        }
+
+        setFriendContextMenu(null);
+        setChatUserContextMenu(null);
+        setChatUserProfileTarget(normalizedTarget);
+    }
+
+    function openChatUserContextMenu(target) {
+        const normalizedTarget = normalizeChatUserTarget(target);
+
+        setFriendContextMenu(null);
+        setFriendSettingsTarget(null);
+        setChatUserProfileTarget(null);
+        setChatUserContextMenu(normalizedTarget);
     }
 
     function applyFriendTag(friendUserId, tag) {
@@ -2662,6 +2824,8 @@ export default function FriendsHome({
         }
 
         setFriendContextMenu(null);
+        setChatUserContextMenu(null);
+        setChatUserProfileTarget(null);
         setSelectedFriendId(friend.friendUserId);
         setFriendSettingsTarget(friend);
     }
@@ -3472,6 +3636,8 @@ export default function FriendsHome({
                     onDirectDelete={handleDeleteDirectMessage}
                     onDirectToggleReaction={handleToggleDirectReaction}
                     messageDeliveryById={messageDeliveryById}
+                    onOpenUserProfile={openChatUserProfile}
+                    onOpenUserContextMenu={openChatUserContextMenu}
                     onCancelDirectAction={() => {
                         setDirectReplyTo(null);
                         setDirectEditingMessage(null);
@@ -3500,6 +3666,7 @@ export default function FriendsHome({
                     pendingDisappearingLabel={pendingDisappearingLabel}
                     currentRelayLabel={currentRelayLabel}
                     currentDisappearingLabel={currentDisappearingLabel}
+                    friendNote={clientSettingsSnapshot.friendProfileNotesById?.[String(selectedFriend.friendUserId)] || ""}
                     submitting={submitting}
                     onClose={() => setShowConversationSettings(false)}
                     onUndoForget={() => {
@@ -3517,6 +3684,10 @@ export default function FriendsHome({
                     onDisappearingRequest={handleDisappearingRequest}
                     onDisappearingAccept={handleDisappearingAccept}
                     onIgnoreVerificationDevice={handleIgnoreVerificationDevice}
+                    onFriendNoteChange={setFriendProfileNote}
+                    onSetMuteOption={(friend, option) => setFriendMuteOption(friend, option)}
+                    onRequestRemoveFriend={(friend) => handleRemoveFriend(friend)}
+                    onRequestHardDeleteFriend={(friend) => handleRemoveFriend(friend, true)}
                 />
             ) : null}
 
@@ -3558,14 +3729,28 @@ export default function FriendsHome({
                     friendNote={clientSettingsSnapshot.friendProfileNotesById?.[String(friendSettingsTarget.friendUserId)] || ""}
                     clientSettings={clientSettingsSnapshot}
                     profileMediaHostUrl={profileMediaHostUrl}
-                    submitting={submitting}
                     onClose={() => setFriendSettingsTarget(null)}
                     onFriendNoteChange={setFriendProfileNote}
-                    onSetMuteOption={(friend, option) => setFriendMuteOption(friend, option)}
-                    onRequestRemoveFriend={(friend) => handleRemoveFriend(friend)}
-                    onRequestHardDeleteFriend={(friend) => handleRemoveFriend(friend, true)}
                 />
             ) : null}
+
+            <ChatUserProfilePopover
+                key={chatUserProfileTarget?.userId || "chat-user-profile"}
+                target={chatUserProfileTarget}
+                currentUser={currentUser}
+                friend={chatUserProfileTarget?.source === "self" ? null : getFriendByUserId(chatUserProfileTarget?.userId)}
+                presence={chatUserProfileTarget?.source === "self" ? null : presenceByUserId[String(chatUserProfileTarget?.userId || "")]}
+                profileMediaHostUrl={profileMediaHostUrl}
+                clientSettings={clientSettingsSnapshot}
+                onClose={() => setChatUserProfileTarget(null)}
+                onOpenFullProfile={(friend) => openFriendSettings(friend)}
+            />
+
+            <ChatUserContextMenu
+                contextMenu={chatUserContextMenu}
+                onOpenProfile={openChatUserProfile}
+                onClose={() => setChatUserContextMenu(null)}
+            />
 
             <FriendContextMenu
                 contextMenu={friendContextMenu}

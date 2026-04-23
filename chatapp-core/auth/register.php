@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../user_profile.php';
+require_once __DIR__ . '/_bootstrap.php';
 
 $data = readJsonInput();
 
@@ -10,7 +11,7 @@ $handleParts = userProfileExtractRegistrationHandleParts($data);
 $usernameBase = $handleParts['usernameBase'];
 $usernameTag = $handleParts['usernameTag'];
 $password = (string)($data['password'] ?? '');
-$email = trim($data['email'] ?? '');
+$email = authNormalizeEmail($data['email'] ?? '') ?? '';
 $phone = trim($data['phone'] ?? '');
 
 if ($rawUsername === '' || $password === '') {
@@ -33,8 +34,8 @@ if (strlen($usernameBase) < 3) {
     jsonResponse(['error' => 'Username must be at least 3 characters'], 400);
 }
 
-if (strlen($password) < 4) {
-    jsonResponse(['error' => 'Password must be at least 4 characters'], 400);
+if (($passwordError = authPasswordValidationError($password)) !== '') {
+    jsonResponse(['error' => $passwordError], 400);
 }
 
 if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -42,11 +43,10 @@ if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
 }
 
 $db = getDb();
+authBootstrap($db);
 
 if ($email !== '') {
-    $stmt = $db->prepare('SELECT id FROM users WHERE email = ?');
-    $stmt->execute([$email]);
-    if ($stmt->fetch()) {
+    if (authFindUserIdByEmail($db, $email) !== null) {
         jsonResponse(['error' => 'Email already in use'], 409);
     }
 }
@@ -123,21 +123,17 @@ try {
 }
 
 $userId = (int)$db->lastInsertId();
+$createdUser = authLoadUserById($db, $userId);
+
+if ($email !== '') {
+    try {
+        authSendEmailCode($db, $userId, AUTH_EMAIL_CODE_PURPOSE_VERIFY, $email);
+    } catch (Throwable $error) {
+        // Registration should still succeed even if email delivery is unavailable.
+    }
+}
 
 jsonResponse([
     'ok' => true,
-    'user' => array_merge(
-        [
-            'id' => $userId,
-            'email' => $email !== '' ? $email : null,
-            'phone' => $phone !== '' ? $phone : null
-        ],
-        userProfileFromRow([
-            'id' => $userId,
-            'username' => $usernameBase,
-            'username_tag' => $tagColumnExists
-                ? ($usernameTag !== null && $usernameTag !== '' ? $usernameTag : $insertParams[count($insertParams) - 1])
-                : null
-        ])
-    )
+    'user' => authBuildUserPayload($createdUser, $db)
 ], 201);

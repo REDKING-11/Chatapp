@@ -817,17 +817,17 @@ button.shortcut-info-overview-card:hover {
 
 .profile-dock-card,
 .profile-dock-context-menu {
-    position: absolute;
-    left: 0;
-    bottom: calc(100% + 10px);
-    z-index: 1200;
+    position: fixed;
+    z-index: 2400;
+    overscroll-behavior: contain;
 }
 
 .profile-dock-card {
     width: 280px;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    max-height: calc(100vh - 24px);
+    overflow: hidden auto;
     border: 1px solid var(--shell-border);
     border-radius: 18px;
     background:
@@ -838,6 +838,7 @@ button.shortcut-info-overview-card:hover {
 
 .profile-dock-card-banner {
     position: relative;
+    flex: 0 0 auto;
     height: 90px;
     background: linear-gradient(
         135deg,
@@ -1229,6 +1230,8 @@ button.shortcut-info-overview-card:hover {
 
 .profile-dock-context-menu {
     width: 180px;
+    max-height: calc(100vh - 24px);
+    overflow: hidden auto;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -1839,6 +1842,48 @@ button.shortcut-info-overview-card:hover {
     font-size: 0.95rem;
 }
 
+.auth-choice-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.auth-choice-button {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--shell-border);
+    border-radius: 10px;
+    background: var(--shell-bg);
+    color: var(--shell-text);
+    cursor: pointer;
+}
+
+.auth-choice-button.is-active {
+    border-color: color-mix(in srgb, var(--shell-accent) 72%, white 8%);
+    background: color-mix(in srgb, var(--shell-accent) 22%, var(--shell-surface));
+}
+
+.auth-inline-actions {
+    display: grid;
+    gap: 8px;
+}
+
+.auth-inline-actions button {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--shell-border);
+    border-radius: 10px;
+    background: var(--shell-surface);
+    color: var(--shell-text);
+    cursor: pointer;
+}
+
+.auth-inline-actions button:disabled,
+.auth-choice-button:disabled {
+    opacity: 0.65;
+    cursor: default;
+}
+
 /* JOIN MODAL - STATIC */
 
 .backend-modal-overlay {
@@ -2370,6 +2415,100 @@ button.shortcut-info-overview-card:hover {
     background: linear-gradient(135deg, #dc2626, #b91c1c);
     color: white;
     cursor: pointer;
+}
+
+.recovery-gate-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(2, 6, 23, 0.82);
+    backdrop-filter: blur(8px);
+}
+
+.recovery-gate-modal {
+    width: min(680px, 100%);
+    display: grid;
+    gap: 14px;
+    margin-top: 0;
+    border-color: color-mix(in srgb, var(--shell-accent) 32%, var(--shell-border));
+    background:
+        radial-gradient(circle at top left, color-mix(in srgb, var(--shell-accent) 14%, transparent), transparent 40%),
+        var(--shell-surface);
+}
+
+.recovery-gate-modal h2,
+.recovery-gate-modal p {
+    margin: 0;
+}
+
+.recovery-gate-modal p {
+    color: var(--shell-text-muted);
+}
+
+.recovery-gate-badge {
+    width: fit-content;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--shell-accent) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--shell-accent) 34%, transparent);
+    color: color-mix(in srgb, var(--shell-accent) 72%, white 10%);
+    font-size: 12px;
+    text-transform: uppercase;
+}
+
+.recovery-gate-key-block {
+    display: grid;
+    gap: 8px;
+    max-height: min(42vh, 360px);
+    overflow: auto;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 84%, transparent);
+    background: rgba(15, 23, 42, 0.42);
+}
+
+.recovery-gate-key-block code {
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--shell-surface-alt) 88%, transparent);
+    font-family: "Cascadia Code", "Consolas", monospace;
+    word-break: break-word;
+}
+
+.recovery-gate-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.recovery-gate-actions button {
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 84%, transparent);
+    background: var(--shell-accent);
+    color: white;
+    cursor: pointer;
+}
+
+.recovery-gate-actions button.secondary {
+    background: color-mix(in srgb, var(--shell-surface-alt) 86%, transparent);
+    color: var(--shell-text);
+}
+
+.recovery-gate-actions button.danger {
+    background: color-mix(in srgb, var(--status-danger-bg) 82%, var(--shell-surface-alt));
+    color: #fecaca;
+    border-color: var(--status-danger-border);
+}
+
+.recovery-gate-actions button:disabled {
+    opacity: 0.6;
+    cursor: default;
 }
 
 .friends-main {
@@ -3825,6 +3964,11 @@ body[data-client-theme="light"] .friends-add-icon-button .friends-add-icon-light
     overflow: hidden;
 }
 
+.friends-settings-section > .friends-wheel-select {
+    width: 100%;
+    flex: 0 0 auto;
+}
+
 .friends-wheel-select:focus-visible {
     border-color: color-mix(in srgb, var(--server-accent) 62%, var(--server-surface-alt));
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--server-accent) 38%, transparent);
@@ -4404,6 +4548,18 @@ body[data-client-theme="light"] .friends-add-icon-button .friends-add-icon-light
     border: 1px solid rgba(255, 255, 255, 0.14);
 }
 
+.friend-message-user-trigger {
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+}
+
+.friend-message-user-trigger:hover,
+.friend-message-user-trigger:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--shell-accent) 52%, transparent);
+    outline-offset: 2px;
+}
+
 .friend-message-avatar img {
     width: 100%;
     height: 100%;
@@ -4483,10 +4639,25 @@ body[data-client-theme="light"] .friends-add-icon-button .friends-add-icon-light
     color: rgba(255, 255, 255, 0.74);
 }
 
-.friend-message-meta strong {
+.friend-message-meta strong,
+.friend-message-author-button {
     color: inherit;
     font-size: 11px;
+    font-weight: 700;
     line-height: 1;
+}
+
+.friend-message-author-button {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+}
+
+.friend-message-author-button:hover,
+.friend-message-author-button:focus-visible {
+    text-decoration: underline;
 }
 
 .friend-message-meta span,
@@ -6414,6 +6585,18 @@ body[data-high-contrast="true"] .client-settings-section {
     font-family: "Cascadia Code", "Consolas", monospace;
 }
 
+.client-settings-recovery-key-list {
+    display: grid;
+    gap: 8px;
+}
+
+.client-settings-recovery-key-list code {
+    padding: 10px 12px;
+    border-radius: calc(10px * var(--client-radius-multiplier));
+    background: color-mix(in srgb, var(--shell-surface-alt) 88%, transparent);
+    word-break: break-word;
+}
+
 .client-profile-card {
     overflow: hidden;
     border: 1px solid color-mix(in srgb, var(--shell-border) 78%, transparent);
@@ -6764,6 +6947,123 @@ body[data-high-contrast="true"] .client-settings-section {
     background: color-mix(in srgb, var(--shell-surface-alt) 84%, transparent);
 }
 
+.chat-user-profile-popover {
+    position: fixed;
+    z-index: 2450;
+    width: min(340px, calc(100vw - 24px));
+    max-height: calc(100vh - 24px);
+    overflow: hidden auto;
+    border: 1px solid var(--shell-border);
+    border-radius: 18px;
+    background: var(--shell-surface);
+    box-shadow: 0 22px 54px rgba(0, 0, 0, 0.42);
+    overscroll-behavior: contain;
+}
+
+.chat-user-profile-banner {
+    position: relative;
+    min-height: 92px;
+    background:
+        radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.28), transparent 26%),
+        linear-gradient(135deg, color-mix(in srgb, var(--shell-accent) 72%, #16a34a), color-mix(in srgb, var(--server-accent) 68%, #0f766e));
+    background-size: cover;
+    background-position: center;
+}
+
+.chat-user-profile-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 0 14px 14px;
+    background: color-mix(in srgb, var(--shell-surface) 96%, black);
+}
+
+.chat-user-profile-hero {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+    align-items: end;
+    margin-top: -34px;
+}
+
+.chat-user-profile-avatar-wrap {
+    position: relative;
+}
+
+.chat-user-profile-avatar {
+    width: 68px;
+    height: 68px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    border: 5px solid color-mix(in srgb, var(--shell-surface) 96%, black);
+    border-radius: 22px;
+    background:
+        radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.28), transparent 26%),
+        linear-gradient(135deg, var(--server-accent), var(--shell-accent));
+    color: white;
+    font-size: 1.2rem;
+    font-weight: 900;
+}
+
+.chat-user-profile-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.chat-user-profile-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 34px;
+}
+
+.chat-user-profile-copy strong,
+.chat-user-profile-copy > span:not(.profile-shared-eyebrow) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chat-user-profile-copy strong {
+    font-size: 1rem;
+    line-height: 1.15;
+}
+
+.chat-user-profile-copy > span:not(.profile-shared-eyebrow) {
+    color: var(--shell-text-muted);
+    font-size: 0.84rem;
+}
+
+.chat-user-profile-games {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.chat-user-profile-action {
+    width: 100%;
+    min-height: 38px;
+    border: 1px solid color-mix(in srgb, var(--shell-border) 88%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--shell-surface-alt) 84%, transparent);
+    color: var(--shell-text);
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.chat-user-profile-action:hover {
+    background: color-mix(in srgb, var(--shell-surface-hover) 84%, var(--shell-surface-alt));
+}
+
+.chat-user-context-menu {
+    min-width: 210px;
+    max-height: calc(100vh - 24px);
+    overflow: hidden auto;
+}
+
 .profile-dock-button {
     min-height: 68px;
     gap: 12px;
@@ -6818,8 +7118,24 @@ body[data-high-contrast="true"] .client-settings-section {
 }
 
 .profile-shared-hero.profile-shared-hero-self {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 14px;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    text-align: center;
+    gap: 12px;
+}
+
+.profile-shared-hero.profile-shared-hero-self .profile-shared-hero-copy {
+    align-items: center;
+    width: min(100%, 288px);
+}
+
+.profile-shared-hero.profile-shared-hero-self .profile-shared-status-row {
+    justify-content: center;
+}
+
+.profile-shared-hero.profile-shared-hero-self .profile-dock-card-actions {
+    justify-content: center;
+    align-self: center;
 }
 
 .profile-dock-card-actions {
@@ -6861,12 +7177,12 @@ body[data-high-contrast="true"] .client-settings-section {
     }
 
     .profile-shared-hero.profile-shared-hero-self {
-        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-columns: minmax(0, 1fr);
     }
 
-    .profile-dock-card-actions {
-        grid-column: 1 / -1;
-        justify-content: flex-end;
+    .profile-shared-hero.profile-shared-hero-self .profile-dock-card-actions {
+        grid-column: auto;
+        justify-content: center;
     }
 }
 

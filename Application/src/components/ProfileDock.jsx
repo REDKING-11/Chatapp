@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
     fetchProfileAssetBlobUrl,
     fetchProfileAssetManifest
 } from "../features/profile/actions";
+import {
+    getElementViewportRect,
+    resolveAnchoredPopoverPosition
+} from "../lib/popoverPosition.js";
 import {
     fetchServerProfile,
     updateServerProfile
@@ -125,6 +130,7 @@ export default function ProfileDock({
 }) {
     const [isCardOpen, setIsCardOpen] = useState(false);
     const [contextMenuOpen, setContextMenuOpen] = useState(false);
+    const [floatingPosition, setFloatingPosition] = useState(null);
     const [profileManifest, setProfileManifest] = useState(null);
     const [avatarUrl, setAvatarUrl] = useState(null);
     const [bannerUrl, setBannerUrl] = useState(null);
@@ -302,8 +308,19 @@ export default function ProfileDock({
             setContextMenuOpen(false);
         }
 
+        function handleKeyDown(event) {
+            if (event.key === "Escape") {
+                setIsCardOpen(false);
+                setContextMenuOpen(false);
+            }
+        }
+
         window.addEventListener("click", handleWindowClick);
-        return () => window.removeEventListener("click", handleWindowClick);
+        window.addEventListener("keydown", handleKeyDown);
+        return () => {
+            window.removeEventListener("click", handleWindowClick);
+            window.removeEventListener("keydown", handleKeyDown);
+        };
     }, [contextMenuOpen, isCardOpen]);
 
     async function handleCopyHandle() {
@@ -347,10 +364,81 @@ export default function ProfileDock({
         onChangeClientSetting?.("presenceStatus", nextStatus);
     }
 
+    useLayoutEffect(() => {
+        if (!isCardOpen && !contextMenuOpen) {
+            setFloatingPosition(null);
+            return undefined;
+        }
+
+        function updateFloatingPosition() {
+            const anchorRect = getElementViewportRect(buttonRef.current);
+
+            if (!anchorRect) {
+                return;
+            }
+
+            const floatingNode = isCardOpen ? cardRef.current : contextMenuRef.current;
+            const floatingRect = floatingNode?.getBoundingClientRect();
+            const nextPosition = resolveAnchoredPopoverPosition({
+                anchorRect,
+                popoverWidth: floatingRect?.width || (isCardOpen ? 404 : 180),
+                popoverHeight: floatingRect?.height || (isCardOpen ? 640 : 220),
+                viewportWidth: window.innerWidth,
+                viewportHeight: window.innerHeight,
+                preferredPlacement: isCardOpen ? "top" : "top-start"
+            });
+
+            setFloatingPosition((prev) => (
+                prev
+                && prev.left === nextPosition.left
+                && prev.top === nextPosition.top
+                && prev.width === nextPosition.width
+                && prev.maxHeight === nextPosition.maxHeight
+                    ? prev
+                    : nextPosition
+            ));
+        }
+
+        updateFloatingPosition();
+        window.addEventListener("resize", updateFloatingPosition);
+        window.addEventListener("scroll", updateFloatingPosition, true);
+
+        return () => {
+            window.removeEventListener("resize", updateFloatingPosition);
+            window.removeEventListener("scroll", updateFloatingPosition, true);
+        };
+    }, [
+        contextMenuOpen,
+        isCardOpen,
+        isEditingServerDescription,
+        presenceStatus,
+        profileBio,
+        profileGames.length,
+        serverProfile,
+        serverProfileStatus
+    ]);
+
+    const floatingStyle = floatingPosition ? {
+        left: `${floatingPosition.left}px`,
+        top: `${floatingPosition.top}px`,
+        maxHeight: `${floatingPosition.maxHeight}px`
+    } : {
+        left: "12px",
+        top: "12px",
+        maxHeight: "calc(100vh - 24px)"
+    };
+
     return (
         <div className="profile-dock">
+            {typeof document !== "undefined" ? createPortal(
+                <>
             {isCardOpen ? (
-                <div ref={cardRef} className="profile-dock-card" onClick={(event) => event.stopPropagation()}>
+                <div
+                    ref={cardRef}
+                    className="profile-dock-card"
+                    style={floatingStyle}
+                    onClick={(event) => event.stopPropagation()}
+                >
                     <div
                         className="profile-dock-card-banner"
                         style={bannerUrl ? { backgroundImage: `url(${bannerUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
@@ -536,6 +624,7 @@ export default function ProfileDock({
                 <div
                     ref={contextMenuRef}
                     className="profile-dock-context-menu"
+                    style={floatingStyle}
                     onClick={(event) => event.stopPropagation()}
                 >
                     <button
@@ -570,6 +659,9 @@ export default function ProfileDock({
                         Logout
                     </button>
                 </div>
+            ) : null}
+                </>,
+                document.body
             ) : null}
 
             <button

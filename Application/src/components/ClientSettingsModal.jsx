@@ -13,11 +13,17 @@ import {
 } from "../features/clientSettings";
 import {
     beginMfaSetup,
+    changePassword,
+    confirmEmailVerification,
     disableMfa,
     enableMfa,
     fetchMfaStatus,
+    fetchRecoveryStatus,
     fetchSessions,
+    regenerateRecoveryKeys,
+    removeRecoveryEmail,
     revokeSession,
+    startEmailVerification,
     updateUserProfile
 } from "../features/auth/actions";
 import {
@@ -143,6 +149,36 @@ function formatDeviceTimestamp(value) {
     return timestamp.toLocaleString();
 }
 
+function buildRecoveryKeyText(keys) {
+    return (Array.isArray(keys) ? keys : [])
+        .filter(Boolean)
+        .map((key, index) => `${index + 1}. ${key}`)
+        .join("\n");
+}
+
+function downloadRecoveryKeys(keys, handle) {
+    const blob = new Blob([
+        [
+            "Chatapp recovery keys",
+            handle ? `Account: ${handle}` : "",
+            "",
+            buildRecoveryKeyText(keys),
+            "",
+            "Each key works once. Generating a new batch invalidates old unused keys."
+        ].filter(Boolean).join("\n")
+    ], {
+        type: "text/plain;charset=utf-8"
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `chatapp-recovery-keys-${handle || "account"}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
 function loadImageFromObjectUrl(objectUrl) {
     return new Promise((resolve, reject) => {
         const image = new Image();
@@ -250,6 +286,15 @@ export default function ClientSettingsModal({
     const [mediaEditor, setMediaEditor] = useState(null);
     const [openPolicy, setOpenPolicy] = useState("");
     const [accountNotice, setAccountNotice] = useState("");
+    const [recoveryInfo, setRecoveryInfo] = useState(currentUser?.recovery || null);
+    const [recoveryEmailInput, setRecoveryEmailInput] = useState(
+        currentUser?.recovery?.pendingEmail
+        || currentUser?.recovery?.verifiedEmail
+        || currentUser?.email
+        || ""
+    );
+    const [recoveryEmailCode, setRecoveryEmailCode] = useState("");
+    const [recoveryKeys, setRecoveryKeys] = useState([]);
     const [missingKeyConversations, setMissingKeyConversations] = useState(null);
     const [recoveryStatus, setRecoveryStatus] = useState("");
     const [transferImportJson, setTransferImportJson] = useState("");
@@ -260,6 +305,10 @@ export default function ClientSettingsModal({
     const [mfaStatus, setMfaStatus] = useState({ enabled: false, enabledAt: null, pendingSetup: false, available: true });
     const [mfaSetup, setMfaSetup] = useState(null);
     const [mfaCode, setMfaCode] = useState("");
+    const [passwordChangeCurrent, setPasswordChangeCurrent] = useState("");
+    const [passwordChangeNext, setPasswordChangeNext] = useState("");
+    const [passwordChangeConfirm, setPasswordChangeConfirm] = useState("");
+    const [passwordChangeTotp, setPasswordChangeTotp] = useState("");
     const [sessions, setSessions] = useState([]);
     const [sessionActionId, setSessionActionId] = useState("");
     const [dmDevices, setDmDevices] = useState([]);
@@ -287,6 +336,8 @@ export default function ClientSettingsModal({
     const userLabel = currentUser?.displayName || currentUser?.usernameBase || currentUser?.username || "User";
     const userHandle = currentUser?.handle || currentUser?.username || "unknown";
     const userInitial = useMemo(() => userLabel.trim().slice(0, 1).toUpperCase() || "?", [userLabel]);
+    const effectiveRecoveryInfo = recoveryInfo || currentUser?.recovery || null;
+    const recoveryKeyText = useMemo(() => buildRecoveryKeyText(recoveryKeys), [recoveryKeys]);
     const activeTabLabel = SETTINGS_TABS.find((tab) => tab.id === activeTab)?.label || "tab";
     const canResetActiveTab = (CLIENT_SETTINGS_TAB_KEYS[activeTab] || []).length > 0;
     const trustedDeviceSeenStorageKey = `trustedDmDevicesSeen:${currentUser?.id || "guest"}`;
@@ -323,6 +374,19 @@ export default function ClientSettingsModal({
     useEffect(() => {
         setProfileGames(Array.isArray(currentUser?.profileGames) ? currentUser.profileGames : []);
     }, [currentUser?.profileGames]);
+
+    useEffect(() => {
+        setRecoveryInfo(currentUser?.recovery || null);
+    }, [currentUser?.recovery]);
+
+    useEffect(() => {
+        setRecoveryEmailInput(
+            currentUser?.recovery?.pendingEmail
+            || currentUser?.recovery?.verifiedEmail
+            || currentUser?.email
+            || ""
+        );
+    }, [currentUser?.email, currentUser?.recovery?.pendingEmail, currentUser?.recovery?.verifiedEmail]);
 
     useEffect(() => {
         try {
@@ -449,6 +513,7 @@ export default function ClientSettingsModal({
             if (!currentUser?.id) {
                 setMfaStatus({ enabled: false, enabledAt: null, pendingSetup: false, available: true });
                 setSessions([]);
+                setRecoveryInfo(null);
                 return;
             }
 
@@ -456,23 +521,19 @@ export default function ClientSettingsModal({
             if (!token) {
                 setMfaStatus({ enabled: false, enabledAt: null, pendingSetup: false, available: true });
                 setSessions([]);
+                setRecoveryInfo(null);
                 return;
             }
 
             try {
-                const [mfaData, sessionsData] = await Promise.all([
-                    fetchMfaStatus({ token }),
-                    fetchSessions({ token })
-                ]);
-
                 if (!cancelled) {
-                    setMfaStatus(mfaData.mfa || { enabled: false, enabledAt: null, pendingSetup: false, available: true });
-                    setSessions(sessionsData.sessions || []);
+                    await refreshAccountSecurityState(token);
                 }
             } catch {
                 if (!cancelled) {
                     setMfaStatus({ enabled: false, enabledAt: null, pendingSetup: false, available: true });
                     setSessions([]);
+                    setRecoveryInfo(currentUser?.recovery || null);
                 }
             }
         }
@@ -1093,13 +1154,31 @@ export default function ClientSettingsModal({
     }
 
     async function refreshAccountSecurityState(token) {
-        const [mfaData, sessionsData] = await Promise.all([
+        const [mfaData, sessionsData, recoveryData] = await Promise.all([
             fetchMfaStatus({ token }),
-            fetchSessions({ token })
+            fetchSessions({ token }),
+            fetchRecoveryStatus({ token })
         ]);
+
+        const nextRecovery = recoveryData.recovery || recoveryData.user?.recovery || null;
 
         setMfaStatus(mfaData.mfa || { enabled: false, enabledAt: null, pendingSetup: false, available: true });
         setSessions(sessionsData.sessions || []);
+        setRecoveryInfo(nextRecovery);
+
+        if (nextRecovery) {
+            setRecoveryEmailInput(nextRecovery.pendingEmail || nextRecovery.verifiedEmail || "");
+        }
+
+        if (recoveryData.user) {
+            onUserUpdated?.(recoveryData.user);
+        }
+
+        return {
+            mfaData,
+            sessionsData,
+            recoveryData
+        };
     }
 
     async function handleBeginMfaSetup() {
@@ -1203,6 +1282,190 @@ export default function ClientSettingsModal({
             setAccountNotice(formatAppError(error, {
                 fallbackMessage: "Could not revoke that session right now.",
                 context: "Session revoke"
+            }).message);
+        } finally {
+            setSessionActionId("");
+        }
+    }
+
+    async function handleStartRecoveryEmailVerification() {
+        const normalizedEmail = String(recoveryEmailInput || "").trim();
+
+        if (!normalizedEmail) {
+            setAccountNotice("Enter a recovery email address first.");
+            return;
+        }
+
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before that recovery email could be updated.");
+            return;
+        }
+
+        try {
+            setSessionActionId("recovery:email:start");
+            setAccountNotice("");
+            await startEmailVerification({
+                token,
+                email: normalizedEmail
+            });
+            await refreshAccountSecurityState(token);
+            setRecoveryEmailCode("");
+            setAccountNotice("Verification code sent. Enter the 6-digit code to confirm that recovery email.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not send that recovery email code right now.",
+                context: "Recovery email"
+            }).message);
+        } finally {
+            setSessionActionId("");
+        }
+    }
+
+    async function handleConfirmRecoveryEmail() {
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before that recovery email could be verified.");
+            return;
+        }
+
+        if (recoveryEmailCode.length !== 6) {
+            setAccountNotice("Enter the 6-digit verification code first.");
+            return;
+        }
+
+        try {
+            setSessionActionId("recovery:email:confirm");
+            setAccountNotice("");
+            await confirmEmailVerification({
+                token,
+                code: recoveryEmailCode
+            });
+            await refreshAccountSecurityState(token);
+            setRecoveryEmailCode("");
+            setAccountNotice("Recovery email verified.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not verify that recovery email right now.",
+                context: "Recovery email verify"
+            }).message);
+        } finally {
+            setSessionActionId("");
+        }
+    }
+
+    async function handleRemoveRecoveryEmail() {
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before that recovery email could be removed.");
+            return;
+        }
+
+        try {
+            setSessionActionId("recovery:email:remove");
+            setAccountNotice("");
+            await removeRecoveryEmail({ token });
+            await refreshAccountSecurityState(token);
+            setRecoveryEmailCode("");
+            setRecoveryKeys([]);
+            setAccountNotice("Recovery email removed.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not remove that recovery email right now.",
+                context: "Recovery email remove"
+            }).message);
+        } finally {
+            setSessionActionId("");
+        }
+    }
+
+    async function handleRegenerateRecoveryKeys() {
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before recovery keys could be generated.");
+            return;
+        }
+
+        try {
+            setSessionActionId("recovery:keys");
+            setAccountNotice("");
+            const data = await regenerateRecoveryKeys({ token });
+            setRecoveryKeys(data.recoveryKeys || []);
+            await refreshAccountSecurityState(token);
+            setAccountNotice("New recovery keys generated. Copy or download them now because they are only shown once.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not generate recovery keys right now.",
+                context: "Recovery keys"
+            }).message);
+        } finally {
+            setSessionActionId("");
+        }
+    }
+
+    async function handleCopyRecoveryKeys() {
+        if (!recoveryKeyText) {
+            return;
+        }
+
+        try {
+            await navigator.clipboard.writeText(recoveryKeyText);
+            setAccountNotice("Recovery keys copied to your clipboard.");
+        } catch {
+            setAccountNotice("Could not copy recovery keys to the clipboard on this device.");
+        }
+    }
+
+    async function handleChangePassword() {
+        const token = getStoredAuthToken();
+        if (!token) {
+            setAccountNotice("Your session expired before your password could be changed.");
+            return;
+        }
+
+        if (!passwordChangeCurrent) {
+            setAccountNotice("Current password is required.");
+            return;
+        }
+
+        if (passwordChangeNext.length < 4) {
+            setAccountNotice("New password must be at least 4 characters.");
+            return;
+        }
+
+        if (passwordChangeNext !== passwordChangeConfirm) {
+            setAccountNotice("New passwords do not match.");
+            return;
+        }
+
+        if (mfaStatus.enabled && passwordChangeTotp.length !== 6) {
+            setAccountNotice("Enter your six-digit authenticator code to change this password.");
+            return;
+        }
+
+        try {
+            setSessionActionId("password:change");
+            setAccountNotice("");
+            const data = await changePassword({
+                token,
+                currentPassword: passwordChangeCurrent,
+                newPassword: passwordChangeNext,
+                totpCode: passwordChangeTotp
+            });
+            if (data.user) {
+                onUserUpdated?.(data.user);
+            }
+            await refreshAccountSecurityState(data.token || getStoredAuthToken());
+            setPasswordChangeCurrent("");
+            setPasswordChangeNext("");
+            setPasswordChangeConfirm("");
+            setPasswordChangeTotp("");
+            setRecoveryKeys([]);
+            setAccountNotice("Password changed. Other sessions were signed out and all DM devices now need fresh trust.");
+        } catch (error) {
+            setAccountNotice(formatAppError(error, {
+                fallbackMessage: "Could not change your password right now.",
+                context: "Password change"
             }).message);
         } finally {
             setSessionActionId("");
@@ -1628,6 +1891,194 @@ export default function ClientSettingsModal({
                                         {sessionActionId === "mfa:enable" ? "Enabling..." : "Confirm and enable MFA"}
                                     </button>
                                 ) : null}
+                            </div>
+
+                            <div className="client-settings-security-card">
+                                <div className="client-settings-security-copy">
+                                    <strong>Recovery email</strong>
+                                    <p>
+                                        {effectiveRecoveryInfo?.verifiedEmail
+                                            ? `Verified for password reset: ${effectiveRecoveryInfo.verifiedEmail}`
+                                            : "Add a verified recovery email if you want password reset codes by email."}
+                                    </p>
+                                </div>
+                                <label className="client-settings-field">
+                                    <span>Recovery email address</span>
+                                    <input
+                                        type="email"
+                                        placeholder="you@example.com"
+                                        value={recoveryEmailInput}
+                                        onChange={(event) => setRecoveryEmailInput(event.target.value)}
+                                    />
+                                </label>
+                                {effectiveRecoveryInfo?.pendingEmail ? (
+                                    <>
+                                        <p className="client-settings-muted">
+                                            Pending verification: {effectiveRecoveryInfo.pendingEmail}
+                                        </p>
+                                        <label className="client-settings-field">
+                                            <span>Verification code</span>
+                                            <input
+                                                type="text"
+                                                inputMode="numeric"
+                                                autoComplete="one-time-code"
+                                                placeholder="123456"
+                                                value={recoveryEmailCode}
+                                                onChange={(event) => setRecoveryEmailCode(event.target.value.replace(/\D+/g, "").slice(0, 6))}
+                                            />
+                                        </label>
+                                    </>
+                                ) : null}
+                                <div className="client-settings-inline-actions">
+                                    <button
+                                        type="button"
+                                        className="secondary"
+                                        disabled={Boolean(sessionActionId)}
+                                        onClick={handleStartRecoveryEmailVerification}
+                                    >
+                                        {sessionActionId === "recovery:email:start"
+                                            ? "Sending..."
+                                            : effectiveRecoveryInfo?.pendingEmail
+                                                ? "Resend code"
+                                                : effectiveRecoveryInfo?.verifiedEmail
+                                                    ? "Replace email"
+                                                    : "Send verification code"}
+                                    </button>
+                                    {effectiveRecoveryInfo?.pendingEmail ? (
+                                        <button
+                                            type="button"
+                                            className="secondary"
+                                            disabled={Boolean(sessionActionId) || recoveryEmailCode.length !== 6}
+                                            onClick={handleConfirmRecoveryEmail}
+                                        >
+                                            {sessionActionId === "recovery:email:confirm" ? "Verifying..." : "Confirm code"}
+                                        </button>
+                                    ) : null}
+                                    {(effectiveRecoveryInfo?.verifiedEmail || effectiveRecoveryInfo?.pendingEmail) ? (
+                                        <button
+                                            type="button"
+                                            className="danger"
+                                            disabled={Boolean(sessionActionId)}
+                                            onClick={handleRemoveRecoveryEmail}
+                                        >
+                                            {sessionActionId === "recovery:email:remove" ? "Removing..." : "Remove email"}
+                                        </button>
+                                    ) : null}
+                                </div>
+                            </div>
+
+                            <div className="client-settings-security-card">
+                                <div className="client-settings-security-copy">
+                                    <strong>Recovery keys</strong>
+                                    <p>
+                                        {effectiveRecoveryInfo?.hasRecoveryKeys
+                                            ? "You already have recovery keys on this account. Generating a new batch invalidates older unused keys."
+                                            : "Generate one-time recovery keys and store them somewhere safe. They are required for self-service recovery."}
+                                    </p>
+                                </div>
+                                <div className="client-settings-inline-actions">
+                                    <button
+                                        type="button"
+                                        className="secondary"
+                                        disabled={Boolean(sessionActionId)}
+                                        onClick={handleRegenerateRecoveryKeys}
+                                    >
+                                        {sessionActionId === "recovery:keys"
+                                            ? "Generating..."
+                                            : effectiveRecoveryInfo?.hasRecoveryKeys
+                                                ? "Generate new batch"
+                                                : "Generate recovery keys"}
+                                    </button>
+                                    {recoveryKeys.length > 0 ? (
+                                        <>
+                                            <button
+                                                type="button"
+                                                className="secondary"
+                                                disabled={Boolean(sessionActionId)}
+                                                onClick={handleCopyRecoveryKeys}
+                                            >
+                                                Copy keys
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="secondary"
+                                                disabled={Boolean(sessionActionId)}
+                                                onClick={() => downloadRecoveryKeys(recoveryKeys, userHandle)}
+                                            >
+                                                Download .txt
+                                            </button>
+                                        </>
+                                    ) : null}
+                                </div>
+                                {recoveryKeys.length > 0 ? (
+                                    <div className="client-settings-code-block">
+                                        <span>Shown once after generation</span>
+                                        <div className="client-settings-recovery-key-list">
+                                            {recoveryKeys.map((key) => (
+                                                <code key={key}>{key}</code>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ) : null}
+                            </div>
+
+                            <div className="client-settings-security-card">
+                                <div className="client-settings-security-copy">
+                                    <strong>Password</strong>
+                                    <p>
+                                        Change your password here. Chatapp will keep this session, sign out your other sessions, and revoke secure-DM device trust.
+                                    </p>
+                                </div>
+                                <label className="client-settings-field">
+                                    <span>Current password</span>
+                                    <input
+                                        type="password"
+                                        autoComplete="current-password"
+                                        value={passwordChangeCurrent}
+                                        onChange={(event) => setPasswordChangeCurrent(event.target.value)}
+                                    />
+                                </label>
+                                <label className="client-settings-field">
+                                    <span>New password</span>
+                                    <input
+                                        type="password"
+                                        autoComplete="new-password"
+                                        value={passwordChangeNext}
+                                        onChange={(event) => setPasswordChangeNext(event.target.value)}
+                                    />
+                                </label>
+                                <label className="client-settings-field">
+                                    <span>Confirm new password</span>
+                                    <input
+                                        type="password"
+                                        autoComplete="new-password"
+                                        value={passwordChangeConfirm}
+                                        onChange={(event) => setPasswordChangeConfirm(event.target.value)}
+                                    />
+                                </label>
+                                {mfaStatus.enabled ? (
+                                    <label className="client-settings-field">
+                                        <span>Authenticator code</span>
+                                        <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            autoComplete="one-time-code"
+                                            placeholder="123456"
+                                            value={passwordChangeTotp}
+                                            onChange={(event) => setPasswordChangeTotp(event.target.value.replace(/\D+/g, "").slice(0, 6))}
+                                        />
+                                    </label>
+                                ) : null}
+                                <div className="client-settings-inline-actions">
+                                    <button
+                                        type="button"
+                                        className="secondary"
+                                        disabled={Boolean(sessionActionId)}
+                                        onClick={handleChangePassword}
+                                    >
+                                        {sessionActionId === "password:change" ? "Changing..." : "Change password"}
+                                    </button>
+                                </div>
                             </div>
 
                             <div className="client-settings-security-card">

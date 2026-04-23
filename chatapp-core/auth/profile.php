@@ -63,31 +63,9 @@ if (!empty($updates)) {
     $stmt->execute($params);
 }
 
-$stmt = $db->prepare('
-    SELECT
-        id,
-        username,
-        email,
-        phone,
-        ' . userProfileDisplayNameSelect($db, 'users') . ',
-        ' . userProfileUsernameTagSelect($db, 'users') . ',
-        ' . userProfileDescriptionSelect($db, 'users') . ',
-        ' . userProfileGamesSelect($db, 'users') . '
-    FROM users
-    WHERE id = ?
-    LIMIT 1
-');
-$stmt->execute([(int)$user['id']]);
-$updatedUser = $stmt->fetch();
+$updatedUser = authLoadUserById($db, (int)$user['id']);
 
 jsonResponse([
     'ok' => true,
-    'user' => array_merge(
-        [
-            'id' => (int)$updatedUser['id'],
-            'email' => $updatedUser['email'],
-            'phone' => $updatedUser['phone']
-        ],
-        userProfileFromRow($updatedUser)
-    )
+    'user' => authBuildUserPayload($updatedUser, $db)
 ]);
