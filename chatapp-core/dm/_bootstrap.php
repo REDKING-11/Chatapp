@@ -302,8 +302,39 @@ function dmRequireArray(array $data, string $key, string $message): array {
     return $value;
 }
 
+function dmMaxRecipientDevices(): int {
+    return chatappEnvInt('CHATAPP_MAX_RECIPIENT_DEVICES', 50, 1, 10000);
+}
+
+function dmRelayFetchLimit(): int {
+    return chatappEnvInt('CHATAPP_RELAY_FETCH_LIMIT', 100, 1, 1000);
+}
+
+function dmCleanupBatchSize(): int {
+    return chatappEnvInt('CHATAPP_CLEANUP_BATCH_SIZE', 500, 1, 10000);
+}
+
+function dmNormalizeRecipientDeviceIds(array $values): array {
+    $items = [];
+    $seen = [];
+
+    foreach ($values as $value) {
+        $deviceId = dmTrimmedString($value);
+
+        if ($deviceId === null || isset($seen[$deviceId])) {
+            continue;
+        }
+
+        $seen[$deviceId] = true;
+        $items[] = $deviceId;
+    }
+
+    return $items;
+}
+
 function dmCleanupExpiredRelayQueue(PDO $db): void {
-    $stmt = $db->prepare('DELETE FROM dm_relay_queue WHERE expires_at <= UTC_TIMESTAMP() OR acked_at IS NOT NULL');
+    $limit = dmCleanupBatchSize();
+    $stmt = $db->prepare('DELETE FROM dm_relay_queue WHERE expires_at <= UTC_TIMESTAMP() OR acked_at IS NOT NULL LIMIT ' . $limit);
     $stmt->execute();
 }
 

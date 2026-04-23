@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
     annotateNetworkError,
+    isApiNetworkUnavailableError,
     parseJsonResponse
 } from "../src/lib/api.js";
 import {
@@ -17,6 +18,8 @@ const remoteNetworkError = annotateNetworkError(
 assert.equal(remoteNetworkError.code, "API_NETWORK_FETCH_FAILED");
 assert.equal(remoteNetworkError.source, "api");
 assert.equal(remoteNetworkError.endpoint, "https://56.228.2.7/auth/login.php");
+assert.equal(remoteNetworkError.userMessage, "Could not reach https://56.228.2.7. The backend may be offline or restarting.");
+assert.equal(isApiNetworkUnavailableError(remoteNetworkError), true);
 
 await assert.rejects(
     () => parseJsonResponse(

@@ -4,8 +4,11 @@ sudo cp /home/ubuntu/.htaccess /var/www/chatapp-core/public/.htaccess
 sudo chown -R www-data:www-data /var/www/chatapp-core
 
 # chatapp-realtime deploy
+sudo install -d -m 755 /var/www/chatapp-realtime && \
 sudo find /var/www/chatapp-realtime -mindepth 1 -maxdepth 1 -exec rm -rf {} + && \
 sudo install -m 644 /home/ubuntu/app.js /var/www/chatapp-realtime/app.js && \
+sudo install -m 644 /home/ubuntu/delivery.js /var/www/chatapp-realtime/delivery.js && \
+sudo install -m 644 /home/ubuntu/limits.js /var/www/chatapp-realtime/limits.js && \
 sudo install -m 644 /home/ubuntu/package.json /var/www/chatapp-realtime/package.json && \
 sudo install -m 600 /home/ubuntu/.env /var/www/chatapp-realtime/.env && \
 sudo install -m 644 /home/ubuntu/presence.js /var/www/chatapp-realtime/presence.js && \

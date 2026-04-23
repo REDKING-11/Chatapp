@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { completeMfaLogin, submitAuth } from "../features/auth/actions";
+import { useEffect, useState } from "react";
+import { checkCoreApiAvailability, completeMfaLogin, submitAuth } from "../features/auth/actions";
+import { isApiNetworkUnavailableError } from "../lib/api";
 import { formatAppError } from "../lib/debug";
 
 function validateRegistrationUsername(username) {
@@ -73,6 +74,40 @@ function formatAuthSubmitError(error, { isMfaStep, mode }) {
     }).message;
 }
 
+function getEndpointOrigin(endpoint) {
+    try {
+        return new URL(String(endpoint || "")).origin;
+    } catch {
+        return "the backend";
+    }
+}
+
+function createBackendStatus(result) {
+    const origin = getEndpointOrigin(result?.endpoint);
+
+    if (Number(result?.status) >= 500) {
+        return {
+            state: "degraded",
+            title: "Backend answered with an error",
+            message: `${origin} is reachable, but it returned a server error.`
+        };
+    }
+
+    if (!result?.ok) {
+        return {
+            state: "offline",
+            title: "Backend unavailable",
+            message: `Chatapp could not reach ${origin}. Login and registration need that server to answer first.`
+        };
+    }
+
+    return {
+        state: "online",
+        title: "Backend reachable",
+        message: `${origin} is answering auth requests.`
+    };
+}
+
 export default function AuthScreen({ onAuthSuccess, noticeMessage = "" }) {
     const [mode, setMode] = useState("login");
     const [username, setUsername] = useState("");
@@ -81,7 +116,44 @@ export default function AuthScreen({ onAuthSuccess, noticeMessage = "" }) {
     const [mfaChallenge, setMfaChallenge] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
+    const [backendStatus, setBackendStatus] = useState({
+        state: "checking",
+        title: "Checking backend",
+        message: "Looking for the auth server..."
+    });
     const isMfaStep = Boolean(mfaChallenge);
+
+    async function refreshBackendStatus() {
+        setBackendStatus({
+            state: "checking",
+            title: "Checking backend",
+            message: "Looking for the auth server..."
+        });
+
+        const result = await checkCoreApiAvailability();
+        const nextStatus = createBackendStatus(result);
+
+        setBackendStatus(nextStatus);
+        return nextStatus;
+    }
+
+    useEffect(() => {
+        let cancelled = false;
+
+        async function checkBackend() {
+            const result = await checkCoreApiAvailability();
+
+            if (!cancelled) {
+                setBackendStatus(createBackendStatus(result));
+            }
+        }
+
+        checkBackend();
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     function resetTransientState() {
         setError("");
@@ -122,6 +194,15 @@ export default function AuthScreen({ onAuthSuccess, noticeMessage = "" }) {
         setLoading(true);
 
         try {
+            if (backendStatus.state === "offline" || backendStatus.state === "degraded") {
+                const nextStatus = await refreshBackendStatus();
+
+                if (nextStatus.state === "offline" || nextStatus.state === "degraded") {
+                    setError(nextStatus.message);
+                    return;
+                }
+            }
+
             const data = mfaChallenge
                 ? await completeMfaLogin({
                     username,
@@ -148,6 +229,28 @@ export default function AuthScreen({ onAuthSuccess, noticeMessage = "" }) {
 
             onAuthSuccess(data.user, data.token);
         } catch (err) {
+            if (isApiNetworkUnavailableError(err)) {
+                const nextStatus = createBackendStatus({
+                    ok: false,
+                    endpoint: err?.endpoint || err?.requestUrl,
+                    error: err
+                });
+                setBackendStatus(nextStatus);
+                setError(nextStatus.message);
+                return;
+            }
+
+            if (Number(err?.status) >= 500) {
+                const nextStatus = {
+                    state: "degraded",
+                    title: "Backend answered with an error",
+                    message: "The backend is reachable, but auth is failing on the server side right now."
+                };
+                setBackendStatus(nextStatus);
+                setError(nextStatus.message);
+                return;
+            }
+
             setError(formatAuthSubmitError(err, { isMfaStep, mode }));
         } finally {
             setLoading(false);
@@ -166,6 +269,23 @@ export default function AuthScreen({ onAuthSuccess, noticeMessage = "" }) {
                                 ? "Sign in to Chatapp on this device."
                                 : "Create your account and then sign in on this device."}
                     </p>
+                </div>
+
+                <div className={`auth-status-banner is-${backendStatus.state}`} role="status">
+                    <span className="auth-status-dot" aria-hidden="true" />
+                    <div>
+                        <strong>{backendStatus.title}</strong>
+                        <span>{backendStatus.message}</span>
+                    </div>
+                    {(backendStatus.state === "offline" || backendStatus.state === "degraded") ? (
+                        <button
+                            type="button"
+                            onClick={refreshBackendStatus}
+                            disabled={loading || backendStatus.state === "checking"}
+                        >
+                            Retry
+                        </button>
+                    ) : null}
                 </div>
 
                 <form onSubmit={handleSubmit} className="auth-form">

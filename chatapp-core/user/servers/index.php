@@ -9,6 +9,7 @@ $db = getDb();
 $method = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'GET') {
+    $limit = chatappEnvInt('CHATAPP_LIST_LIMIT', 100, 1, 1000);
     $stmt = $db->prepare('
         SELECT
             id,
@@ -21,6 +22,7 @@ if ($method === 'GET') {
         FROM user_servers
         WHERE user_id = ?
         ORDER BY joined_at ASC
+        LIMIT ' . $limit . '
     ');
     $stmt->execute([$userId]);
 

@@ -5,6 +5,7 @@ require_once __DIR__ . '/../_bootstrap.php';
 $user = requireAuth();
 $db = getDb();
 $currentUserId = (int)$user['id'];
+$limit = chatappEnvInt('CHATAPP_LIST_LIMIT', 100, 1, 1000);
 
 $stmt = $db->prepare('
     SELECT c.id
@@ -13,6 +14,7 @@ $stmt = $db->prepare('
       ON p.conversation_id = c.id
     WHERE p.user_id = ?
     ORDER BY c.updated_at DESC, c.created_at DESC
+    LIMIT ' . $limit . '
 ');
 $stmt->execute([$currentUserId]);
 $rows = $stmt->fetchAll();

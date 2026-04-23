@@ -1700,6 +1700,80 @@ button.shortcut-info-overview-card:hover {
     color: var(--shell-text-muted);
 }
 
+.auth-status-banner {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    border: 1px solid var(--shell-border);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--shell-bg) 82%, var(--shell-surface));
+}
+
+.auth-status-banner > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.auth-status-banner strong {
+    font-size: 0.86rem;
+}
+
+.auth-status-banner span {
+    color: var(--shell-text-muted);
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+}
+
+.auth-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--shell-text-muted);
+}
+
+.auth-status-banner.is-online {
+    border-color: var(--status-success-border);
+    background: color-mix(in srgb, var(--status-success-bg) 65%, var(--shell-surface));
+}
+
+.auth-status-banner.is-online .auth-status-dot {
+    background: #3ba55d;
+}
+
+.auth-status-banner.is-offline,
+.auth-status-banner.is-degraded {
+    border-color: var(--status-danger-border);
+    background: color-mix(in srgb, var(--status-danger-bg) 74%, var(--shell-surface));
+}
+
+.auth-status-banner.is-offline .auth-status-dot,
+.auth-status-banner.is-degraded .auth-status-dot {
+    background: #ef4444;
+}
+
+.auth-status-banner.is-checking .auth-status-dot {
+    background: var(--shell-accent);
+}
+
+.auth-status-banner button {
+    min-height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--shell-border);
+    border-radius: 8px;
+    background: var(--shell-surface);
+    color: var(--shell-text);
+    cursor: pointer;
+}
+
+.auth-status-banner button:disabled {
+    cursor: default;
+    opacity: 0.65;
+}
+
 .auth-form {
     display: flex;
     flex-direction: column;

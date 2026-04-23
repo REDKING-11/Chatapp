@@ -3,6 +3,7 @@ import { getCoreApiBase } from "../../lib/env";
 import { getStoredAuthToken, saveAuthSession } from "../session/actions";
 
 const CORE_API_BASE = getCoreApiBase();
+const CORE_STATUS_TIMEOUT_MS = 5000;
 
 function buildAuthRequestHeaders(includeToken = false) {
     const platform = typeof navigator !== "undefined"
@@ -92,6 +93,34 @@ export async function submitAuth({ mode, username, password, email, phone }) {
         await saveAuthSession(loginData);
     }
     return loginData;
+}
+
+export async function checkCoreApiAvailability() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CORE_STATUS_TIMEOUT_MS);
+
+    try {
+        const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/me.php`, {
+            method: "GET",
+            cache: "no-store",
+            signal: controller.signal
+        });
+
+        return {
+            ok: res.status === 401 || res.ok,
+            status: res.status,
+            endpoint: res.url || `${CORE_API_BASE}/auth/me.php`
+        };
+    } catch (error) {
+        return {
+            ok: false,
+            status: null,
+            endpoint: error?.endpoint || error?.requestUrl || `${CORE_API_BASE}/auth/me.php`,
+            error
+        };
+    } finally {
+        clearTimeout(timeoutId);
+    }
 }
 
 export async function fetchMfaStatus({ token }) {
