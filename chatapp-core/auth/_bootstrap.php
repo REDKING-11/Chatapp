@@ -155,10 +155,29 @@ function authEnsureMfaTables(PDO $db): void {
     $ensured = true;
 }
 
+function authEnsureUserProfileColumns(PDO $db): void {
+    static $ensured = false;
+
+    if ($ensured || !authTableExists($db, 'users')) {
+        return;
+    }
+
+    if (!authColumnExists($db, 'users', 'profile_description')) {
+        $db->exec('ALTER TABLE users ADD COLUMN profile_description TEXT NULL');
+    }
+
+    if (!authColumnExists($db, 'users', 'profile_games')) {
+        $db->exec('ALTER TABLE users ADD COLUMN profile_games TEXT NULL');
+    }
+
+    $ensured = true;
+}
+
 function authBootstrap(PDO $db): void {
     try {
         authEnsureSessionColumns($db);
         authEnsureMfaTables($db);
+        authEnsureUserProfileColumns($db);
     } catch (Throwable $error) {
         // Older or restricted installations may not allow runtime schema updates.
         // The auth flow must stay available on the legacy schema even if MFA/session
@@ -522,6 +541,8 @@ function authFindSessionByToken(PDO $db, string $token, bool $withProfileColumns
     if ($withProfileColumns) {
         $selectParts[] = userProfileDisplayNameSelect($db, 'users');
         $selectParts[] = userProfileUsernameTagSelect($db, 'users');
+        $selectParts[] = userProfileDescriptionSelect($db, 'users');
+        $selectParts[] = userProfileGamesSelect($db, 'users');
     }
 
     $stmt = $db->prepare(sprintf(
@@ -587,7 +608,9 @@ function authLoadUserByUsername(PDO $db, string $username): ?array {
             phone,
             password_hash,
             ' . userProfileDisplayNameSelect($db, 'users') . ',
-            ' . userProfileUsernameTagSelect($db, 'users') . '
+            ' . userProfileUsernameTagSelect($db, 'users') . ',
+            ' . userProfileDescriptionSelect($db, 'users') . ',
+            ' . userProfileGamesSelect($db, 'users') . '
         FROM users
     ';
 

@@ -15,11 +15,21 @@ const {
   updateDevicePresence
 } = require("./presence");
 
+const MAX_WS_MESSAGE_BYTES = Number(process.env.MAX_WS_MESSAGE_BYTES || 2 * 1024 * 1024);
+const MAX_DM_ENVELOPE_BYTES = Number(process.env.MAX_DM_ENVELOPE_BYTES || 1536 * 1024);
+const MAX_DM_RECIPIENTS = Number(process.env.MAX_DM_RECIPIENTS || 50);
+const RELAY_FETCH_LIMIT = Number(process.env.RELAY_FETCH_LIMIT || 50);
+const RELAY_FETCH_COOLDOWN_MS = Number(process.env.RELAY_FETCH_COOLDOWN_MS || 2000);
+const MAX_WS_MESSAGES_PER_SECOND = Number(process.env.MAX_WS_MESSAGES_PER_SECOND || 30);
+
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "2mb" }));
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({
+  server,
+  maxPayload: MAX_WS_MESSAGE_BYTES
+});
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -39,6 +49,26 @@ const WS_AUTH_TIMEOUT_MS = 10000;
 let relayQueueColumnsEnsured = false;
 let relayQueueColumnsEnsuredPromise = null;
 
+function logFatalAndExit(label, error) {
+  console.error(`[fatal] ${label}`, error);
+  process.exitCode = 1;
+  try {
+    server.close(() => process.exit(1));
+  } catch (closeError) {
+    console.error("[fatal] failed to close server cleanly", closeError);
+    process.exit(1);
+  }
+  setTimeout(() => process.exit(1), 5000).unref();
+}
+
+process.on("uncaughtException", (error) => {
+  logFatalAndExit("uncaught exception", error);
+});
+
+process.on("unhandledRejection", (error) => {
+  logFatalAndExit("unhandled rejection", error);
+});
+
 app.get("/health", async (_req, res) => {
   try {
     await pool.query("SELECT 1");
@@ -52,6 +82,10 @@ function sendJson(ws, payload) {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(payload));
   }
+}
+
+function getEnvelopeSizeBytes(parts) {
+  return parts.reduce((total, value) => total + Buffer.byteLength(String(value || ""), "utf8"), 0);
 }
 
 function normalizeSubscribedUserIds(userIds) {
@@ -477,6 +511,9 @@ async function getConversationRelayTtlSeconds(conversationId) {
 wss.on("connection", (ws) => {
   let authedDeviceId = null;
   let authedUserId = null;
+  let messageWindowStartedAt = Date.now();
+  let messageCountInWindow = 0;
+  let lastRelayFetchAt = 0;
   const authTimeout = setTimeout(() => {
     if (!authedDeviceId && ws.readyState === WebSocket.OPEN) {
       sendJson(ws, { type: "auth:error", error: "Authentication timed out" });
@@ -486,6 +523,27 @@ wss.on("connection", (ws) => {
 
   ws.on("message", async (raw) => {
     try {
+      const now = Date.now();
+
+      if (now - messageWindowStartedAt >= 1000) {
+        messageWindowStartedAt = now;
+        messageCountInWindow = 0;
+      }
+
+      messageCountInWindow += 1;
+
+      if (messageCountInWindow > MAX_WS_MESSAGES_PER_SECOND) {
+        sendJson(ws, { type: "error", error: "Realtime rate limit exceeded" });
+        ws.close(1013, "Realtime rate limit exceeded");
+        return;
+      }
+
+      if (Buffer.byteLength(raw) > MAX_WS_MESSAGE_BYTES) {
+        sendJson(ws, { type: "error", error: "Realtime message is too large" });
+        ws.close(1009, "Realtime message is too large");
+        return;
+      }
+
       const data = JSON.parse(raw.toString());
 
       if (data.type === "auth") {
@@ -598,6 +656,19 @@ wss.on("connection", (ws) => {
               .filter(Boolean)
           )
         ];
+
+        if (normalizedRecipientDeviceIds.length > MAX_DM_RECIPIENTS) {
+          sendJson(ws, { type: "error", error: `Too many DM recipients; maximum is ${MAX_DM_RECIPIENTS}` });
+          return;
+        }
+
+        const envelopeSizeBytes = getEnvelopeSizeBytes([ciphertext, nonce, aad, tag, signature]);
+
+        if (envelopeSizeBytes > MAX_DM_ENVELOPE_BYTES) {
+          sendJson(ws, { type: "error", error: "Encrypted DM payload is too large" });
+          return;
+        }
+
         const allowedRecipients = normalizedRecipientDeviceIds.filter((recipientDeviceId) =>
           allowedRecipientDeviceIds.has(recipientDeviceId)
         );
@@ -684,6 +755,14 @@ wss.on("connection", (ws) => {
       }
 
       if (data.type === "dm:fetchRelay") {
+        const now = Date.now();
+
+        if (now - lastRelayFetchAt < RELAY_FETCH_COOLDOWN_MS) {
+          sendJson(ws, { type: "error", error: "Relay fetch rate limit exceeded" });
+          return;
+        }
+
+        lastRelayFetchAt = now;
         await ensureRelayQueueMessageSignatureColumns();
 
         const [rows] = await pool.query(
@@ -694,13 +773,18 @@ wss.on("connection", (ws) => {
             AND acked_at IS NULL
             AND expires_at > UTC_TIMESTAMP()
           ORDER BY created_at ASC
+          LIMIT ?
           `,
-          [authedDeviceId]
+          [authedDeviceId, RELAY_FETCH_LIMIT + 1]
         );
+        const hasMore = rows.length > RELAY_FETCH_LIMIT;
+        const limitedRows = rows.slice(0, RELAY_FETCH_LIMIT);
 
         sendJson(ws, {
           type: "dm:relayItems",
-          items: rows.map((row) => ({
+          hasMore,
+          limit: RELAY_FETCH_LIMIT,
+          items: limitedRows.map((row) => ({
             relayId: row.id,
             messageId: row.message_id,
             conversationId: row.conversation_id,
@@ -794,6 +878,14 @@ wss.on("connection", (ws) => {
       }
     }
   });
+
+  ws.on("error", (error) => {
+    console.warn("[websocket] connection error", error);
+  });
+});
+
+server.on("error", (error) => {
+  logFatalAndExit("server error", error);
 });
 
 server.listen(process.env.PORT || 3010, () => {

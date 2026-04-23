@@ -103,3 +103,11 @@ exposeFrozenApi("attachmentTransfers", {
   finishIncomingDownload: (payload) => ipcRenderer.invoke("attachment-transfers:finish-incoming-download", payload),
   cancelIncomingDownload: (payload) => ipcRenderer.invoke("attachment-transfers:cancel-incoming-download", payload)
 });
+
+exposeFrozenApi("fileShares", {
+  createOrReuse: (payload) => ipcRenderer.invoke("file-shares:create-or-reuse", payload),
+  get: (payload) => ipcRenderer.invoke("file-shares:get", payload),
+  list: () => ipcRenderer.invoke("file-shares:list"),
+  reset: (payload) => ipcRenderer.invoke("file-shares:reset", payload),
+  prepareDownload: (payload) => ipcRenderer.invoke("file-shares:prepare-download", payload)
+});

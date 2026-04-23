@@ -1,0 +1,186 @@
+**Default DM Profile Descriptions**
+- Added a default DM profile description flow so users can keep one global profile bio for friend/DM contexts without affecting server-specific profile descriptions.
+- Extended the core user-profile payloads so `profileDescription` is available as part of the standard user profile shape instead of only living in isolated UI state.
+- Updated profile saving so the user’s default DM profile description can be edited and persisted from the client profile/settings UI.
+- Added a friend-only fetch path so a user can download a DM friend’s default profile description only when the friendship is accepted.
+- Kept per-server description behavior intact, so server-scoped descriptions continue to work independently from the new default DM profile description.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\chatapp-core\user_profile.php](C:\Users\samuel.lamberg\Desktop\'\Chatapp\chatapp-core\user_profile.php:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\chatapp-core\auth\_bootstrap.php](C:\Users\samuel.lamberg\Desktop\'\Chatapp\chatapp-core\auth\_bootstrap.php:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\chatapp-core\auth\profile.php](C:\Users\samuel.lamberg\Desktop\'\Chatapp\chatapp-core\auth\profile.php:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\actions.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\actions.js:1)
+
+**Profile Description Auto-Load Settings**
+- Added `autoLoadProfileDescriptions` to client settings so users can decide whether DM friend profile descriptions should be fetched automatically.
+- Added default, sanitize, import, and export support for the new setting.
+- Added setup-wizard support so the user can opt out during onboarding instead of having to discover the setting later.
+- Updated onboarding completion behavior so the selected value is persisted immediately when setup finishes.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\clientSettings.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\clientSettings.js:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\InitialSetupWizard.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\InitialSetupWizard.jsx:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\onboarding.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\onboarding.js:1)
+
+**Friend Settings And Profile Surface**
+- Moved friend profile information out of the old conversation-settings placement and into a dedicated friend settings flow opened from the right-click friend menu.
+- Added a clearer split between conversation controls and friend/profile controls, so profile data, mute state, danger actions, and downloaded profile data live in one place.
+- Added a dedicated friend settings modal with support for:
+  - friend profile info
+  - downloaded default DM profile description
+  - mute state
+  - danger-zone actions
+- Added an inline danger-zone confirmation step so remove friend and hard delete friend are not one-click destructive actions anymore.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\components\FriendContextMenu.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\components\FriendContextMenu.jsx:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\components\FriendConversationSettingsModal.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\components\FriendConversationSettingsModal.jsx:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx:1)
+
+**Friend Mute Durations And Notification Rules**
+- Expanded friend mute behavior so a user can mute a friend for:
+  - 15 min
+  - 30 min
+  - 1 hour
+  - 2 hours
+  - 4 hours
+  - 6 hours
+  - 8 hours
+  - 12 hours
+  - 24 hours
+  - indefinitely
+- Added timed mute expiry so mutes automatically stop suppressing desktop notifications after the selected duration.
+- Persisted per-friend mute state in client settings and used that state when deciding whether desktop notifications should be shown.
+- Updated desktop notification behavior so the current user’s `busy` presence suppresses desktop toasts globally, while leaving unread badges and in-app unread state alone.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\clientSettings.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\clientSettings.js:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\renderer.jsx:1)
+
+**Conversation Settings, Modal Layout, And Friends View Fixes**
+- Fixed the DM conversation settings popout so it can scroll instead of clipping content at smaller heights.
+- Widened and reflowed the friend settings popout to make long content and stacked controls fit more naturally.
+- Improved the friend conversation scrollbar styling so the main conversation area and settings popouts look more deliberate and readable.
+- Adjusted the friends home layout so the friends header integrates with the layout more tightly and the conversation pane can stretch more fully across the available main content width.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\index.css](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\index.css:1)
+
+**Shared Profile Surface Redesign**
+- Redesigned the sidebar `ProfileDock` so the self-profile entry is now a richer anchored profile surface instead of just a small bottom-row trigger.
+- Introduced a shared profile card language between the self profile dock and friend settings/profile sections so the two surfaces feel like one system.
+- Treated `profileDescription` as the default user bio and added `profileGames` as a first-class ordered list of manual game titles.
+- Wired `profileGames` through the backend profile payloads, auth profile update flow, friend DM profile fetch path, client settings/profile editor, and both self/friend profile displays.
+- Added local-only friend notes so the local user can save personal notes about a friend without syncing those notes to the backend.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\ProfileDock.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\ProfileDock.jsx:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\ClientSettingsModal.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\ClientSettingsModal.jsx:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx:1)
+
+**Self Profile Dock Layout Fixes**
+- Fixed the self-profile dock clipping/cramping issue that made the open profile card look broken in the sidebar.
+- Widened the open dock card moderately so the header, bio, games section, and presence area have enough room to breathe.
+- Allowed the self-profile name and handle to wrap instead of forcing ellipsis in the open card.
+- Improved wrapping for presence helper copy and footer note text so those lines no longer clip awkwardly.
+- Reflowed the header actions so narrow widths do not crowd the avatar/name/status section.
+- Added a narrow-width fallback layout so the hero/actions area re-stacks more cleanly instead of compressing into unreadable rows.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\index.css](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\index.css:1)
+
+**Client Settings Reorganization**
+- Moved manual update checking into Client Settings instead of keeping a top-bar update action.
+- Kept the passive update banner/state behavior so updates still surface naturally after a check.
+- Moved diagnostics into the Advanced area so the settings structure is cleaner and less mixed.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\ClientSettingsModal.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\ClientSettingsModal.jsx:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\renderer.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\renderer.jsx:1)
+
+**Device Verification Follow-Up**
+- Added a `Do not verify` path for stale device verification entries so outdated device rows can be hidden from the verification UI instead of sitting there forever as noise.
+- This is specifically meant to help when one real installation has left behind multiple stale device records after updates, reinstalls, or local key rotation.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\clientSettings.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\clientSettings.js:1)
+
+**Reusable DM File Shares**
+- Added a reusable local file-share system for DM file transfers on top of the existing one-off attachment transfer flow.
+- Repeated shares of the same unchanged file path now reuse a stable local `shareId` instead of forcing a brand-new share every time the file is sent in DMs.
+- Added a persistent local file-share registry in the Electron transfer layer so reusable shares survive beyond one in-memory transfer session.
+- Added pure share-registry state logic in [shareRegistryCore.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\transfers\shareRegistryCore.js:1) so the reuse/rotation/deprecation behavior is handled consistently and can be unit-tested directly.
+- Each reusable share now tracks:
+  - `shareId`
+  - local file path
+  - normalized path key
+  - file name
+  - mime type
+  - file size
+  - modified time
+  - created/updated timestamps
+  - deprecated timestamp
+  - deprecated reason
+  - replacement share id when applicable
+- Reuse behavior now works like this:
+  - same path + same size/mtime = reuse existing share id
+  - same path + changed size/mtime = mark old share deprecated and auto-create a replacement share
+  - missing/unreadable path = mark share deprecated/missing
+- Added manual reset support so an active share can be rotated on demand and the old share is marked deprecated/replaced immediately.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\transfers\service.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\transfers\service.js:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\transfers\shareRegistryCore.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\transfers\shareRegistryCore.js:1)
+
+**Reusable Share Transport And Security**
+- Kept the existing encrypted DM chunk-transfer transport instead of turning reusable shares into a raw static-link system.
+- Reusable shares do not reuse the same encrypted transfer payload forever.
+- Each actual download request creates a fresh outgoing transfer session with a new transfer id and a fresh per-download encryption secret.
+- The DM message can carry a stable `shareId`, but the actual file delivery still uses the current `dm:file:request`, `dm:file:ready`, `dm:file:chunk`, and `dm:file:complete` realtime flow.
+- Before serving a reusable share, the sender now revalidates the local file and auto-rotates/deprecates the share if the file changed or disappeared.
+- This keeps the reusable share identity stable from the UI/user perspective while avoiding a forever-reused static transfer secret behind the scenes.
+
+**New Electron / IPC Share APIs**
+- Added new preload/main IPC APIs for reusable file shares in:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main.js:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\preload.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\preload.js:1)
+- Added operations for:
+  - create-or-reuse share
+  - get share metadata
+  - list shares
+  - reset share
+  - prepare a per-download transfer from a share
+- Extended the DM attachment normalization/materialization path in [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\dm\service.js](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\dm\service.js:1) so attachments can now be backed by either:
+  - one-off `transferId`
+  - reusable `shareId`
+
+**DM File Share UI Behavior**
+- Direct-message file picking now prefers reusable local file shares when the selected file still has a usable local file path.
+- If the selected file does not provide a usable path for reusable sharing, the old one-off attachment path still works as fallback.
+- Composer attachment chips now visually distinguish reusable shares from one-off attachments.
+- Message attachment cards now show clearer share states for:
+  - active reusable share
+  - deprecated/replaced share
+  - missing file share
+- Outgoing reusable share cards now show a `Reset link` action so the sender can rotate the share manually without having to resend a brand-new attachment flow from scratch.
+- Deprecated shares now look visibly deprecated instead of pretending to be normal active download targets.
+- Incoming share downloads support `shareId` requests while still using a fresh per-download transfer id behind the scenes for chunk streaming.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx:1)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\components\FriendsConversationPanel.jsx](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\components\FriendsConversationPanel.jsx:1)
+
+**Renderer Styling For Share States**
+- Added reusable-share styling for composer chips in [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\index.css](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\index.css:1).
+- Added deprecated-state styling for message attachment cards.
+- Added secondary button styling for reset-link actions.
+- Added note styling for replaced/deprecated share explanations.
+
+**Tests And Verification**
+- Added a dedicated reusable-share registry test in [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\tests\file-share-registry.test.mjs](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\tests\file-share-registry.test.mjs:1).
+- The new test covers:
+  - creating a new share
+  - reusing an unchanged share
+  - auto-rotating when file metadata changes
+  - replaced-share resolution
+  - missing-file deprecation
+  - manual reset behavior
+- Updated [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\tests\run-tests.mjs](C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\tests\run-tests.mjs:1) so the new share-registry test runs with the rest of the suite.
+- Verified today’s work with:
+  - `npm test`
+  - `npm exec vite -- build --config vite.renderer.config.mjs`
+- Existing non-blocking warnings still remain:
+  - Node module-type warning during tests
+  - Vite large chunk warning during build

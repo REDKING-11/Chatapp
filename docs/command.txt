@@ -9,11 +9,31 @@ sudo install -m 644 /home/ubuntu/app.js /var/www/chatapp-realtime/app.js && \
 sudo install -m 644 /home/ubuntu/package.json /var/www/chatapp-realtime/package.json && \
 sudo install -m 600 /home/ubuntu/.env /var/www/chatapp-realtime/.env && \
 sudo install -m 644 /home/ubuntu/presence.js /var/www/chatapp-realtime/presence.js && \
+sudo install -m 644 /home/ubuntu/delivery.js /var/www/chatapp-realtime/delivery.js && \
 cd /var/www/chatapp-realtime && \
 sudo npm install --omit=dev && \
+sudo install -m 644 /home/ubuntu/deploy/chatapp-realtime.service /etc/systemd/system/chatapp-realtime.service && \
+sudo systemctl daemon-reload && \
+sudo systemctl enable chatapp-realtime && \
+sudo systemctl reset-failed chatapp-realtime && \
 sudo systemctl restart chatapp-realtime && \
 sleep 2 && \
 curl http://127.0.0.1:3010/health
+
+# after a forced reboot, capture why the previous boot died
+sudo install -m 755 /home/ubuntu/deploy/lightsail-resource-snapshot.sh /usr/local/bin/chatapp-resource-snapshot
+sudo chatapp-resource-snapshot | sudo tee /var/log/chatapp-resource-snapshot.log
+
+# if the 1 GB Lightsail instance has no swap, add a small safety buffer
+free -h
+swapon --show
+if ! swapon --show | grep -q '/swapfile'; then
+  sudo fallocate -l 1G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+fi
+grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 # Lightsail HTTPS/WSS edge
 sudo cp /home/ubuntu/deploy/nginx-chatapp-core.lightsail.conf /etc/nginx/sites-available/chatapp

@@ -26,6 +26,7 @@ import {
 import { readSecureDmStore, writeSecureDmStore } from "./storage";
 import {
   buildOutgoingAttachmentPayload,
+  buildOutgoingFileSharePayload,
   registerIncomingAttachmentPayload
 } from "../transfers/service";
 import { normalizeAppDiagnosticError } from "../../lib/diagnostics.js";
@@ -515,13 +516,18 @@ function normalizeAttachments(value) {
 
       return {
         transferId: entry.transferId ? String(entry.transferId) : "",
+        shareId: entry.shareId ? String(entry.shareId) : "",
         fileName: entry.fileName ? String(entry.fileName) : "file",
         mimeType: entry.mimeType ? String(entry.mimeType) : "application/octet-stream",
         fileSize: Math.max(0, Number(entry.fileSize) || 0),
+        status: entry.status ? String(entry.status) : "active",
+        deprecatedAt: entry.deprecatedAt ? String(entry.deprecatedAt) : "",
+        deprecatedReason: entry.deprecatedReason ? String(entry.deprecatedReason) : "",
+        replacedByShareId: entry.replacedByShareId ? String(entry.replacedByShareId) : "",
         algorithm: entry.encryption?.algorithm ? String(entry.encryption.algorithm) : undefined
       };
     })
-    .filter((entry) => entry && entry.transferId);
+    .filter((entry) => entry && (entry.transferId || entry.shareId));
 }
 
 function normalizeInlineEmbeds(value) {
@@ -534,7 +540,17 @@ function materializeEncryptedAttachments(value) {
   }
 
   return value.map((entry) => {
-    if (!entry || typeof entry !== "object" || !entry.transferId) {
+    if (!entry || typeof entry !== "object") {
+      return null;
+    }
+
+    if (entry.shareId) {
+      return buildOutgoingFileSharePayload({
+        shareId: entry.shareId
+      });
+    }
+
+    if (!entry.transferId) {
       return null;
     }
 

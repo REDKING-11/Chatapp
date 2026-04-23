@@ -38,12 +38,17 @@ $stmt = $db->prepare('
       AND acked_at IS NULL
       AND expires_at > UTC_TIMESTAMP()
     ORDER BY id ASC
+    LIMIT ' . (DM_RELAY_FETCH_LIMIT + 1) . '
 ');
 $stmt->execute([$deviceId]);
 $rows = $stmt->fetchAll();
+$hasMore = count($rows) > DM_RELAY_FETCH_LIMIT;
+$rows = array_slice($rows, 0, DM_RELAY_FETCH_LIMIT);
 
 jsonResponse([
     'relayTtlSeconds' => DM_RELAY_TTL_SECONDS,
+    'hasMore' => $hasMore,
+    'limit' => DM_RELAY_FETCH_LIMIT,
     'items' => array_map(function ($row) use ($db) {
         $senderDevice = null;
 
