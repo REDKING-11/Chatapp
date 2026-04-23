@@ -63,11 +63,12 @@ $totpState = authGetTotpState($db, (int)$session['id']);
 
 jsonResponse([
     'ok' => true,
-    'user' => authBuildUserPayload($session),
+    'user' => authBuildUserPayload($session, $db),
     'currentSession' => authBuildCurrentSessionPayload($session, $currentLastSeenAt),
     'mfa' => [
         'enabled' => !empty($totpState['enabled']),
         'enabledAt' => $totpState['enabledAt'],
         'lastVerifiedAt' => $totpState['lastVerifiedAt']
-    ]
+    ],
+    'recovery' => authBuildRecoveryPayload($db, (int)$session['id'], $session)
 ]);

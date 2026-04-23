@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { renderMarkdownToHtml } from "../lib/markdown";
 import { enhanceAppLinks, parseChatappHref } from "../lib/appLinks";
 import { isDebugModeEnabled } from "../lib/debug";
@@ -11,9 +11,22 @@ import mermaid from "mermaid";
 import Chart from "chart.js/auto";
 
 let mermaidInitialized = false;
+let mermaidRenderNonce = 0;
 
 function decodePayload(value) {
     return decodeURIComponent(String(value || ""));
+}
+
+function getStableJsonSignature(value) {
+    if (!value) {
+        return "";
+    }
+
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
 }
 
 function buildChartConfig(rawPayload) {
@@ -50,6 +63,14 @@ function appendSecureDmImageFallback(node, label, detail) {
     node.appendChild(fallback);
 }
 
+function renderEnhancedError(node, error, fallbackMessage) {
+    const message = String(error?.message || error || fallbackMessage || "Could not render content.");
+    const pre = document.createElement("pre");
+    pre.className = "md-enhanced-error";
+    pre.textContent = message;
+    node.replaceChildren(pre);
+}
+
 export default function MarkdownContent({
     as: Tag = "div",
     className,
@@ -68,6 +89,14 @@ export default function MarkdownContent({
         () => createInlineImageEmbedMap(secureDmEmbeds),
         [secureDmEmbeds]
     );
+    const linkContextSignature = useMemo(
+        () => getStableJsonSignature(linkContext),
+        [linkContext]
+    );
+    const secureDmDiagnosticSignature = useMemo(
+        () => getStableJsonSignature(secureDmDiagnosticContext),
+        [secureDmDiagnosticContext]
+    );
     const html = useMemo(
         () => renderMarkdownToHtml(value, {
             inline,
@@ -77,13 +106,20 @@ export default function MarkdownContent({
         [allowImages, inline, secureDmImageMode, value]
     );
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const container = containerRef.current;
         if (!container) {
             return undefined;
         }
 
+        container.innerHTML = html;
+
         const chartInstances = [];
+        let disposed = false;
+
+        function isEnhancementNodeActive(node) {
+            return !disposed && container.isConnected && node?.isConnected && container.contains(node);
+        }
 
         function handleContainerClick(event) {
             const anchor = event.target instanceof HTMLElement
@@ -254,19 +290,48 @@ export default function MarkdownContent({
                 }
 
                 for (const node of mermaidNodes) {
-                    const source = decodePayload(node.getAttribute("data-md-source"));
-                    node.textContent = source;
-                }
+                    if (!isEnhancementNodeActive(node)) {
+                        continue;
+                    }
 
-                await mermaid.run({
-                    nodes: mermaidNodes
-                });
+                    const source = decodePayload(node.getAttribute("data-md-source"));
+                    const renderToken = `markdown-mermaid:${++mermaidRenderNonce}`;
+                    node.setAttribute("data-mermaid-render-token", renderToken);
+
+                    try {
+                        const { svg, bindFunctions } = await mermaid.render(
+                            `markdown-mermaid-${mermaidRenderNonce}`,
+                            source
+                        );
+
+                        if (
+                            !isEnhancementNodeActive(node)
+                            || node.getAttribute("data-mermaid-render-token") !== renderToken
+                        ) {
+                            continue;
+                        }
+
+                        node.innerHTML = svg;
+                        bindFunctions?.(node);
+                    } catch (error) {
+                        if (
+                            isEnhancementNodeActive(node)
+                            && node.getAttribute("data-mermaid-render-token") === renderToken
+                        ) {
+                            renderEnhancedError(node, error, "Could not render Mermaid diagram.");
+                        }
+                    }
+                }
             }
 
             for (const node of chartNodes) {
+                if (!isEnhancementNodeActive(node)) {
+                    continue;
+                }
+
                 try {
                     const config = buildChartConfig(decodePayload(node.getAttribute("data-md-source")));
-                    node.innerHTML = "";
+                    node.replaceChildren();
                     const canvas = document.createElement("canvas");
                     node.appendChild(canvas);
                     const context = canvas.getContext("2d");
@@ -278,25 +343,31 @@ export default function MarkdownContent({
                     const chart = new Chart(context, config);
                     chartInstances.push(chart);
                 } catch (error) {
-                    node.innerHTML = `<pre class="md-enhanced-error">${String(error?.message || error || "Invalid chart config")}</pre>`;
+                    if (isEnhancementNodeActive(node)) {
+                        renderEnhancedError(node, error, "Invalid chart config");
+                    }
                 }
             }
         }
 
-        enhanceContent();
+        enhanceContent().catch((error) => {
+            if (!disposed) {
+                console.warn("Failed to enhance markdown content:", error);
+            }
+        });
         container.addEventListener("click", handleContainerClick);
 
         return () => {
+            disposed = true;
             container.removeEventListener("click", handleContainerClick);
             chartInstances.forEach((chart) => chart.destroy());
         };
-    }, [debugMode, html, linkContext, secureDmDiagnosticContext, secureDmEmbedMap, secureDmImageMode, value]);
+    }, [debugMode, html, linkContextSignature, secureDmDiagnosticSignature, secureDmEmbedMap, secureDmImageMode, value]);
 
     return (
         <Tag
             ref={containerRef}
             className={className}
-            dangerouslySetInnerHTML={{ __html: html }}
             {...restProps}
         />
     );

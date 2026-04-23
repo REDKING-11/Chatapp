@@ -11,3 +11,11 @@ if (file_exists(__DIR__ . '/.env')) {
 
     define('APP_SECRET', getenv('APP_SECRET') ?: 'fallback_secret');
 }
+
+if (!defined('CHATAPP_MAIL_FROM')) {
+    define('CHATAPP_MAIL_FROM', getenv('CHATAPP_MAIL_FROM') ?: 'no-reply@chatapp.local');
+}
+
+if (!defined('CHATAPP_MAIL_FROM_NAME')) {
+    define('CHATAPP_MAIL_FROM_NAME', getenv('CHATAPP_MAIL_FROM_NAME') ?: 'Chatapp');
+}

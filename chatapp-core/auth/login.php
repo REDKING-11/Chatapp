@@ -59,5 +59,5 @@ jsonResponse([
     'ok' => true,
     'token' => $sessionData['token'],
     'session' => $sessionData['session'],
-    'user' => authBuildUserPayload($user)
+    'user' => authBuildUserPayload($user, $db)
 ]);

@@ -15,7 +15,6 @@ sudo install -m 644 /home/ubuntu/presence.js /var/www/chatapp-realtime/presence.
 sudo install -m 644 /home/ubuntu/delivery.js /var/www/chatapp-realtime/delivery.js && \
 cd /var/www/chatapp-realtime && \
 sudo npm install --omit=dev && \
-sudo install -m 644 /home/ubuntu/deploy/chatapp-realtime.service /etc/systemd/system/chatapp-realtime.service && \
 sudo systemctl daemon-reload && \
 sudo systemctl enable chatapp-realtime && \
 sudo systemctl reset-failed chatapp-realtime && \

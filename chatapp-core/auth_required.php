@@ -57,6 +57,7 @@ function requireAuth(): array {
         'id' => (int)$session['id'],
         'username' => $session['username'],
         'email' => $session['email'],
+        'emailVerifiedAt' => $session['email_verified_at'] ?? null,
         'phone' => $session['phone'],
         'sessionPublicId' => $session['public_id'] ?? null,
         'mfaCompleted' => !empty($session['mfa_completed_at'])

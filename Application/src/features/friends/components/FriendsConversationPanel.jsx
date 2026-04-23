@@ -12,6 +12,7 @@ import { buildAppLinkContext } from "../../../lib/appLinks";
 import { applyComposerEntitySuggestion, getComposerEntitySuggestions } from "../../../lib/composerEntities";
 import { isDebugModeEnabled } from "../../../lib/debug";
 import { loadPinnedMessages, savePinnedMessages } from "../../../lib/messagePins";
+import { getElementViewportRect } from "../../../lib/popoverPosition.js";
 import {
     filterReferencedInlineImageEmbeds,
     getLegacyInlineImageEmbeds,
@@ -73,6 +74,22 @@ function getDirectFriendChatLabel(directFriend, nameMode) {
         || directFriend?.friendUsernameBase
         || directFriend?.friendUsername
         || "Friend";
+}
+
+function getCurrentUserChatHandle(currentUser) {
+    if (currentUser?.usernameTag && currentUser?.usernameBase) {
+        return `${currentUser.usernameBase}#${currentUser.usernameTag}`;
+    }
+
+    return currentUser?.handle || currentUser?.username || "unknown";
+}
+
+function getParticipantChatHandle(participant) {
+    return participant?.handle || participant?.username || "unknown";
+}
+
+function getDirectFriendChatHandle(directFriend) {
+    return directFriend?.friendHandle || directFriend?.friendUsername || "unknown";
 }
 
 function getMessageDisplayName({ message, currentUser, participantsById, directFriend, nameMode }) {
@@ -153,6 +170,58 @@ function getMessageSenderUserId({ message, currentUser, directFriend }) {
     return "";
 }
 
+function buildMessageSenderProfileTarget({
+    message,
+    currentUser,
+    participantsById,
+    directFriend,
+    displayName,
+    senderUserId,
+    avatarUrl
+}) {
+    const normalizedSenderId = String(senderUserId || "").trim();
+
+    if (isCurrentUserMessage(message, currentUser)) {
+        return {
+            userId: String(currentUser?.id || normalizedSenderId || ""),
+            displayName,
+            handle: getCurrentUserChatHandle(currentUser),
+            avatarUrl,
+            source: "self"
+        };
+    }
+
+    const participant = normalizedSenderId ? participantsById?.[normalizedSenderId] : null;
+
+    if (participant) {
+        return {
+            userId: normalizedSenderId,
+            displayName,
+            handle: getParticipantChatHandle(participant),
+            avatarUrl,
+            source: "group"
+        };
+    }
+
+    if (directFriend?.friendUserId != null) {
+        return {
+            userId: String(directFriend.friendUserId),
+            displayName,
+            handle: getDirectFriendChatHandle(directFriend),
+            avatarUrl,
+            source: "friend"
+        };
+    }
+
+    return {
+        userId: normalizedSenderId,
+        displayName,
+        handle: "unknown",
+        avatarUrl,
+        source: "unknown"
+    };
+}
+
 function getReplyPreviewBody(text) {
     const normalizedText = replaceInlineImageMarkdownWithPlainText(
         text && typeof text === "object" ? text.body : text
@@ -206,6 +275,33 @@ function buildConversationLinkContext({ currentUser, participantsById = {}, dire
         currentUser,
         users
     });
+}
+
+function buildGroupParticipantsSignature(participants) {
+    return (participants || [])
+        .map((participant) => [
+            participant?.userId,
+            participant?.username,
+            participant?.usernameBase,
+            participant?.handle,
+            participant?.displayName,
+            participant?.displayLabel
+        ].map((value) => String(value ?? "")).join("\u001f"))
+        .join("\u001e");
+}
+
+function buildDirectFriendLinkSignature(friend) {
+    if (!friend) {
+        return "";
+    }
+
+    return [
+        friend.friendUserId,
+        friend.friendUsername,
+        friend.friendUsernameBase,
+        friend.friendHandle,
+        friend.friendDisplayName
+    ].map((value) => String(value ?? "")).join("\u001f");
 }
 
 function formatFileSize(bytes) {
@@ -725,15 +821,19 @@ function MessageList({
     onCopyMessage = null,
     onTogglePin = null,
     onDownloadAttachment = null,
+    onDirectResetAttachmentShare = null,
     messageDeliveryById = {},
     transferStates = {},
+    fileShareStates = {},
     pinnedMessageIds = [],
     selectedMessageId = null,
     onSelectMessage = null,
     reactionPickerRequest = null,
     markdownLinkContext = null,
     secureDmImageMode = false,
-    conversationId = ""
+    conversationId = "",
+    onOpenUserProfile = null,
+    onOpenUserContextMenu = null
 }) {
     const pinnedMessageIdSet = useMemo(
         () => new Set((Array.isArray(pinnedMessageIds) ? pinnedMessageIds : []).map(String)),
@@ -743,6 +843,44 @@ function MessageList({
         () => Object.fromEntries(messages.map((message) => [String(message.messageId), message])),
         [messages]
     );
+
+    function handleUserProfileClick(event, target) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const anchorRect = getElementViewportRect(event.currentTarget);
+        onOpenUserProfile?.({
+            ...target,
+            anchorRect
+        });
+    }
+
+    function handleUserContextMenu(event, target) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        onOpenUserContextMenu?.({
+            ...target,
+            x: event.clientX,
+            y: event.clientY
+        });
+    }
+
+    function handleUserTriggerKeyDown(event, target) {
+        if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const anchorRect = getElementViewportRect(event.currentTarget);
+        onOpenUserContextMenu?.({
+            ...target,
+            x: (anchorRect?.left || 0) + 12,
+            y: anchorRect?.bottom || 0
+        });
+    }
 
     return (
         <div className={`friends-message-list align-${messageAlignment}`} ref={messageListRef}>
@@ -764,6 +902,15 @@ function MessageList({
                         directFriend
                     });
                     const avatarUrl = identityStyle === "profileMedia" ? avatarUrls[senderUserId] : null;
+                    const senderProfileTarget = buildMessageSenderProfileTarget({
+                        message,
+                        currentUser,
+                        participantsById,
+                        directFriend,
+                        displayName,
+                        senderUserId,
+                        avatarUrl
+                    });
                     const compactLabel = groupInitialsByUserId[senderUserId] || getInitials(displayName);
                     const messageBody = getMessageBody(message.body);
                     const attachments = Array.isArray(message.attachments) ? message.attachments : [];
@@ -799,17 +946,32 @@ function MessageList({
                             className={`friend-message-row ${identityStyle === "minimal" ? "is-minimal" : ""} ${isOutgoing ? "outgoing-friend-row" : "incoming-friend-row"} ${String(selectedMessageId || "") === String(message.messageId) ? "is-selected" : ""}`}
                             onClick={() => onSelectMessage?.({ ...message, author: displayName })}
                         >
-                            <div className="friend-message-avatar">
+                            <button
+                                type="button"
+                                className="friend-message-avatar friend-message-user-trigger"
+                                aria-label={`Open ${displayName} profile`}
+                                onClick={(event) => handleUserProfileClick(event, senderProfileTarget)}
+                                onContextMenu={(event) => handleUserContextMenu(event, senderProfileTarget)}
+                                onKeyDown={(event) => handleUserTriggerKeyDown(event, senderProfileTarget)}
+                            >
                                 {avatarUrl ? (
                                     <img src={avatarUrl} alt="" />
                                 ) : (
                                     compactLabel
                                 )}
-                            </div>
+                            </button>
                             <div className="friend-message-stack">
                                 <div className={`friend-message-bubble ${isOutgoing ? "outgoing-friend-message" : "incoming-friend-message"}`}>
                                     <div className="friend-message-meta">
-                                        <strong>{displayName}</strong>
+                                        <button
+                                            type="button"
+                                            className="friend-message-author-button"
+                                            onClick={(event) => handleUserProfileClick(event, senderProfileTarget)}
+                                            onContextMenu={(event) => handleUserContextMenu(event, senderProfileTarget)}
+                                            onKeyDown={(event) => handleUserTriggerKeyDown(event, senderProfileTarget)}
+                                        >
+                                            {displayName}
+                                        </button>
                                         <time>{new Date(message.createdAt).toLocaleString()}</time>
                                         {message.editedAt ? <small>edited</small> : null}
                                         {deliveryMeta ? (
@@ -1034,7 +1196,10 @@ function GroupConversationView({
     onGroupDownloadAttachment,
     groupAttachments,
     transferStates,
-    onCancelGroupAction
+    fileShareStates,
+    onCancelGroupAction,
+    onOpenUserProfile,
+    onOpenUserContextMenu
 }) {
     const composerRef = useRef(null);
     const [selectedMessageId, setSelectedMessageId] = useState(null);
@@ -1050,24 +1215,28 @@ function GroupConversationView({
         [selectedGroupConversation?.id]
     );
     const [pinnedMessages, setPinnedMessages] = useState(() => loadPinnedMessages(pinnedScopeKey));
-    const participantsById = Object.fromEntries(
-        (selectedGroupConversation?.participants || []).map((participant) => [
-            String(participant.userId),
-            participant
-        ])
+    const groupParticipantSignature = buildGroupParticipantsSignature(selectedGroupConversation?.participants || []);
+    const participantsById = useMemo(
+        () => Object.fromEntries(
+            (selectedGroupConversation?.participants || []).map((participant) => [
+                String(participant.userId),
+                participant
+            ])
+        ),
+        [groupParticipantSignature]
     );
     const avatarUserIds = useMemo(
         () => (selectedGroupConversation?.participants || [])
             .map((participant) => participant.userId)
             .filter(Boolean),
-        [selectedGroupConversation?.participants]
+        [groupParticipantSignature]
     );
     const identityStyle = clientSettings?.chatIdentityStyle || "profileMedia";
     const nameMode = clientSettings?.chatNameMode || "displayName";
     const messageAlignment = clientSettings?.chatMessageAlignment || "split";
     const groupInitialsByUserId = useMemo(
         () => buildUniqueGroupInitials(selectedGroupConversation?.participants || [], nameMode),
-        [selectedGroupConversation?.participants, nameMode]
+        [groupParticipantSignature, nameMode]
     );
     const avatarUrls = useFriendMessageAvatarUrls({
         userIds: avatarUserIds,
@@ -1319,12 +1488,15 @@ function GroupConversationView({
                 onTogglePin={handleTogglePinnedMessage}
                 onDownloadAttachment={onGroupDownloadAttachment}
                 transferStates={transferStates}
+                fileShareStates={fileShareStates}
                 pinnedMessageIds={resolvedPinnedMessages.map((message) => message.messageId)}
                 selectedMessageId={selectedMessageId}
                 onSelectMessage={(message) => setSelectedMessageId(message.messageId)}
                 reactionPickerRequest={reactionPickerRequest}
                 markdownLinkContext={markdownLinkContext}
                 conversationId={selectedGroupConversation?.id || ""}
+                onOpenUserProfile={onOpenUserProfile}
+                onOpenUserContextMenu={onOpenUserContextMenu}
             />
 
             <MessageActionBanner
@@ -1509,7 +1681,9 @@ function DirectConversationView({
     transferStates,
     fileShareStates,
     onDirectComposerPaste,
-    onCancelDirectAction
+    onCancelDirectAction,
+    onOpenUserProfile,
+    onOpenUserContextMenu
 }) {
     const composerRef = useRef(null);
     const [selectedMessageId, setSelectedMessageId] = useState(null);
@@ -1539,12 +1713,23 @@ function DirectConversationView({
         profileMediaHostUrl,
         enabled: identityStyle === "profileMedia" && clientSettings?.autoLoadProfileAvatars !== false
     });
+    const directFriendLinkSignature = buildDirectFriendLinkSignature(selectedFriend);
+    const directFriendLinkTarget = useMemo(
+        () => selectedFriend ? {
+            friendUserId: selectedFriend.friendUserId,
+            friendUsername: selectedFriend.friendUsername,
+            friendUsernameBase: selectedFriend.friendUsernameBase,
+            friendHandle: selectedFriend.friendHandle,
+            friendDisplayName: selectedFriend.friendDisplayName
+        } : null,
+        [directFriendLinkSignature]
+    );
     const markdownLinkContext = useMemo(
         () => buildConversationLinkContext({
             currentUser,
-            directFriend: selectedFriend
+            directFriend: directFriendLinkTarget
         }),
-        [currentUser, selectedFriend]
+        [currentUser, directFriendLinkTarget]
     );
     const entitySuggestions = useMemo(
         () => getComposerEntitySuggestions(composer, cursorPosition, markdownLinkContext),
@@ -1954,8 +2139,10 @@ function DirectConversationView({
                     onCopyMessage={handleCopyMessage}
                     onTogglePin={handleTogglePinnedMessage}
                     onDownloadAttachment={onDirectDownloadAttachment}
+                    onDirectResetAttachmentShare={onDirectResetAttachmentShare}
                     messageDeliveryById={messageDeliveryById}
                     transferStates={transferStates}
+                    fileShareStates={fileShareStates}
                     pinnedMessageIds={resolvedPinnedMessages.map((message) => message.messageId)}
                     selectedMessageId={selectedMessageId}
                     onSelectMessage={(message) => setSelectedMessageId(message.messageId)}
@@ -1963,6 +2150,8 @@ function DirectConversationView({
                     markdownLinkContext={markdownLinkContext}
                     secureDmImageMode
                     conversationId={selectedFriend?.conversationId || ""}
+                    onOpenUserProfile={onOpenUserProfile}
+                    onOpenUserContextMenu={onOpenUserContextMenu}
                 />
             )}
 

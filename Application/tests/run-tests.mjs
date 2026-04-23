@@ -10,5 +10,6 @@ import "./app-updates.test.mjs";
 import "./file-share-registry.test.mjs";
 import "./download-integrity.test.mjs";
 import "./file-transfer-flow.test.mjs";
+import "./popover-position.test.mjs";
 
 console.log("run-tests.mjs: ok");

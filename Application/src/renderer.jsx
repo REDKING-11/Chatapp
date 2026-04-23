@@ -10,6 +10,7 @@ import InitialSetupWizard from "./components/InitialSetupWizard";
 import JoinedServersSidebar from "./components/JoinedServerSidebar";
 import JoinServerModal from "./components/JoinServerModal";
 import QuickSwitcherModal from "./components/QuickSwitcherModal";
+import RecoveryKeysGateModal from "./components/RecoveryKeysGateModal";
 import ShortcutInfoModal from "./components/ShortcutInfoModal";
 import ServerSettingsPanel from "./components/ServerSettingsPanel";
 import UpdateBanner from "./components/UpdateBanner";
@@ -127,6 +128,7 @@ function App() {
     const [hasSeenShortcutInfo, setHasSeenShortcutInfo] = useState(false);
     const [updateState, setUpdateState] = useState(null);
     const [dismissedUpdateBannerKey, setDismissedUpdateBannerKey] = useState("");
+    const [recoveryGateKeys, setRecoveryGateKeys] = useState([]);
 
     const serverThemeRef = useRef(null);
     const serverCustomCssRef = useRef(null);
@@ -1017,6 +1019,7 @@ function App() {
         setShowSettings(false);
         setCustomization(null);
         setSettingsServer(null);
+        setRecoveryGateKeys([]);
     }
 
     function setServerStatus(serverId, status) {
@@ -1089,6 +1092,7 @@ function App() {
         await clearAuthSession();
         authExpiryHandlingRef.current = false;
         setAuthNotice("");
+        setRecoveryGateKeys([]);
     }
 
     function handleClientSettingChange(key, value) {
@@ -1190,6 +1194,7 @@ function App() {
                 onAuthSuccess={(user) => {
                     authExpiryHandlingRef.current = false;
                     setAuthNotice("");
+                    setRecoveryGateKeys([]);
                     setCurrentUser(user);
                 }}
             />
@@ -1217,6 +1222,13 @@ function App() {
         : (isLightTheme ? infoBlackIcon : infoWhiteIcon);
     const updateBannerKey = getUpdateBannerKey(updateState);
     const showUpdateBanner = Boolean(updateBannerKey && updateBannerKey !== dismissedUpdateBannerKey);
+    const showRecoveryKeysGate = Boolean(
+        currentUser
+        && (
+            recoveryGateKeys.length > 0
+            || currentUser?.recovery?.recoveryKeysRequired
+        )
+    );
     const quickSwitcherItems = [
         {
             id: "nav:friends",
@@ -1418,6 +1430,19 @@ function App() {
                     onTabReset={handleClientSettingsTabReset}
                     onLogout={handleLogout}
                     onClose={() => setShowClientSettings(false)}
+                />
+            ) : null}
+
+            {showRecoveryKeysGate ? (
+                <RecoveryKeysGateModal
+                    currentUser={currentUser}
+                    recoveryKeys={recoveryGateKeys}
+                    onUserUpdated={(user) => {
+                        setCurrentUser(user);
+                        saveAuthUser(user);
+                    }}
+                    onRecoveryKeysChange={setRecoveryGateKeys}
+                    onLogout={handleLogout}
                 />
             ) : null}
 

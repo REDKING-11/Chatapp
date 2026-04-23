@@ -3,9 +3,69 @@ import { DISAPPEARING_MESSAGE_OPTIONS, RELAY_RETENTION_OPTIONS } from "../../dm/
 import { fetchUserDmDevices } from "../../dm/actions";
 import { getStoredAuthToken } from "../../session/actions";
 
+const MUTE_NOTIFICATION_OPTIONS = [
+    { label: "Off", value: "off" },
+    { label: "15 min", value: 15 * 60 * 1000 },
+    { label: "30 min", value: 30 * 60 * 1000 },
+    { label: "1 hour", value: 60 * 60 * 1000 },
+    { label: "2 hours", value: 2 * 60 * 60 * 1000 },
+    { label: "4 hours", value: 4 * 60 * 60 * 1000 },
+    { label: "6 hours", value: 6 * 60 * 60 * 1000 },
+    { label: "8 hours", value: 8 * 60 * 60 * 1000 },
+    { label: "12 hours", value: 12 * 60 * 60 * 1000 },
+    { label: "24 hours", value: 24 * 60 * 60 * 1000 },
+    { label: "Indefinitely", value: "indefinite" }
+];
+
+function getWheelOptionValue(option) {
+    if (!option) {
+        return undefined;
+    }
+
+    return Object.prototype.hasOwnProperty.call(option, "value")
+        ? option.value
+        : option.seconds;
+}
+
+function getWheelOptionId(ariaLabel, value) {
+    return `${String(ariaLabel || "option").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}-${String(value).replace(/[^a-z0-9]+/gi, "-")}`;
+}
+
+function getMuteWheelValue(muteEntry) {
+    if (muteEntry === true) {
+        return "indefinite";
+    }
+
+    if (typeof muteEntry === "number" && Number.isFinite(muteEntry) && muteEntry > Date.now()) {
+        const remainingMs = Math.max(0, muteEntry - Date.now());
+        const timedOptions = MUTE_NOTIFICATION_OPTIONS.filter((option) => typeof option.value === "number");
+        const closestOption = timedOptions.reduce((closest, option) => (
+            Math.abs(option.value - remainingMs) < Math.abs(closest.value - remainingMs)
+                ? option
+                : closest
+        ), timedOptions[0]);
+
+        return closestOption?.value || "off";
+    }
+
+    return "off";
+}
+
+function getMuteStatusLabel(muteEntry) {
+    if (muteEntry === true) {
+        return "Muted indefinitely.";
+    }
+
+    if (typeof muteEntry === "number" && Number.isFinite(muteEntry) && muteEntry > Date.now()) {
+        return `Muted until ${new Date(muteEntry).toLocaleString()}.`;
+    }
+
+    return "Notifications are on.";
+}
+
 function WheelSelect({ options, value, disabled, onChange, ariaLabel }) {
     const selectRef = useRef(null);
-    const selectedIndex = Math.max(0, options.findIndex((option) => option.seconds === value));
+    const selectedIndex = Math.max(0, options.findIndex((option) => Object.is(getWheelOptionValue(option), value)));
     const visibleOffsets = [-1, 0, 1];
 
     function moveSelection(direction) {
@@ -14,9 +74,9 @@ function WheelSelect({ options, value, disabled, onChange, ariaLabel }) {
         }
 
         const nextIndex = Math.max(0, Math.min(options.length - 1, selectedIndex + direction));
-        const nextValue = options[nextIndex]?.seconds;
+        const nextValue = getWheelOptionValue(options[nextIndex]);
 
-        if (nextValue != null && nextValue !== value) {
+        if (nextValue !== undefined && !Object.is(nextValue, value)) {
             onChange(nextValue);
         }
     }
@@ -46,7 +106,7 @@ function WheelSelect({ options, value, disabled, onChange, ariaLabel }) {
             className={`friends-wheel-select ${disabled ? "is-disabled" : ""}`.trim()}
             role="listbox"
             aria-label={ariaLabel}
-            aria-activedescendant={`${ariaLabel}-${value}`}
+            aria-activedescendant={getWheelOptionId(ariaLabel, value)}
             tabIndex={disabled ? -1 : 0}
             onKeyDown={(event) => {
                 if (event.key === "ArrowDown") {
@@ -82,15 +142,15 @@ function WheelSelect({ options, value, disabled, onChange, ariaLabel }) {
 
                         return (
                             <div
-                                key={option.seconds}
-                                id={`${ariaLabel}-${option.seconds}`}
+                                key={String(getWheelOptionValue(option))}
+                                id={getWheelOptionId(ariaLabel, getWheelOptionValue(option))}
                                 role="option"
-                                aria-selected={option.seconds === value}
+                                aria-selected={Object.is(getWheelOptionValue(option), value)}
                                 className={`friends-wheel-option ${toneClass}`.trim()}
                                 aria-disabled={disabled}
                                 onClick={() => {
                                     if (!disabled) {
-                                        onChange(option.seconds);
+                                        onChange(getWheelOptionValue(option));
                                     }
                                 }}
                             >
@@ -121,6 +181,7 @@ export default function FriendConversationSettingsModal({
     pendingDisappearingLabel,
     currentRelayLabel,
     currentDisappearingLabel,
+    friendNote,
     submitting,
     onClose,
     onUndoForget,
@@ -130,12 +191,17 @@ export default function FriendConversationSettingsModal({
     onRetentionAccept,
     onDisappearingRequest,
     onDisappearingAccept,
-    onIgnoreVerificationDevice
+    onIgnoreVerificationDevice,
+    onFriendNoteChange,
+    onSetMuteOption,
+    onRequestRemoveFriend,
+    onRequestHardDeleteFriend
 }) {
     const [verification, setVerification] = useState(null);
     const [verificationLoading, setVerificationLoading] = useState(false);
     const [verificationError, setVerificationError] = useState("");
     const [verificationActionId, setVerificationActionId] = useState("");
+    const [dangerConfirmAction, setDangerConfirmAction] = useState("");
 
     useEffect(() => {
         let cancelled = false;
@@ -196,6 +262,10 @@ export default function FriendConversationSettingsModal({
         selectedFriend?.friendUserId,
         selectedFriend?.friendUsername
     ]);
+
+    useEffect(() => {
+        setDangerConfirmAction("");
+    }, [selectedFriend?.friendUserId]);
 
     async function handleToggleDeviceVerification(deviceId, nextVerified) {
         if (!window.secureDm || !effectiveSelectedFriend?.conversationId) {
@@ -262,6 +332,9 @@ export default function FriendConversationSettingsModal({
         (device) => !ignoredVerificationDeviceIds.includes(String(device.deviceId))
     );
     const hiddenRemoteDeviceCount = Math.max(0, (verification?.remoteDevices || []).length - visibleRemoteDevices.length);
+    const muteEntry = clientSettings?.mutedFriendNotificationsById?.[String(selectedFriend.friendUserId)];
+    const muteWheelValue = getMuteWheelValue(muteEntry);
+    const muteStatusLabel = getMuteStatusLabel(muteEntry);
 
     return (
         <div className="friends-settings-overlay" onClick={onClose}>
@@ -269,7 +342,7 @@ export default function FriendConversationSettingsModal({
                 <div className="friends-settings-header">
                     <div>
                         <h2>Conversation settings</h2>
-                        <p>Manage relay and disappearing-message behavior for this DM.</p>
+                        <p>Manage friend preferences, relay, disappearing messages, and safety for this DM.</p>
                     </div>
 
                     <button
@@ -280,6 +353,38 @@ export default function FriendConversationSettingsModal({
                         x
                     </button>
                 </div>
+
+                <section className="friends-settings-section">
+                    <div className="friends-retention-copy">
+                        <strong>Friend preferences</strong>
+                        <span>Private settings stored only on this device.</span>
+                    </div>
+
+                    <label className="friends-profile-note-field">
+                        <textarea
+                            value={String(friendNote || "")}
+                            onChange={(event) => onFriendNoteChange?.(selectedFriend.friendUserId, event.target.value.slice(0, 500))}
+                            placeholder="Add a private note about this friend"
+                            maxLength={500}
+                        />
+                        <small>{String(friendNote || "").length}/500</small>
+                    </label>
+                </section>
+
+                <section className="friends-settings-section">
+                    <div className="friends-retention-copy">
+                        <strong>Mute notifications</strong>
+                        <span>{muteStatusLabel}</span>
+                    </div>
+
+                    <WheelSelect
+                        options={MUTE_NOTIFICATION_OPTIONS}
+                        value={muteWheelValue}
+                        onChange={(nextValue) => onSetMuteOption?.(selectedFriend, nextValue)}
+                        disabled={submitting}
+                        ariaLabel="Mute notifications"
+                    />
+                </section>
 
                 <div className="friends-retention-copy">
                     <strong>Offline relay window</strong>
@@ -457,6 +562,68 @@ export default function FriendConversationSettingsModal({
                         <small className="friends-retention-note">{verificationError}</small>
                     ) : null}
                 </div>
+
+                <section className="friends-settings-section friends-settings-danger-zone">
+                    <div className="friends-retention-copy">
+                        <strong>Danger zone</strong>
+                        <span>Actions that change or remove your DM relationship.</span>
+                    </div>
+
+                    <div className="friends-danger-actions">
+                        <button
+                            type="button"
+                            className="friends-secondary-button"
+                            disabled={submitting}
+                            onClick={() => setDangerConfirmAction("remove")}
+                        >
+                            Remove friend
+                        </button>
+                        <button
+                            type="button"
+                            className="server-context-item danger friends-confirm-danger"
+                            disabled={submitting}
+                            onClick={() => setDangerConfirmAction("hardDelete")}
+                        >
+                            Hard delete friend
+                        </button>
+                    </div>
+                </section>
+
+                {dangerConfirmAction ? (
+                    <div className="friends-inline-confirm">
+                        <strong>Are you sure?</strong>
+                        <span>
+                            {dangerConfirmAction === "hardDelete"
+                                ? "Hard delete removes this friend and deletes local DM history on this device."
+                                : "Remove friend takes them off your list, but conversation can return if re-added."}
+                        </span>
+                        <div className="friends-danger-actions">
+                            <button
+                                type="button"
+                                className="friends-secondary-button"
+                                onClick={() => setDangerConfirmAction("")}
+                                disabled={submitting}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="server-context-item danger friends-confirm-danger"
+                                onClick={() => {
+                                    if (dangerConfirmAction === "hardDelete") {
+                                        onRequestHardDeleteFriend?.(selectedFriend);
+                                    } else {
+                                        onRequestRemoveFriend?.(selectedFriend);
+                                    }
+                                    setDangerConfirmAction("");
+                                }}
+                                disabled={submitting}
+                            >
+                                {dangerConfirmAction === "hardDelete" ? "Yes, hard delete" : "Yes, remove friend"}
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
             </div>
         </div>
     );

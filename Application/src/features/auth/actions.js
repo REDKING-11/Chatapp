@@ -68,6 +68,112 @@ export async function registerUser({ username, password, email, phone }) {
     return parseJsonResponse(res, "Register failed");
 }
 
+export async function fetchRecoveryStatus({ token }) {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/recovery_status.php`, {
+        headers: {
+            Authorization: `Bearer ${token}`
+        }
+    });
+
+    return parseJsonResponse(res, "Failed to load recovery status");
+}
+
+export async function startEmailVerification({ token, email }) {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/email_verification_start.php`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ email })
+    });
+
+    return parseJsonResponse(res, "Failed to send verification code");
+}
+
+export async function confirmEmailVerification({ token, code }) {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/email_verification_confirm.php`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ code })
+    });
+
+    return parseJsonResponse(res, "Failed to verify that email");
+}
+
+export async function removeRecoveryEmail({ token }) {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/email_verification_remove.php`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${token}`
+        }
+    });
+
+    return parseJsonResponse(res, "Failed to remove the recovery email");
+}
+
+export async function regenerateRecoveryKeys({ token }) {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/recovery_keys_regenerate.php`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${token}`
+        }
+    });
+
+    return parseJsonResponse(res, "Failed to generate recovery keys");
+}
+
+export async function requestPasswordReset({ username }) {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/password_reset_request.php`, {
+        method: "POST",
+        headers: buildAuthRequestHeaders(),
+        body: JSON.stringify({ username })
+    });
+
+    return parseJsonResponse(res, "Failed to request password reset");
+}
+
+export async function confirmPasswordReset({ username, method, code, newPassword }) {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/password_reset_confirm.php`, {
+        method: "POST",
+        headers: buildAuthRequestHeaders(),
+        body: JSON.stringify({
+            username,
+            method,
+            code,
+            newPassword
+        })
+    });
+
+    return parseJsonResponse(res, "Failed to reset password");
+}
+
+export async function changePassword({ token, currentPassword, newPassword, totpCode }) {
+    const res = await fetchWithNetworkErrorContext(`${CORE_API_BASE}/auth/password_change.php`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+            currentPassword,
+            newPassword,
+            totpCode
+        })
+    });
+
+    const data = await parseJsonResponse(res, "Failed to change password");
+
+    if (data?.token) {
+        await saveAuthSession(data);
+    }
+
+    return data;
+}
+
 export async function updateUserProfile({ displayName, profileDescription, profileGames }) {
     const body = {};
     if (displayName !== undefined) {
