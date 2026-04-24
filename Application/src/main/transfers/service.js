@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { app, dialog } from "electron";
+import electron from "electron";
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+import os from "node:os";
+import {
+  copyStorageFiles,
+  listStoragePathCandidates
+} from "../storagePaths.js";
 import {
   deriveShareStatus,
   normalizeFilePathKey,
@@ -9,21 +14,46 @@ import {
   resolveFileShareForRequest,
   resetFileShare,
   syncFileShareSelection
-} from "./shareRegistryCore";
+} from "./shareRegistryCore.js";
 import {
   assertIncomingChunkLength,
   assertIncomingDownloadComplete,
   classifyIncomingChunkOffset,
   normalizeIncomingOffset
-} from "./downloadIntegrity";
+} from "./downloadIntegrity.js";
 
 const outgoingTransfers = new Map();
 const incomingTransfers = new Map();
 const incomingAttachmentSecrets = new Map();
 const ATTACHMENT_CHUNK_ALGORITHM = "aes-256-gcm-chunked-v1";
 const FILE_SHARE_REGISTRY_NAME = "file-shares.json";
+const { app, dialog } = electron || {};
 
 let cachedShareRegistry = null;
+let transferServiceDependencies = null;
+
+function createDefaultTransferServiceDependencies() {
+  return {
+    getPath(name) {
+      if (!app?.getPath) {
+        throw new Error("Electron app.getPath is not available for transfer service");
+      }
+
+      return app.getPath(name);
+    },
+    async showSaveDialog(options) {
+      if (!dialog?.showSaveDialog) {
+        throw new Error("Electron dialog.showSaveDialog is not available for transfer service");
+      }
+
+      return dialog.showSaveDialog(options);
+    }
+  };
+}
+
+function getTransferServiceDependencies() {
+  return transferServiceDependencies || (transferServiceDependencies = createDefaultTransferServiceDependencies());
+}
 
 function toSafeBaseName(value) {
   const normalized = String(value || "download").trim();
@@ -32,11 +62,77 @@ function toSafeBaseName(value) {
 }
 
 function getDefaultSavePath(fileName) {
-  return path.join(app.getPath("downloads"), toSafeBaseName(fileName));
+  return path.join(getTransferServiceDependencies().getPath("downloads"), toSafeBaseName(fileName));
+}
+
+function getFileShareRegistryCandidates() {
+  return listStoragePathCandidates("", [FILE_SHARE_REGISTRY_NAME]);
+}
+
+function getStableFileShareRegistryCandidate() {
+  return getFileShareRegistryCandidates()[0];
+}
+
+function ensureFileShareRegistryDir(dirPath = getStableFileShareRegistryCandidate().storeDir) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function quarantineFileShareRegistry(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  try {
+    fs.renameSync(filePath, `${filePath}.corrupt-${Date.now()}`);
+  } catch {
+    // Best-effort quarantine only.
+  }
+}
+
+function readNormalizedFileShareRegistry(filePath) {
+  return normalizeShareRegistry(JSON.parse(fs.readFileSync(filePath, "utf8")));
 }
 
 function getFileShareRegistryPath() {
-  return path.join(app.getPath("userData"), FILE_SHARE_REGISTRY_NAME);
+  const [stableCandidate, ...legacyCandidates] = getFileShareRegistryCandidates();
+  const stablePath = stableCandidate.filePaths[0];
+  let stableError = null;
+
+  ensureFileShareRegistryDir(stableCandidate.storeDir);
+
+  if (fs.existsSync(stablePath)) {
+    try {
+      readNormalizedFileShareRegistry(stablePath);
+      return stablePath;
+    } catch (error) {
+      stableError = error;
+    }
+  }
+
+  for (const candidate of legacyCandidates) {
+    const legacyPath = candidate.filePaths[0];
+
+    if (!fs.existsSync(legacyPath)) {
+      continue;
+    }
+
+    try {
+      readNormalizedFileShareRegistry(legacyPath);
+      copyStorageFiles(candidate.filePaths, stableCandidate.filePaths, {
+        overwrite: true
+      });
+      return stablePath;
+    } catch {
+      // Keep looking for the first readable legacy candidate.
+    }
+  }
+
+  if (stableError) {
+    console.warn("File share registry is unreadable. Quarantining the local file share registry.", stableError);
+    quarantineFileShareRegistry(stablePath);
+  }
+
+  return stablePath;
 }
 
 function loadFileShareRegistry() {
@@ -45,8 +141,7 @@ function loadFileShareRegistry() {
   }
 
   try {
-    const raw = fs.readFileSync(getFileShareRegistryPath(), "utf8");
-    cachedShareRegistry = normalizeShareRegistry(JSON.parse(raw));
+    cachedShareRegistry = readNormalizedFileShareRegistry(getFileShareRegistryPath());
   } catch {
     cachedShareRegistry = normalizeShareRegistry({ shares: [] });
   }
@@ -57,7 +152,7 @@ function loadFileShareRegistry() {
 function saveFileShareRegistry(registry) {
   cachedShareRegistry = normalizeShareRegistry(registry);
   const filePath = getFileShareRegistryPath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  ensureFileShareRegistryDir(path.dirname(filePath));
   fs.writeFileSync(filePath, JSON.stringify(cachedShareRegistry, null, 2), "utf8");
   return cachedShareRegistry;
 }
@@ -515,7 +610,7 @@ export function readOutgoingAttachmentChunk({ transferId, offset = 0, length = 6
 }
 
 export async function chooseAttachmentSavePath({ defaultName }) {
-  const result = await dialog.showSaveDialog({
+  const result = await getTransferServiceDependencies().showSaveDialog({
     defaultPath: getDefaultSavePath(defaultName),
     buttonLabel: "Save file"
   });
@@ -728,4 +823,41 @@ export async function cancelIncomingDownload({ transferId, removePartial = false
     transferId: entry.transferId,
     filePath: entry.filePath
   };
+}
+
+export function __setTransferServiceTestDependencies(dependencies = null) {
+  if (!dependencies) {
+    transferServiceDependencies = null;
+    return;
+  }
+
+  const userDataRoot = path.resolve(String(dependencies.userDataRoot || os.tmpdir()));
+  const downloadsRoot = path.resolve(String(dependencies.downloadsRoot || userDataRoot));
+
+  transferServiceDependencies = {
+    getPath(name) {
+      if (name === "userData") {
+        return userDataRoot;
+      }
+
+      if (name === "downloads") {
+        return downloadsRoot;
+      }
+
+      throw new Error(`Unsupported transfer service test path: ${name}`);
+    },
+    async showSaveDialog(options = {}) {
+      return {
+        canceled: false,
+        filePath: options.defaultPath || path.join(downloadsRoot, "download")
+      };
+    }
+  };
+}
+
+export function __resetTransferServiceTestState() {
+  outgoingTransfers.clear();
+  incomingTransfers.clear();
+  incomingAttachmentSecrets.clear();
+  cachedShareRegistry = null;
 }

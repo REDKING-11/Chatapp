@@ -1,4 +1,4 @@
-import { UPDATE_PHASES } from "../lib/appUpdates.js";
+import { UPDATE_DOWNLOAD_PHASES, UPDATE_PHASES } from "../lib/appUpdates.js";
 
 function formatPublishedAt(value) {
     if (!value) {
@@ -17,11 +17,16 @@ export default function UpdateBanner({
     state,
     onDismiss,
     onCheckForUpdates,
-    onOpenReleasesPage
+    onOpenReleasesPage,
+    onOpenDownloadedInstaller
 }) {
     const publishedLabel = formatPublishedAt(state?.publishedAt);
     const canShowReleaseLink = Boolean(state?.releaseUrl);
     const isManualUpToDate = state?.phase === UPDATE_PHASES.UP_TO_DATE && state?.trigger === "manual";
+    const installerIsDownloading = state?.installerDownloadPhase === UPDATE_DOWNLOAD_PHASES.DOWNLOADING;
+    const installerIsDownloaded = state?.installerDownloadPhase === UPDATE_DOWNLOAD_PHASES.DOWNLOADED;
+    const installerHasError = state?.installerDownloadPhase === UPDATE_DOWNLOAD_PHASES.ERROR;
+    const installerProgress = Math.max(0, Math.min(100, Number(state?.installerDownloadProgress || 0)));
 
     if (!state || (state.phase === UPDATE_PHASES.UP_TO_DATE && !isManualUpToDate) || state.phase === UPDATE_PHASES.CHECKING || state.phase === UPDATE_PHASES.IDLE) {
         return null;
@@ -38,13 +43,36 @@ export default function UpdateBanner({
                     {state.notesSummary ? <p>{state.notesSummary}</p> : null}
                     <div className="update-banner-meta">
                         {publishedLabel ? <span>Published {publishedLabel}</span> : null}
-                        <span>Open the release page to download the latest MSI installer.</span>
+                        {installerIsDownloading ? <span>Downloading MSI installer to Downloads...</span> : null}
+                        {installerIsDownloaded ? <span>MSI installer downloaded: {state.installerAssetName || "installer"}</span> : null}
+                        {installerHasError ? <span>{state.installerDownloadError || "Installer download failed."}</span> : null}
+                        {!installerIsDownloading && !installerIsDownloaded && !installerHasError ? (
+                            <span>{state.installerAssetName ? "MSI installer will download automatically." : "Open the release page to download the installer."}</span>
+                        ) : null}
                     </div>
+                    {installerIsDownloading ? (
+                        <div className="update-banner-progress" aria-label={`Installer download ${installerProgress}%`}>
+                            <span style={{ width: `${installerProgress}%` }} />
+                        </div>
+                    ) : null}
                 </div>
                 <div className="update-banner-actions">
+                    {installerIsDownloaded ? (
+                        <button className="update-banner-primary" onClick={onOpenDownloadedInstaller}>
+                            Open installer
+                        </button>
+                    ) : null}
+                    {installerIsDownloading ? (
+                        <button className="update-banner-primary" type="button" disabled>
+                            Downloading...
+                        </button>
+                    ) : null}
                     {canShowReleaseLink ? (
-                        <button className="update-banner-primary" onClick={onOpenReleasesPage}>
-                            Download installer
+                        <button
+                            className={installerIsDownloaded || installerIsDownloading ? "update-banner-secondary" : "update-banner-primary"}
+                            onClick={onOpenReleasesPage}
+                        >
+                            View release
                         </button>
                     ) : null}
                     <button className="update-banner-dismiss" onClick={onDismiss}>
