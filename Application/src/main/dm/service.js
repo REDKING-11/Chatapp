@@ -22,13 +22,13 @@ import {
   verifyJsonPayload,
   verifyMessageEnvelopeSignature,
   wrapConversationKeyForRecipient
-} from "./crypto";
-import { readSecureDmStore, writeSecureDmStore } from "./storage";
+} from "./crypto.js";
+import { readSecureDmStore, writeSecureDmStore } from "./storage.js";
 import {
   buildOutgoingAttachmentPayload,
   buildOutgoingFileSharePayload,
   registerIncomingAttachmentPayload
-} from "../transfers/service";
+} from "../transfers/service.js";
 import { normalizeAppDiagnosticError } from "../../lib/diagnostics.js";
 import { deriveConversationAccessFromMetadata } from "../../features/dm/conversationAccess.js";
 import { normalizeInlineImageEmbeds } from "../../features/dm/inlineEmbeds.js";
@@ -192,7 +192,7 @@ function classifyReceiveMessageErrorCode(error) {
     return "DM_RECEIVE_MESSAGE_INDEX_GAP";
   }
 
-  if (/unable to decrypt dm message with known conversation keys/i.test(message)) {
+  if (/unable to decrypt dm message with known conversation keys|unable to authenticate data|unsupported state/i.test(message)) {
     return "DM_RECEIVE_DECRYPT_FAILED";
   }
 
@@ -2118,4 +2118,8 @@ export function importDeviceTransferPackage({ userId, username, transferPackage 
     installedConversationCount: installedConversationIds.length,
     installedConversationIds
   };
+}
+
+export function __resetSecureDmServiceTestState() {
+  pendingDeviceRotations.clear();
 }

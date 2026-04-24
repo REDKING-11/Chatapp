@@ -1,21 +1,3 @@
-## Do After
-
-- Encrypt more attachment metadata like file names where practical.  
-  Problem: The DM service normalizes attachment metadata in plaintext structures. Even if file bytes are encrypted later, names and MIME types may still leak.  
-  How to fix: Put filenames and sensitive metadata inside the encrypted message body whenever possible.
-
-- Add clearer audit trails for device addition, revocation, and trust changes.  
-  Problem: Users cannot easily reason about account/device trust without visible history.  
-  How to fix: Add human-readable device-event history in client settings.
-
-- Add automated security tests around key wrapping, tampering, decryption failure, replay, and revocation behavior.  
-  Problem: The DM crypto path is complex and currently not obviously backed by a dedicated security test suite.  
-  How to fix: Add integration and negative-path tests around `crypto.js`, `service.js`, and storage boundaries.
-
-- Add session/device management UI for the account side.  
-  Problem: The backend has sessions, but there is no clear user-facing “manage sessions” feature.  
-  How to fix: Let users list and revoke account sessions and distinguish them from DM devices.
-
 ## Do Later
 
 - Consider migrating closer to a Signal-style protocol structure if you want stronger long-term E2EE claims.  
@@ -59,3 +41,13 @@
 - Marketing-language upgrades before the protocol and verification flow are solid.  
   Problem: Overclaiming is a security risk in itself.  
   How to fix: Keep public claims conservative until the DM path is mature.
+
+## Do Mayby
+
+- Encrypt more attachment metadata like file names where practical.  
+  Problem: The DM service normalizes attachment metadata in plaintext structures. Even if file bytes are encrypted later, names and MIME types may still leak.  
+  How to fix: Put filenames and sensitive metadata inside the encrypted message body whenever possible.
+
+- Add clearer audit trails for device addition, revocation, and trust changes.  
+  Problem: Users cannot easily reason about account/device trust without visible history.  
+  How to fix: Add human-readable device-event history in client settings.

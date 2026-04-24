@@ -139,7 +139,7 @@ export default function ChatUserProfilePopover({
     const initials = useMemo(() => getInitials(displayName), [displayName]);
     const canLoadAvatar = isSelf || clientSettings?.autoLoadProfileAvatars !== false;
     const canLoadBanner = isSelf || clientSettings?.autoLoadProfileBanners !== false;
-    const canLoadFriendProfile = isKnownFriend && clientSettings?.autoLoadProfileDescriptions !== false;
+    const canLoadFriendProfile = isKnownFriend && clientSettings?.autoLoadFriendProfileDetails === true;
     const resolvedPresence = isSelf
         ? {
             ...getConfiguredPresenceMeta(clientSettings?.presenceStatus || "online"),

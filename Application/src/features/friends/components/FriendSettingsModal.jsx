@@ -276,21 +276,21 @@ export default function FriendSettingsModal({
     }
 
     useEffect(() => {
-        if (!selectedFriend?.friendUserId || clientSettings?.autoLoadProfileDescriptions === false) {
+        if (!selectedFriend?.friendUserId || clientSettings?.autoLoadFriendProfileDetails !== true) {
             return;
         }
 
         loadFriendProfileDescription();
     // Deliberately tied only to friend change and opt-in setting.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedFriend?.friendUserId, clientSettings?.autoLoadProfileDescriptions]);
+    }, [selectedFriend?.friendUserId, clientSettings?.autoLoadFriendProfileDetails]);
 
     if (!selectedFriend) {
         return null;
     }
 
     return (
-        <div className="friends-settings-overlay" onClick={onClose}>
+        <div className="friends-settings-overlay friends-friend-settings-overlay" onClick={onClose}>
             <div className="friends-settings-popout friends-friend-settings-popout panel-card" onClick={(event) => event.stopPropagation()}>
                 <div className="friends-settings-header">
                     <div>
@@ -336,7 +336,7 @@ export default function FriendSettingsModal({
                                 </div>
                             </div>
 
-                            <div className="profile-shared-hero-actions">
+                            <div className="profile-shared-hero-actions friends-profile-download-action">
                                 <button
                                     type="button"
                                     className="friends-secondary-button"

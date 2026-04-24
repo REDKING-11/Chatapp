@@ -68,7 +68,28 @@ function userProfileNormalizeDescription($value): ?string {
     }
 
     $trimmed = trim($value);
-    return $trimmed !== '' ? substr($trimmed, 0, 280) : null;
+    return $trimmed !== '' ? userProfileClampCharacters($trimmed, 280) : null;
+}
+
+function userProfileClampCharacters(string $value, int $limit): string {
+    if ($limit <= 0 || $value === '') {
+        return $limit <= 0 ? '' : $value;
+    }
+
+    if (function_exists('grapheme_substr')) {
+        $slice = grapheme_substr($value, 0, $limit);
+        return $slice !== false ? $slice : '';
+    }
+
+    if (preg_match_all('/\X/u', $value, $matches)) {
+        return implode('', array_slice($matches[0], 0, $limit));
+    }
+
+    if (function_exists('mb_substr')) {
+        return mb_substr($value, 0, $limit, 'UTF-8');
+    }
+
+    return substr($value, 0, $limit);
 }
 
 function userProfileNormalizeGames($value): array {

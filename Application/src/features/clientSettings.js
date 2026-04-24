@@ -160,7 +160,7 @@ export const CLIENT_SETTINGS_DEFAULTS = {
     chatMessageAlignment: "split",
     autoLoadProfileAvatars: true,
     autoLoadProfileBanners: false,
-    autoLoadProfileDescriptions: true,
+    autoLoadFriendProfileDetails: false,
     sharedServerProfileMediaOnly: true
 };
 
@@ -170,7 +170,7 @@ export const CLIENT_SETTINGS_SECTION_KEYS = {
     chatIdentity: ["chatIdentityStyle", "chatNameMode", "chatMessageAlignment"],
     accessibility: ["reducedMotion", "highContrast", "colorBlindMode", "dyslexicFont"],
     developer: ["debugMode"],
-    profileMedia: ["autoLoadProfileAvatars", "autoLoadProfileBanners", "autoLoadProfileDescriptions", "sharedServerProfileMediaOnly"]
+    profileMedia: ["autoLoadProfileAvatars", "autoLoadProfileBanners", "autoLoadFriendProfileDetails", "sharedServerProfileMediaOnly"]
 };
 
 export const CLIENT_SETTINGS_TAB_KEYS = {
@@ -344,6 +344,11 @@ function sanitizeSettings(raw) {
         ...raw
     };
 
+    if (!Object.prototype.hasOwnProperty.call(raw, "autoLoadFriendProfileDetails")
+        && Object.prototype.hasOwnProperty.call(raw, "autoLoadProfileDescriptions")) {
+        next.autoLoadFriendProfileDetails = raw.autoLoadProfileDescriptions;
+    }
+
     if (!PRESENCE_STATUS_IDS.includes(next.presenceStatus)) {
         next.presenceStatus = CLIENT_SETTINGS_DEFAULTS.presenceStatus;
     }
@@ -396,8 +401,10 @@ function sanitizeSettings(raw) {
     }
     next.autoLoadProfileAvatars = Boolean(next.autoLoadProfileAvatars);
     next.autoLoadProfileBanners = Boolean(next.autoLoadProfileBanners);
-    next.autoLoadProfileDescriptions = Boolean(next.autoLoadProfileDescriptions);
+    next.autoLoadFriendProfileDetails = Boolean(next.autoLoadFriendProfileDetails);
     next.sharedServerProfileMediaOnly = Boolean(next.sharedServerProfileMediaOnly);
+
+    delete next.autoLoadProfileDescriptions;
 
     return next;
 }
@@ -538,9 +545,34 @@ export function applyClientSettings(settings) {
             : next.hitTargetSize === "max"
                 ? 12
                 : 0;
+    const topbarHeight = next.hitTargetSize === "large"
+        ? "64px"
+        : next.hitTargetSize === "xlarge"
+            ? "72px"
+            : next.hitTargetSize === "max"
+                ? "82px"
+                : "56px";
+    const topbarIconButtonSize = next.hitTargetSize === "large"
+        ? "46px"
+        : next.hitTargetSize === "xlarge"
+            ? "52px"
+            : next.hitTargetSize === "max"
+                ? "60px"
+                : "42px";
+    const topbarPaddingBlock = next.hitTargetSize === "large"
+        ? "4px"
+        : next.hitTargetSize === "xlarge"
+            ? "6px"
+            : next.hitTargetSize === "max"
+                ? "8px"
+                : "0px";
     root.style.setProperty("--client-control-padding", `${densityPadding + hitTargetBoost}px`);
     root.style.setProperty("--client-panel-padding", next.uiDensity === "compact" ? "14px" : next.uiDensity === "spacious" ? "22px" : "18px");
     root.style.setProperty("--client-radius-multiplier", next.uiDensity === "compact" ? "0.9" : next.uiDensity === "spacious" ? "1.12" : "1");
+    root.style.setProperty("--app-topbar-height", topbarHeight);
+    root.style.setProperty("--app-topbar-height-runtime", topbarHeight);
+    root.style.setProperty("--app-topbar-icon-button-size", topbarIconButtonSize);
+    root.style.setProperty("--app-topbar-padding-block", topbarPaddingBlock);
     root.style.setProperty("--client-toggle-size", next.hitTargetSize === "large"
         ? "24px"
         : next.hitTargetSize === "xlarge"

@@ -1,12 +1,42 @@
-import { safeStorage } from "electron";
 import fs from "node:fs";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import electron from "electron";
 import { copyStorageFiles, listStoragePathCandidates } from "../storagePaths.js";
 
 const SECURE_DM_FILE_NAMES = Object.freeze([
   "master-key.bin",
   "store.json.enc"
 ]);
+const { safeStorage } = electron || {};
+let secureDmStorageDependencies = null;
+
+function createDefaultSecureDmStorageDependencies() {
+  function getSafeStorage() {
+    if (!safeStorage) {
+      throw new Error("Electron safeStorage is not available for secure DM storage");
+    }
+
+    return safeStorage;
+  }
+
+  return {
+    safeStorage: {
+      isEncryptionAvailable() {
+        return getSafeStorage().isEncryptionAvailable();
+      },
+      encryptString(value) {
+        return getSafeStorage().encryptString(value);
+      },
+      decryptString(value) {
+        return getSafeStorage().decryptString(value);
+      }
+    }
+  };
+}
+
+function getSecureDmStorageDependencies() {
+  return secureDmStorageDependencies || (secureDmStorageDependencies = createDefaultSecureDmStorageDependencies());
+}
 
 function getDmStoreCandidates() {
   return listStoragePathCandidates("secure-dm", SECURE_DM_FILE_NAMES);
@@ -72,13 +102,13 @@ function decryptJson(payload, key) {
 }
 
 function assertSecureStorageAvailable() {
-  if (!safeStorage.isEncryptionAvailable()) {
+  if (!getSecureDmStorageDependencies().safeStorage.isEncryptionAvailable()) {
     throw new Error("OS-backed secure storage is not available for local DM encryption");
   }
 }
 
 function readStoredMasterKey(masterKeyPath) {
-  const key = safeStorage.decryptString(fs.readFileSync(masterKeyPath));
+  const key = getSecureDmStorageDependencies().safeStorage.decryptString(fs.readFileSync(masterKeyPath));
   const normalizedKey = String(key || "").trim();
 
   if (!normalizedKey) {
@@ -174,7 +204,7 @@ function getMasterKey() {
   }
 
   const key = randomBytes(32).toString("base64");
-  fs.writeFileSync(masterKeyPath, safeStorage.encryptString(key));
+  fs.writeFileSync(masterKeyPath, getSecureDmStorageDependencies().safeStorage.encryptString(key));
   return key;
 }
 
@@ -217,4 +247,16 @@ export function writeSecureDmStore(store) {
   ensureDir(storeDir);
   const masterKey = Buffer.from(getMasterKey(), "base64");
   writeEncryptedStoreFile(store, masterKey);
+}
+
+export function __setSecureDmStorageTestDependencies(dependencies = null) {
+  secureDmStorageDependencies = dependencies
+    ? {
+        safeStorage: {
+          isEncryptionAvailable: dependencies.safeStorage?.isEncryptionAvailable || (() => true),
+          encryptString: dependencies.safeStorage?.encryptString || ((value) => Buffer.from(String(value), "utf8")),
+          decryptString: dependencies.safeStorage?.decryptString || ((value) => Buffer.from(value).toString("utf8"))
+        }
+      }
+    : null;
 }

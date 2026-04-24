@@ -35,22 +35,27 @@ globalThis.CustomEvent = class CustomEvent {
 };
 
 storage.clear();
-assert.equal(loadClientSettings().autoLoadProfileDescriptions, true);
+assert.equal(loadClientSettings().autoLoadFriendProfileDetails, false);
 assert.deepEqual(loadClientSettings().ignoredVerificationDevicesByFriend, {});
 assert.deepEqual(loadClientSettings().mutedFriendNotificationsById, {});
 assert.deepEqual(loadClientSettings().friendProfileNotesById, {});
 
 const savedOptOut = saveClientSettings({
-    autoLoadProfileDescriptions: false
+    autoLoadFriendProfileDetails: false
 });
-assert.equal(savedOptOut.autoLoadProfileDescriptions, false);
-assert.equal(loadClientSettings().autoLoadProfileDescriptions, false);
+assert.equal(savedOptOut.autoLoadFriendProfileDetails, false);
+assert.equal(loadClientSettings().autoLoadFriendProfileDetails, false);
+
+storage.set("clientSettings:v1", JSON.stringify({
+    autoLoadProfileDescriptions: true
+}));
+assert.equal(loadClientSettings().autoLoadFriendProfileDetails, true);
 
 const savedDefault = saveClientSettings({});
-assert.equal(savedDefault.autoLoadProfileDescriptions, true);
+assert.equal(savedDefault.autoLoadFriendProfileDetails, false);
 
 const exportPayload = buildClientSettingsExport({
-    autoLoadProfileDescriptions: false,
+    autoLoadFriendProfileDetails: false,
     ignoredVerificationDevicesByFriend: {
         "42": [123, "abc", "", null]
     },
@@ -64,7 +69,7 @@ const exportPayload = buildClientSettingsExport({
         "44": false
     }
 });
-assert.equal(exportPayload.settings.autoLoadProfileDescriptions, false);
+assert.equal(exportPayload.settings.autoLoadFriendProfileDetails, false);
 assert.deepEqual(exportPayload.settings.ignoredVerificationDevicesByFriend, {
     "42": ["123", "abc"]
 });
