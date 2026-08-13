@@ -169,9 +169,10 @@ function createBackendStatus(result) {
 
     return {
         state: "online",
-        title: "Backend reachable",
-        message: `${origin} is answering auth requests.`
+        title: "Backend reachable"
+        
     };
+    {/*message: `${origin} is answering auth requests.`*/}
 }
 
 export default function AuthScreen({ onAuthSuccess, noticeMessage = "" }) {

@@ -5,7 +5,7 @@ require_once __DIR__ . '/../auth_required.php';
 require_once __DIR__ . '/../user_profile.php';
 
 const DM_RELAY_TTL_SECONDS = 86400;
-const DM_ALLOWED_RELAY_TTLS = [0, 3600, 21600, 43200, 86400];
+const DM_ALLOWED_RELAY_TTLS = [0, 3600, 21600, 43200, 86400, 172800, 259200];
 const DM_MESSAGE_TTL_SECONDS = 0;
 const DM_ALLOWED_MESSAGE_TTLS = [0, 86400, 259200, 604800, 1209600, 2592000, 5184000, 10368000, 15552000];
 const DM_RELAY_FETCH_LIMIT = 50;

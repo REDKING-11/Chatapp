@@ -31,7 +31,9 @@ export const RELAY_RETENTION_OPTIONS = [
   { seconds: 3600, label: "1 hour" },
   { seconds: 21600, label: "6 hours" },
   { seconds: 43200, label: "12 hours" },
-  { seconds: 86400, label: "24 hours" }
+  { seconds: 86400, label: "24 hours" },
+  { seconds: 172800, label: "48 hours" },
+  { seconds: 259200, label: "72 hours" }
 ];
 export const DISAPPEARING_MESSAGE_OPTIONS = [
   { seconds: 0, label: "Off" },

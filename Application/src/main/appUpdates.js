@@ -1,5 +1,10 @@
+import { createWriteStream } from "node:fs";
+import { mkdir, rename, stat, unlink } from "node:fs/promises";
+import path from "node:path";
+import { Readable } from "node:stream";
 import { BrowserWindow, app, ipcMain, shell } from "electron";
 import {
+    UPDATE_DOWNLOAD_PHASES,
     UPDATE_PHASES,
     createUpdateState,
     selectLatestRelease
@@ -34,6 +39,28 @@ function sanitizeUpdateError(error) {
     }
 
     return message;
+}
+
+function sanitizeDownloadFileName(value) {
+    const name = String(value || "").trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, "-");
+    return name || "LibreChat-update.msi";
+}
+
+function getDownloadProgress(downloadedBytes, totalBytes) {
+    if (!totalBytes || totalBytes <= 0) {
+        return 0;
+    }
+
+    return Math.max(0, Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)));
+}
+
+async function fileExistsAtExpectedSize(filePath, expectedSize) {
+    try {
+        const fileStat = await stat(filePath);
+        return fileStat.isFile() && (!expectedSize || fileStat.size === expectedSize);
+    } catch {
+        return false;
+    }
 }
 
 async function fetchReleaseCatalog() {
@@ -84,8 +111,110 @@ export function registerAppUpdateIpc() {
     async function resolveReleaseInfo() {
         const releaseCatalog = await fetchReleaseCatalog();
         return selectLatestRelease(releaseCatalog, {
-            currentVersion: app.getVersion()
+            currentVersion: app.getVersion(),
+            platform: process.platform
         });
+    }
+
+    async function downloadInstallerForRelease(release) {
+        const installerAsset = release?.installerAsset;
+
+        if (!installerAsset?.downloadUrl) {
+            return;
+        }
+
+        if (
+            state.installerDownloadPhase === UPDATE_DOWNLOAD_PHASES.DOWNLOADING
+            && state.installerDownloadUrl === installerAsset.downloadUrl
+        ) {
+            return;
+        }
+
+        const downloadsPath = app.getPath("downloads");
+        const installerFileName = sanitizeDownloadFileName(installerAsset.name || `LibreChat-${release.version}.msi`);
+        const installerPath = path.join(downloadsPath, installerFileName);
+        const partialPath = `${installerPath}.download`;
+
+        if (await fileExistsAtExpectedSize(installerPath, installerAsset.size)) {
+            setState({
+                installerAssetName: installerFileName,
+                installerDownloadUrl: installerAsset.downloadUrl,
+                installerDownloadSize: installerAsset.size,
+                installerDownloadPhase: UPDATE_DOWNLOAD_PHASES.DOWNLOADED,
+                installerDownloadProgress: 100,
+                installerDownloadPath: installerPath,
+                installerDownloadError: ""
+            });
+            return;
+        }
+
+        setState({
+            installerAssetName: installerFileName,
+            installerDownloadUrl: installerAsset.downloadUrl,
+            installerDownloadSize: installerAsset.size,
+            installerDownloadPhase: UPDATE_DOWNLOAD_PHASES.DOWNLOADING,
+            installerDownloadProgress: 0,
+            installerDownloadPath: installerPath,
+            installerDownloadError: ""
+        });
+
+        try {
+            await mkdir(downloadsPath, { recursive: true });
+            await unlink(partialPath).catch(() => {});
+
+            const response = await fetch(installerAsset.downloadUrl, {
+                headers: createGitHubHeaders()
+            });
+
+            if (!response.ok) {
+                throw new Error(`GitHub returned ${response.status} while downloading the installer.`);
+            }
+
+            if (!response.body) {
+                throw new Error("GitHub did not return an installer download body.");
+            }
+
+            const contentLength = Number(response.headers.get("content-length") || installerAsset.size || 0);
+            const output = createWriteStream(partialPath);
+            let downloadedBytes = 0;
+            let lastProgress = 0;
+
+            await new Promise((resolve, reject) => {
+                Readable.fromWeb(response.body)
+                    .on("data", (chunk) => {
+                        downloadedBytes += chunk.length;
+                        const nextProgress = getDownloadProgress(downloadedBytes, contentLength);
+                        if (nextProgress >= lastProgress + 5 || nextProgress === 100) {
+                            lastProgress = nextProgress;
+                            setState({
+                                installerDownloadProgress: nextProgress
+                            });
+                        }
+                    })
+                    .on("error", reject)
+                    .pipe(output)
+                    .on("error", reject)
+                    .on("finish", resolve);
+            });
+
+            await unlink(installerPath).catch(() => {});
+            await rename(partialPath, installerPath);
+
+            setState({
+                installerDownloadPhase: UPDATE_DOWNLOAD_PHASES.DOWNLOADED,
+                installerDownloadProgress: 100,
+                installerDownloadPath: installerPath,
+                installerDownloadError: ""
+            });
+        } catch (error) {
+            await unlink(partialPath).catch(() => {});
+            setState({
+                installerDownloadPhase: UPDATE_DOWNLOAD_PHASES.ERROR,
+                installerDownloadProgress: 0,
+                installerDownloadPath: "",
+                installerDownloadError: sanitizeUpdateError(error)
+            });
+        }
     }
 
     async function checkForUpdates({ interactive = false, trigger = interactive ? "manual" : "background" } = {}) {
@@ -116,11 +245,18 @@ export function registerAppUpdateIpc() {
                     notesSummary: release?.notesSummary || "",
                     hasUpdate: false,
                     error: "",
-                    checkedAt: new Date().toISOString()
+                    checkedAt: new Date().toISOString(),
+                    installerAssetName: "",
+                    installerDownloadUrl: "",
+                    installerDownloadSize: 0,
+                    installerDownloadPhase: UPDATE_DOWNLOAD_PHASES.IDLE,
+                    installerDownloadProgress: 0,
+                    installerDownloadPath: "",
+                    installerDownloadError: ""
                 });
             }
 
-            return setState({
+            const nextState = setState({
                 phase: UPDATE_PHASES.AVAILABLE,
                 trigger,
                 latestVersion: release.version,
@@ -130,8 +266,18 @@ export function registerAppUpdateIpc() {
                 notesSummary: release.notesSummary,
                 hasUpdate: true,
                 error: "",
-                checkedAt: new Date().toISOString()
+                checkedAt: new Date().toISOString(),
+                installerAssetName: release.installerAsset?.name || "",
+                installerDownloadUrl: release.installerAsset?.downloadUrl || "",
+                installerDownloadSize: release.installerAsset?.size || 0,
+                installerDownloadPhase: UPDATE_DOWNLOAD_PHASES.IDLE,
+                installerDownloadProgress: 0,
+                installerDownloadPath: "",
+                installerDownloadError: ""
             });
+
+            downloadInstallerForRelease(release);
+            return nextState;
         } catch (error) {
             if (!interactive && trigger !== "manual") {
                 state = previousState;
@@ -169,6 +315,14 @@ export function registerAppUpdateIpc() {
     }));
     ipcMain.handle("app-update:open-releases", () => {
         shell.openExternal(state.releaseUrl || GITHUB_RELEASES_PAGE);
+    });
+    ipcMain.handle("app-update:open-installer", async () => {
+        if (!state.installerDownloadPath || state.installerDownloadPhase !== UPDATE_DOWNLOAD_PHASES.DOWNLOADED) {
+            return false;
+        }
+
+        const result = await shell.openPath(state.installerDownloadPath);
+        return result === "";
     });
 
     scheduleBackgroundChecks();

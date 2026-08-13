@@ -9,6 +9,13 @@ export const UPDATE_PHASES = Object.freeze({
     ERROR: "error"
 });
 
+export const UPDATE_DOWNLOAD_PHASES = Object.freeze({
+    IDLE: "idle",
+    DOWNLOADING: "downloading",
+    DOWNLOADED: "downloaded",
+    ERROR: "error"
+});
+
 export const DEFAULT_UPDATE_STATE = Object.freeze({
     phase: UPDATE_PHASES.IDLE,
     trigger: null,
@@ -20,7 +27,14 @@ export const DEFAULT_UPDATE_STATE = Object.freeze({
     notesSummary: "",
     hasUpdate: false,
     error: "",
-    checkedAt: ""
+    checkedAt: "",
+    installerAssetName: "",
+    installerDownloadUrl: "",
+    installerDownloadSize: 0,
+    installerDownloadPhase: UPDATE_DOWNLOAD_PHASES.IDLE,
+    installerDownloadProgress: 0,
+    installerDownloadPath: "",
+    installerDownloadError: ""
 });
 
 function parsePrereleaseIdentifiers(value) {
@@ -173,6 +187,14 @@ function normalizeReleaseAsset(asset) {
     };
 }
 
+export function selectInstallerAsset(assets, { platform = "win32" } = {}) {
+    if (!Array.isArray(assets) || platform !== "win32") {
+        return null;
+    }
+
+    return assets.find((asset) => /\.msi$/i.test(String(asset?.name || ""))) || null;
+}
+
 export function normalizeGitHubRelease(release) {
     const parsedVersion = parseSemver(release?.tag_name);
 
@@ -197,11 +219,17 @@ export function normalizeGitHubRelease(release) {
 
 export function selectLatestRelease(releases, { currentVersion = "", platform = "win32" } = {}) {
     const normalizedCurrentVersion = normalizeVersionTag(currentVersion);
+    const parsedCurrentVersion = parseSemver(normalizedCurrentVersion);
+    const allowPrereleases = Boolean(parsedCurrentVersion?.prerelease?.length);
     const normalizedReleases = Array.isArray(releases)
         ? releases
             .map(normalizeGitHubRelease)
             .filter(Boolean)
-            .filter((release) => !release.isDraft && !release.isPrerelease)
+            .filter((release) => !release.isDraft && (!release.isPrerelease || allowPrereleases))
+            .map((release) => ({
+                ...release,
+                installerAsset: selectInstallerAsset(release.assets, { platform })
+            }))
             .sort((left, right) => compareVersions(right.version, left.version))
         : [];
 

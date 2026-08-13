@@ -73,6 +73,10 @@ import {
 } from "../../dm/inlineEmbeds.js";
 import { inspectInlineImageEmbedRenderable } from "../../dm/inlineEmbedContracts.js";
 import { traceInlineImageDiagnostic } from "../../dm/inlineEmbedTracing.js";
+import {
+    collectShareIdsFromMessageCollections,
+    createRequestedAttachmentTransferState
+} from "../attachmentShareState.js";
 import { getStoredAuthToken } from "../../session/actions";
 import {
     createGroupConversation,
@@ -293,12 +297,7 @@ export default function FriendsHome({
         let cancelled = false;
 
         async function refreshFileShareStates() {
-            const shareIds = Array.from(new Set(
-                (messages || [])
-                    .flatMap((message) => Array.isArray(message?.attachments) ? message.attachments : [])
-                    .map((attachment) => String(attachment?.shareId || ""))
-                    .filter(Boolean)
-            ));
+            const shareIds = collectShareIdsFromMessageCollections(messages, groupMessages);
 
             if (!shareIds.length || !window.fileShares?.get) {
                 if (!cancelled) {
@@ -327,7 +326,12 @@ export default function FriendsHome({
         return () => {
             cancelled = true;
         };
-    }, [messages]);
+    }, [messages, groupMessages]);
+
+    useEffect(() => {
+        incomingDownloadTargetsRef.current = {};
+        setAttachmentTransferStates({});
+    }, [activeView, currentUser?.id, selectedFriendId, selectedGroupConversationId]);
 
     function shallowEqualRecord(left, right) {
         if (left === right) {
@@ -3204,6 +3208,7 @@ export default function FriendsHome({
             });
         }
 
+        delete incomingDownloadTargetsRef.current[attachmentKey];
         incomingDownloadTargetsRef.current[attachmentKey] = {
             filePath: saveResult.filePath,
             fileName: attachment.fileName,
@@ -3211,11 +3216,10 @@ export default function FriendsHome({
             transferId: attachment.transferId || ""
         };
 
-        updateAttachmentTransferState(attachmentKey, {
-            status: "requesting",
-            progress: 0,
-            fileName: attachment.fileName
-        });
+        updateAttachmentTransferState(
+            attachmentKey,
+            createRequestedAttachmentTransferState(attachment.fileName)
+        );
 
         await sendSecureDmRealtimeEvent({
             token: getStoredAuthToken(),

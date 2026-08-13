@@ -22,6 +22,12 @@ sudo systemctl restart chatapp-realtime && \
 sleep 2 && \
 curl http://127.0.0.1:3010/health
 
+# test after reboot
+
+sudo systemctl is-enabled chatapp-realtime
+sudo ss -ltnp 'sport = :3010'
+
+
 # after a forced reboot, capture why the previous boot died
 sudo install -m 755 /home/ubuntu/deploy/lightsail-resource-snapshot.sh /usr/local/bin/chatapp-resource-snapshot
 sudo chatapp-resource-snapshot | sudo tee /var/log/chatapp-resource-snapshot.log
