@@ -79,6 +79,7 @@ exposeFrozenApi("appUpdates", {
   getUpdateState: () => ipcRenderer.invoke("app-update:get-state"),
   checkForUpdates: (options) => ipcRenderer.invoke("app-update:check", options),
   openReleasesPage: () => ipcRenderer.invoke("app-update:open-releases"),
+  openDownloadedInstaller: () => ipcRenderer.invoke("app-update:open-installer"),
   onUpdateState: (listener) => {
     if (typeof listener !== "function") {
       return () => {};

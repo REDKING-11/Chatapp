@@ -1,0 +1,123 @@
+**What this file covers**
+- This note summarizes the work completed in this chat thread around DM crypto/security testing, profile UX fixes, reusable file-share reliability, accessibility layout, and desktop update handling.
+- It follows the same plain text changelog style as the other dated docs files.
+
+**DM Security Test Suite**
+- Added dedicated Node-run security tests for the DM crypto path.
+- Covered key wrapping and unwrap failures when wrapped key material, IVs, auth tags, or ephemeral public keys are tampered with.
+- Covered encrypted payload round-trips and negative paths for modified ciphertext, nonce, tag, and AAD.
+- Covered device bundle signature checks, message envelope signature checks, and device-transfer payload tampering.
+- Added service-level tests for encrypted message receive behavior, replay detection, duplicate decrypted message ids, signature failures, decryption failures, wrong-recipient wrapped keys, and revoked or invalid sender device material.
+- Added storage-boundary tests for encrypted-at-rest DM store reads/writes, corrupted encrypted payload quarantine, corrupted master key quarantine, final-file writes, and legacy source migration.
+- Added narrow internal test hooks so the DM storage and service modules can be tested under plain Node without needing Electron at runtime.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\tests\dm-crypto-security.test.mjs](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/tests/dm-crypto-security.test.mjs)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\tests\dm-service-security.test.mjs](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/tests/dm-service-security.test.mjs)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\tests\dm-storage-security.test.mjs](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/tests/dm-storage-security.test.mjs)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\dm\service.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/main/dm/service.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\dm\storage.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/main/dm/storage.js)
+
+**Profile Bio Emoji And Unicode-Safe Descriptions**
+- Fixed profile bios so emoji and multi-codepoint characters are not split or corrupted by UTF-16 code-unit slicing.
+- Added a shared frontend helper for grapheme-aware profile text clamping and character counting.
+- Updated the client profile editor counter so it uses the same visible-character count as the truncation logic.
+- Updated the backend profile normalizer so saved descriptions clamp on Unicode-safe boundaries with `grapheme_substr`, `mb_substr`, or a safer fallback.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\lib\profileText.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/lib/profileText.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\ClientSettingsModal.jsx](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/components/ClientSettingsModal.jsx)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\chatapp-core\user_profile.php](C:/Users/samuel.lamberg/Desktop/'/Chatapp/chatapp-core/user_profile.php)
+
+**Friend Profile Details Auto-Download Setting**
+- Replaced the older description-only auto-load setting with `autoLoadFriendProfileDetails`.
+- Kept the default manual, so friend bios/games/details do not auto-download unless the user opts in.
+- Updated client setting defaults, sanitization, import/export behavior, onboarding state, and tests for the new setting.
+- Updated settings and onboarding copy to say "friend profile details" instead of only "profile descriptions", because the fetch includes bio, games, and similar details.
+- Rewired the chat profile popover and full friend profile modal to use the new setting while keeping the manual `Download profile` action available.
+- Left avatar/banner auto-load behavior and shared-server-only media rules unchanged.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\clientSettings.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/features/clientSettings.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\InitialSetupWizard.jsx](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/components/InitialSetupWizard.jsx)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\onboarding.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/features/onboarding.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\components\ChatUserProfilePopover.jsx](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/features/friends/components/ChatUserProfilePopover.jsx)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\components\FriendSettingsModal.jsx](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/features/friends/components/FriendSettingsModal.jsx)
+
+**Full Friend Profile Scroll And Spacing Fixes**
+- Made the full friend profile view scroll through the overlay instead of relying only on the inner card's capped height.
+- Removed the friend-profile popout height cap for that modal path so tall profiles can reach the bio, games, and private-note sections reliably.
+- Added dedicated spacing above the `Download profile` action so the button no longer sits visually attached to the banner/header area.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\components\FriendSettingsModal.jsx](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/features/friends/components/FriendSettingsModal.jsx)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\index.css](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/index.css)
+
+**Restart-Safe Reusable File Shares**
+- Fixed reusable share-backed DM file downloads so a receiver can retry after app restart as long as the sender still has the original shared file.
+- Made the sender-side share registry resolve from stable persisted storage instead of relying on in-memory transfer state.
+- Preserved `shareId` as the long-lived handle and treated transfer ids, incoming save targets, ack state, and attachment secrets as restart-local.
+- Rebuilt visible share state from direct and group messages after load so stale transfer session state does not block a fresh download attempt.
+- Added tests for preparing a fresh outgoing download after simulated restart, missing source files, and direct/group attachment share-state hydration.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\transfers\service.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/main/transfers/service.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\pages\FriendsHome.jsx](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/features/friends/pages/FriendsHome.jsx)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\friends\attachmentShareState.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/features/friends/attachmentShareState.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\tests\transfer-service-restart.test.mjs](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/tests/transfer-service-restart.test.mjs)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\tests\friend-attachment-share-state.test.mjs](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/tests/friend-attachment-share-state.test.mjs)
+
+**Main Process Bundle Startup Fixes**
+- Fixed Electron main-process startup crashes caused by `createRequire(import.meta.url)` becoming unsafe after the Vite main build.
+- Replaced the affected imports with bundle-safe Electron/runtime access patterns.
+- Removed remaining `createRequire` usage from the main-process source path.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\transfers\service.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/main/transfers/service.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\storagePaths.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/main/storagePaths.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\dm\storage.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/main/dm/storage.js)
+
+**Top Bar Accessibility Hit Target Fixes**
+- Added shared top-bar sizing variables controlled by client accessibility settings.
+- Increased the top bar's minimum height for larger hit-target modes so the Client Settings button and info button do not clip vertically.
+- Reworked the app shell height calculation so it subtracts the same runtime top-bar height that the visible header uses.
+- Added runtime resize detection with `ResizeObserver` and window resize handling so compact windows can temporarily raise the effective top-bar height.
+- Removed the old short-height rule that forced the top bar smaller than the enlarged buttons.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\features\clientSettings.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/features/clientSettings.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\renderer.jsx](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/renderer.jsx)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\index.css](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/index.css)
+
+**Update Detection Fixes**
+- Fixed update detection for prerelease-channel builds.
+- Stable builds still ignore prerelease-only GitHub releases by default.
+- Alpha/prerelease builds can now see newer prerelease releases on the same channel.
+- Added regression tests for:
+  - `0.1.5` to `0.1.6`
+  - `0.1.6-alpha` to `0.1.6`
+  - `0.1.5-alpha` to `0.1.6-alpha`
+  - stable builds ignoring prerelease-only releases
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\lib\appUpdates.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/lib/appUpdates.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\tests\app-updates.test.mjs](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/tests/app-updates.test.mjs)
+
+**Automatic MSI Download For Updates**
+- Added Windows `.msi` asset detection for GitHub releases.
+- When a newer release is detected on Windows, the app now downloads the MSI installer automatically into the user's Downloads folder.
+- Added installer download state to the update state payload:
+  - asset name
+  - download URL
+  - size
+  - phase
+  - progress
+  - local path
+  - error text
+- Added progress UI in the update banner and Client Settings update section.
+- Added an `Open installer` action after the MSI has finished downloading.
+- Kept installation manual instead of silently running the installer.
+- Main files:
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\main\appUpdates.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/main/appUpdates.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\lib\appUpdates.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/lib/appUpdates.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\preload.js](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/preload.js)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\UpdateBanner.jsx](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/components/UpdateBanner.jsx)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\components\ClientSettingsModal.jsx](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/components/ClientSettingsModal.jsx)
+  - [C:\Users\samuel.lamberg\Desktop\'\Chatapp\Application\src\renderer.jsx](C:/Users/samuel.lamberg/Desktop/'/Chatapp/Application/src/renderer.jsx)
+
+**Verification**
+- Ran `npm test` in `Application` after the code changes; the suite passed.
+- Ran `npm exec vite -- build --config vite.renderer.config.mjs`; the renderer build passed.
+- The test run still prints the existing Node module-type warning and intentional DM storage negative-path quarantine logs, but those are not new failures.

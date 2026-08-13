@@ -8,6 +8,10 @@
     --shell-accent: #4f46e5;
     --shell-danger: #ef4444;
     --shell-radius: 14px;
+    --app-topbar-height: 56px;
+    --app-topbar-height-runtime: 56px;
+    --app-topbar-icon-button-size: 42px;
+    --app-topbar-padding-block: 0px;
 }
 
 html,
@@ -39,11 +43,13 @@ body {
 /* APP SHELL - NOT CUSTOMIZABLE */
 
 .topbar {
-    height: 56px;
+    min-height: var(--app-topbar-height);
+    height: auto;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 16px;
+    gap: 12px;
+    padding: var(--app-topbar-padding-block) 16px;
     background: var(--shell-surface);
     border-bottom: 1px solid var(--shell-border);
     color: var(--shell-text);
@@ -76,8 +82,9 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 42px;
-    height: 42px;
+    width: var(--app-topbar-icon-button-size);
+    height: var(--app-topbar-icon-button-size);
+    flex: 0 0 auto;
     padding: 0;
 }
 
@@ -619,6 +626,13 @@ button.shortcut-info-overview-card:hover {
     background: color-mix(in srgb, var(--shell-accent) 78%, white 10%);
 }
 
+.update-banner-primary:disabled,
+.update-banner-secondary:disabled,
+.update-banner-dismiss:disabled {
+    opacity: 0.58;
+    cursor: not-allowed;
+}
+
 .update-banner-secondary:hover,
 .update-banner-dismiss:hover {
     background: color-mix(in srgb, var(--shell-surface-hover) 84%, var(--shell-surface-alt));
@@ -646,7 +660,7 @@ button.shortcut-info-overview-card:hover {
 .app-shell {
     display: flex;
     width: 100vw;
-    height: calc(100vh - 56px);
+    height: calc(100vh - var(--app-topbar-height-runtime, var(--app-topbar-height)));
     min-height: 0;
     background: var(--shell-bg);
 }
@@ -3808,6 +3822,13 @@ body[data-client-theme="light"] .friends-add-icon-button .friends-add-icon-light
     backdrop-filter: blur(8px);
 }
 
+.friends-friend-settings-overlay {
+    align-items: flex-start;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-block: 24px;
+}
+
 .friends-settings-popout {
     width: min(680px, 100%);
     max-height: min(86vh, 900px);
@@ -3821,6 +3842,9 @@ body[data-client-theme="light"] .friends-add-icon-button .friends-add-icon-light
 
 .friends-friend-settings-popout {
     width: min(620px, 100%);
+    margin: 0 auto;
+    max-height: none;
+    overflow: visible;
 }
 
 .friends-settings-popout::-webkit-scrollbar {
@@ -6805,6 +6829,7 @@ body[data-high-contrast="true"] .client-settings-section {
     letter-spacing: 0;
     font-size: 0.7rem;
     font-weight: 700;
+    margin-top: 5px;
 }
 
 .profile-shared-handle {
@@ -6829,6 +6854,10 @@ body[data-high-contrast="true"] .client-settings-section {
 .profile-shared-hero-actions {
     display: flex;
     justify-content: flex-end;
+}
+
+.friends-profile-download-action {
+    margin-top: 12px;
 }
 
 .profile-shared-section {
@@ -7941,7 +7970,7 @@ body[data-high-contrast="true"] .client-settings-section {
 
 @media (max-width: 640px) {
     .topbar {
-        padding: 0 8px;
+        padding-inline: 8px;
         gap: 8px;
     }
 
@@ -8040,14 +8069,6 @@ body[data-high-contrast="true"] .client-settings-section {
 }
 
 @media (max-height: 720px) {
-    .topbar {
-        height: 48px;
-    }
-
-    .app-shell {
-        height: calc(100vh - 48px);
-    }
-
     .joined-servers-sidebar,
     .channels {
         padding-block: 8px;

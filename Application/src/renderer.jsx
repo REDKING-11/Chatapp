@@ -136,6 +136,7 @@ function App() {
     const authExpiryHandlingRef = useRef(false);
     const latestPresenceStatusRef = useRef(clientSettings?.presenceStatus || "online");
     const hasAppliedPresenceStatusRef = useRef(false);
+    const topbarRef = useRef(null);
 
     useEffect(() => {
         latestPresenceStatusRef.current = clientSettings?.presenceStatus || "online";
@@ -144,6 +145,72 @@ function App() {
     useEffect(() => {
         applyClientSettings(clientSettings);
     }, [clientSettings]);
+
+    useEffect(() => {
+        if (typeof document === "undefined") {
+            return undefined;
+        }
+
+        const root = document.documentElement;
+        if (!root || !topbarRef.current) {
+            return undefined;
+        }
+
+        let animationFrameId = null;
+        let resizeObserver = null;
+
+        const updateTopbarHeight = () => {
+            animationFrameId = null;
+
+            if (!topbarRef.current) {
+                return;
+            }
+
+            const runtimeHeight = Math.ceil(topbarRef.current.getBoundingClientRect().height);
+            const baseHeight = Number.parseFloat(
+                window.getComputedStyle(root).getPropertyValue("--app-topbar-height")
+            ) || 56;
+            const nextHeight = `${Math.max(baseHeight, runtimeHeight)}px`;
+
+            if (root.style.getPropertyValue("--app-topbar-height-runtime") !== nextHeight) {
+                root.style.setProperty("--app-topbar-height-runtime", nextHeight);
+            }
+        };
+
+        const queueTopbarHeightUpdate = () => {
+            if (animationFrameId !== null) {
+                return;
+            }
+            animationFrameId = window.requestAnimationFrame(updateTopbarHeight);
+        };
+
+        queueTopbarHeightUpdate();
+        window.addEventListener("resize", queueTopbarHeightUpdate);
+
+        if (typeof ResizeObserver !== "undefined") {
+            resizeObserver = new ResizeObserver(() => {
+                queueTopbarHeightUpdate();
+            });
+            resizeObserver.observe(topbarRef.current);
+        }
+
+        return () => {
+            window.removeEventListener("resize", queueTopbarHeightUpdate);
+            if (resizeObserver) {
+                resizeObserver.disconnect();
+            }
+            if (animationFrameId !== null) {
+                window.cancelAnimationFrame(animationFrameId);
+            }
+            root.style.removeProperty("--app-topbar-height-runtime");
+        };
+    }, [
+        clientSettings?.hitTargetSize,
+        currentUser?.username,
+        selectedJoinedServerId,
+        serverData?.name,
+        hasSeenShortcutInfo
+    ]);
 
     useEffect(() => {
         hasAppliedPresenceStatusRef.current = false;
@@ -1130,10 +1197,10 @@ function App() {
     }
 
     function handleOnboardingComplete(acceptance) {
-        if (typeof acceptance?.autoLoadProfileDescriptions === "boolean") {
+        if (typeof acceptance?.autoLoadFriendProfileDetails === "boolean") {
             setClientSettings((prev) => saveClientSettings({
                 ...prev,
-                autoLoadProfileDescriptions: acceptance.autoLoadProfileDescriptions
+                autoLoadFriendProfileDetails: acceptance.autoLoadFriendProfileDetails
             }));
         }
 
@@ -1141,7 +1208,7 @@ function App() {
             completed: true,
             acceptedPrivacy: Boolean(acceptance.acceptedPrivacy),
             acceptedTos: Boolean(acceptance.acceptedTos),
-            autoLoadProfileDescriptions: acceptance?.autoLoadProfileDescriptions !== false,
+            autoLoadFriendProfileDetails: acceptance?.autoLoadFriendProfileDetails === true,
             completedAt: new Date().toISOString()
         }));
     }
@@ -1162,6 +1229,18 @@ function App() {
             recordAppDiagnostic(error, {
                 source: "renderer",
                 operation: "appUpdates.manualCheck",
+                severity: "warning"
+            });
+        }
+    }
+
+    async function handleOpenDownloadedInstaller() {
+        try {
+            await window.appUpdates?.openDownloadedInstaller?.();
+        } catch (error) {
+            recordAppDiagnostic(error, {
+                source: "renderer",
+                operation: "appUpdates.openDownloadedInstaller",
                 severity: "warning"
             });
         }
@@ -1288,7 +1367,7 @@ function App() {
 
     return (
         <>
-            <div className="topbar">
+            <div className="topbar" ref={topbarRef}>
                 <div>
                     <strong>{currentUser.username}</strong>
                     {isFriendsView ? " - Friends" : serverData?.name ? ` - ${serverData.name}` : ""}
@@ -1317,6 +1396,7 @@ function App() {
                     onDismiss={dismissUpdateBanner}
                     onCheckForUpdates={handleCheckForUpdates}
                     onOpenReleasesPage={() => window.appUpdates?.openReleasesPage?.()}
+                    onOpenDownloadedInstaller={handleOpenDownloadedInstaller}
                 />
             ) : null}
 
@@ -1423,6 +1503,7 @@ function App() {
                     onImport={handleClientSettingsImport}
                     onCheckForUpdates={handleCheckForUpdates}
                     onOpenReleasesPage={() => window.appUpdates?.openReleasesPage?.()}
+                    onOpenDownloadedInstaller={handleOpenDownloadedInstaller}
                     onUserUpdated={(user) => {
                         setCurrentUser(user);
                         saveAuthUser(user);

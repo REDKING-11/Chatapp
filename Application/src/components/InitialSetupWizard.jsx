@@ -22,8 +22,8 @@ export default function InitialSetupWizard({
     const [stepIndex, setStepIndex] = useState(0);
     const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
     const [acceptedTos, setAcceptedTos] = useState(false);
-    const [autoLoadProfileDescriptions, setAutoLoadProfileDescriptions] = useState(
-        currentSettings?.autoLoadProfileDescriptions !== false
+    const [autoLoadFriendProfileDetails, setAutoLoadFriendProfileDetails] = useState(
+        currentSettings?.autoLoadFriendProfileDetails === true
     );
     const [importStatus, setImportStatus] = useState("");
     const [importError, setImportError] = useState("");
@@ -66,7 +66,7 @@ export default function InitialSetupWizard({
         onComplete({
             acceptedPrivacy: true,
             acceptedTos: true,
-            autoLoadProfileDescriptions
+            autoLoadFriendProfileDetails
         });
     }
 
@@ -125,10 +125,10 @@ export default function InitialSetupWizard({
                         <label className="onboarding-check">
                             <input
                                 type="checkbox"
-                                checked={autoLoadProfileDescriptions}
-                                onChange={(event) => setAutoLoadProfileDescriptions(event.target.checked)}
+                                checked={autoLoadFriendProfileDetails}
+                                onChange={(event) => setAutoLoadFriendProfileDetails(event.target.checked)}
                             />
-                            <span>Auto-download DM profile descriptions from your friends.</span>
+                            <span>Auto-download friend profile details like bios and games.</span>
                         </label>
 
                         {importStatus ? <p className="onboarding-success">{importStatus}</p> : null}

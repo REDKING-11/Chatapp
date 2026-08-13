@@ -43,7 +43,8 @@ import {
 } from "../features/dm/actions";
 import { getStoredAuthToken } from "../features/session/actions";
 import { formatAppError } from "../lib/debug";
-import { UPDATE_PHASES } from "../lib/appUpdates.js";
+import { UPDATE_DOWNLOAD_PHASES, UPDATE_PHASES } from "../lib/appUpdates.js";
+import { clampProfileText, countProfileTextCharacters } from "../lib/profileText.js";
 import { SHORTCUT_GROUPS } from "../lib/shortcuts";
 import PolicyDocumentModal from "./PolicyDocumentModal";
 import privacyPolicyMarkdown from "../assets/PP.md?raw";
@@ -75,6 +76,8 @@ const COLOR_BLIND_OPTIONS = [
     { value: "tritanopia", label: "Tritanopia friendly" },
     { value: "monochrome", label: "Monochrome" }
 ];
+
+const PROFILE_DESCRIPTION_MAX_CHARACTERS = 280;
 
 const HIT_TARGET_OPTIONS = [
     { value: "default", label: "Default" },
@@ -263,6 +266,7 @@ export default function ClientSettingsModal({
     onImport,
     onCheckForUpdates,
     onOpenReleasesPage,
+    onOpenDownloadedInstaller,
     onUserUpdated,
     onTabReset,
     onLogout,
@@ -333,6 +337,10 @@ export default function ClientSettingsModal({
         shortcuts: false,
         policies: false
     });
+    const profileDescriptionCharacterCount = useMemo(
+        () => countProfileTextCharacters(profileDescription),
+        [profileDescription]
+    );
     const userLabel = currentUser?.displayName || currentUser?.usernameBase || currentUser?.username || "User";
     const userHandle = currentUser?.handle || currentUser?.username || "unknown";
     const userInitial = useMemo(() => userLabel.trim().slice(0, 1).toUpperCase() || "?", [userLabel]);
@@ -353,6 +361,10 @@ export default function ClientSettingsModal({
     const hasRevokedDmDevices = dmDevices.some((device) => Boolean(device.revokedAt));
     const updateActionBusy = updateState?.phase === UPDATE_PHASES.CHECKING;
     const canOpenReleasePage = Boolean(updateState?.releaseUrl);
+    const installerIsDownloading = updateState?.installerDownloadPhase === UPDATE_DOWNLOAD_PHASES.DOWNLOADING;
+    const installerIsDownloaded = updateState?.installerDownloadPhase === UPDATE_DOWNLOAD_PHASES.DOWNLOADED;
+    const installerHasError = updateState?.installerDownloadPhase === UPDATE_DOWNLOAD_PHASES.ERROR;
+    const installerProgress = Math.max(0, Math.min(100, Number(updateState?.installerDownloadProgress || 0)));
     const updateStatusLabel = updateState?.phase === UPDATE_PHASES.CHECKING
         ? "Checking for updates..."
         : updateState?.phase === UPDATE_PHASES.AVAILABLE
@@ -2458,10 +2470,11 @@ export default function ClientSettingsModal({
                             <textarea
                                 value={profileDescription}
                                 placeholder="A short description friends can download in DMs"
-                                maxLength={280}
-                                onChange={(event) => setProfileDescription(event.target.value.slice(0, 280))}
+                                onChange={(event) => setProfileDescription(
+                                    clampProfileText(event.target.value, PROFILE_DESCRIPTION_MAX_CHARACTERS)
+                                )}
                             />
-                            <small>{profileDescription.length}/280</small>
+                            <small>{profileDescriptionCharacterCount}/{PROFILE_DESCRIPTION_MAX_CHARACTERS}</small>
                         </label>
 
                         <div className="client-settings-field">
@@ -2608,14 +2621,14 @@ export default function ClientSettingsModal({
 
                             <label className="client-toggle-card">
                                 <div className="client-toggle-copy">
-                                    <strong>Load profile descriptions</strong>
-                                    <p>Downloads default DM profile descriptions from your friends.</p>
+                                    <strong>Auto-download friend profile details</strong>
+                                    <p>Loads bios, games, and similar lightweight profile details when you open a user's profile.</p>
                                 </div>
                                 <div className="client-toggle-control">
                                     <input
                                         type="checkbox"
-                                        checked={settings.autoLoadProfileDescriptions}
-                                        onChange={(event) => onChange("autoLoadProfileDescriptions", event.target.checked)}
+                                        checked={settings.autoLoadFriendProfileDetails}
+                                        onChange={(event) => onChange("autoLoadFriendProfileDetails", event.target.checked)}
                                     />
                                 </div>
                             </label>
@@ -2849,10 +2862,31 @@ export default function ClientSettingsModal({
                                 {updateState?.notesSummary ? (
                                     <p className="client-settings-muted">{updateState.notesSummary}</p>
                                 ) : null}
+                                {updateState?.phase === UPDATE_PHASES.AVAILABLE && updateState?.installerAssetName ? (
+                                    <p className="client-settings-muted">
+                                        {installerIsDownloading
+                                            ? `Downloading ${updateState.installerAssetName} to Downloads (${installerProgress}%).`
+                                            : installerIsDownloaded
+                                                ? `Downloaded ${updateState.installerAssetName} to Downloads.`
+                                                : installerHasError
+                                                    ? (updateState.installerDownloadError || "Installer download failed.")
+                                                    : `${updateState.installerAssetName} will download automatically.`}
+                                    </p>
+                                ) : null}
+                                {installerIsDownloading ? (
+                                    <div className="update-banner-progress" aria-label={`Installer download ${installerProgress}%`}>
+                                        <span style={{ width: `${installerProgress}%` }} />
+                                    </div>
+                                ) : null}
                                 <div className="client-settings-inline-actions">
                                     <button type="button" onClick={onCheckForUpdates} disabled={updateActionBusy}>
                                         {updateActionBusy ? "Checking..." : "Check for updates"}
                                     </button>
+                                    {installerIsDownloaded ? (
+                                        <button type="button" className="secondary" onClick={onOpenDownloadedInstaller}>
+                                            Open installer
+                                        </button>
+                                    ) : null}
                                     {canOpenReleasePage ? (
                                         <button type="button" className="secondary" onClick={onOpenReleasesPage}>
                                             View release
